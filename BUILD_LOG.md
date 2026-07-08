@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 3**
+**Next phase: 4**
 
 ---
 
@@ -77,3 +77,26 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - evaluateSegment recomputes derivative polynomials per call — precompute per-segment vel/acc/jerk polys if Phase 4/5 render hot paths need it (perf, not correctness).
   - Held-forever hands at n_h≥3 over-count balls (folds into the pending decision above).
 - Operator visual checks pending: n/a (no visuals this phase)
+
+## Phase 3 — Ladder diagram + minimal shell            DONE
+- Date: 2026-07-09
+- Commit: b07b687
+- Gate: (2026-07-09, "npm run gate", green — 14 test files / 149 tests, typecheck + lint clean [zero warnings incl. new react-hooks rules], build ok 215 kB / 69 kB gzip; run independently by orchestrator)
+- Builder deviations from plan:
+  - beatPeriod/dwellTime sliders wired as core epochs at the next beat (slew + arrival guard therefore already active) — more than Phase 3 required; Phase 6 keeps only the UX polish (amber clamp readout, guard visualization).
+  - Autoplay on startup (playing: true) so the debug view is alive untouched — consistent with §7 "startup cascade looks natural".
+  - Per-ball hue coloring in the ladder as a debug aid (NOT the orbit-coloring toggle; that mirrors 3D in Phase 4).
+  - eslint-plugin-react-hooks v7 added with the classic pair (rules-of-hooks error / exhaustive-deps warn) scoped to src/**; the full React-Compiler rule set left as a future opt-in.
+- Decisions made (reversible forks):
+  - Ladder rendered as SVG (crispness + testability; no chart lib).
+  - Timeline horizon: extend in 128-beat chunks when generated time < simTime + view span + 6 s, checked against actual beatTime (robust to slew); startup 160 beats.
+  - playbackSpeed is a pure wall→sim rescale — test pins that the sim object is untouched.
+- Deferred items:
+  - Ladder draws short prehistory carry lead-ins near t=0 (scrolls off in ~1 s); filter on startTime ≥ 0 if the operator finds it noisy.
+  - Orbit-coloring toggle for ladder — with the 3D scene (Phase 4).
+  - format:check flags some committed core files (Prettier is not in the gate); leave until a deliberate formatting pass.
+- Operator visual checks pending (run `npm run dev -- --host` on the Jetson, open the LAN URL on a desktop browser):
+  - [ ] Ladder for `531`: the 5-arc (flight + carry) spans 5 beats; the 1-arc barely clears one beat and its dwell is visibly shorter (t_d_eff clamp).
+  - [ ] Sanity patterns `3`, `40`, `522`: arcs land on the correct hand lane; `522`'s held 2 spans multiple beats as one carry; `40`'s 0 shows an idle gap.
+  - [ ] Pattern input: typing an invalid pattern (e.g. `543`) shows the beat-accurate collision message and the last valid pattern keeps animating.
+  - [ ] Play/pause freezes/resumes the cursor without jumps; playback-speed slider changes apparent speed only (pattern shape identical).
