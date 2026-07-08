@@ -5,9 +5,11 @@ honest timing, manipulate them live (tempo, dwell, gravity, hand geometry), navi
 the siteswap state graph by clicking, and see the kinematics no other tool shows you —
 implied hand velocity/acceleration/jerk and per-hand energy.
 
-> **Status**: Phase 0 (scaffold) done — toolchain and canonical gate green; the app
-> itself is still a placeholder page. The build is executed phase-by-phase by AI
-> agents — see `PLAN.md` (what) and `BUILD_LOG.md` (progress).
+> **Status**: Phase 1 (pure core: siteswap, timing, event timeline) done — parse/
+> validate, orbits, spatial period, slew-limited timing, and the append-only event
+> timeline are implemented and property-tested; no rendering yet. The build is
+> executed phase-by-phase by AI agents — see `PLAN.md` (what) and `BUILD_LOG.md`
+> (progress).
 
 ## Planned feature set (v1)
 
