@@ -5,11 +5,12 @@ honest timing, manipulate them live (tempo, dwell, gravity, hand geometry), navi
 the siteswap state graph by clicking, and see the kinematics no other tool shows you —
 implied hand velocity/acceleration/jerk and per-hand energy.
 
-> **Status**: Phase 2 (pure core: kinematics & energy) done — closed-form ball
-> flight, quintic-Hermite hand paths with C² hold-dip, analytic derivatives through
-> jerk, and exact work/energy integrals, all property-tested; no rendering yet. The
-> build is executed phase-by-phase by AI agents — see `PLAN.md` (what) and
-> `BUILD_LOG.md` (progress).
+> **Status**: Phase 3 (ladder diagram + minimal shell) done — the first visual: a
+> live-validated pattern input, play/pause + beat-period/dwell/playback sliders
+> wired through the zustand store to the pure core, and an SVG ladder diagram
+> (time-vs-hands, flight arcs, carry segments, shared simTime cursor) driven by one
+> global clock. No 3D scene yet. The build is executed phase-by-phase by AI agents —
+> see `PLAN.md` (what) and `BUILD_LOG.md` (progress).
 
 ## Planned feature set (v1)
 

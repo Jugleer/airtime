@@ -1,6 +1,7 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
 import prettier from 'eslint-config-prettier';
 
 // --- Core-boundary messages (DESIGN.md §2, CLAUDE.md hard rule 1) ---
@@ -73,6 +74,20 @@ export default tseslint.config(
         { object: 'performance', property: 'now', message: NO_TIME },
       ],
       'no-restricted-globals': ['error', { name: 'performance', message: NO_TIME }],
+    },
+  },
+
+  // React Hooks rules (Phase 0 deferred these until real React landed in Phase 3).
+  // The classic, stable pair: rules-of-hooks + exhaustive-deps. Scoped to src so
+  // the pure-core math files are untouched. (react-hooks v7 also ships the React
+  // Compiler lint rules; enabling that full set is a deliberate larger opt-in for
+  // a later pass, not required by the hooks boundary.)
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
     },
   },
 
