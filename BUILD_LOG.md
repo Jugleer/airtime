@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 1**
+**Next phase: 2**
 
 ---
 
@@ -39,3 +39,22 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - Playwright e2e harness (config + spec dir + script) — first visual phase that wants it.
 - Operator visual checks pending: n/a (builder verified `npm run dev -- --host` serves the placeholder page with LAN URLs)
 - Orchestrator verification notes: core-boundary lint rule probed independently (violating file in src/core → 3 errors, exit 1); orchestrator-owned docs untouched by builder; no builder commits (all work arrived as working-tree changes, as instructed).
+
+## Phase 1 — Core: siteswap, timing, event timeline            DONE
+- Date: 2026-07-09
+- Commit: 20f1e8d
+- Gate: (2026-07-09, "npm run gate", green — 9 test files / 73 tests, typecheck + lint clean, build ok; run independently by orchestrator after builder AND after fixup)
+- Coverage (orchestrator-verified from coverage JSON, lines): siteswap 98.1 %, timeline 98.1 %, timing 100 % — bar is ≥ 90 % each. Note: vitest 4 text reporter hides 100 % files; the JSON has all six core modules.
+- Builder deviations from plan:
+  - Integer-average check kept although provably redundant given collision-freedom (spec lists both; keeps the error branch reachable). All errors collected, not just the first.
+  - `spatialPeriodBeats` returns beats (τ_b-invariant), seconds are a later UI readout.
+  - A flight's landing hand is frozen at throw time (required for epoch immutability).
+- Review (math-heavy phase — fresh Opus reviewer, hand-worked examples incl. 531 timing and a brute force of length-≤5 collision semantics): load-bearing math verified correct (identities 1 & 4 incl. incoming-value dwell keying, state machine, slew guard, epoch immutability). Findings: H1 vacuous test assertion, M2 spurious zero-ball orbit cycles (contradicted NOTATION), M3 handCount-in-epoch ill-defined (catch hand ≠ carry/rethrow hand), L4–L8 message/edge polish. All 8 fixed by a fixup builder; gate + coverage re-verified by orchestrator.
+- Decisions made (reversible forks):
+  - `n_h` changes are a **full timeline rebuild**, not an epoch — `Epoch.params` excludes `handCount` at the type level; Phase 6 wires the stepper accordingly. Rationale: an in-flight ball's frozen landing hand and the new beat→hand mapping cannot both hold under an n_h epoch.
+  - Guard NaN path (value-1 self-arrival during schedule build) resolved by explicit skip: that arrival provably cannot bind the guard.
+  - `beatTime(beat)` beyond the generated range now throws RangeError instead of returning NaN.
+- Deferred items:
+  - Held-forever orbits (σ-cycles that are all 2s, e.g. pattern `2` or `22`): the ball never leaves a hand, so no flight/carry segments are emitted for it; excluded from the ball-conservation property test (documented in-test). Revisit if a "static hold" segment type is wanted (likely Phase 2/3 for hand paths of pattern `2`).
+  - landingSchedule==stateAt property generator varies handCount although neither side uses it (wasted generator dimension, harmless).
+- Operator visual checks pending: n/a (no visuals this phase)
