@@ -1,0 +1,14 @@
+dist
+coverage
+node_modules
+package-lock.json
+
+# Normative / design / orchestrator-owned docs — never auto-reformat these.
+CLAUDE.md
+DESIGN.md
+NOTATION.md
+PLAN.md
+BUILD_LOG.md
+ORCHESTRATOR_PROMPT.md
+README.md
+LICENSE
