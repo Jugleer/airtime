@@ -6,7 +6,7 @@ import { useAppStore } from '../state';
 import { Controls } from './Controls';
 
 beforeEach(() => {
-  useAppStore.setState({ simTime: 0, playing: true, epochs: [] });
+  useAppStore.setState({ simTime: 0, playing: true, epochs: [], orbitColoring: false });
   useAppStore.getState().setPattern('3');
 });
 afterEach(cleanup);
@@ -37,5 +37,16 @@ describe('Controls (ui layer)', () => {
   it('renders the ball-count readout for a valid pattern', () => {
     render(<Controls />);
     expect(screen.getByText(/3 balls/)).toBeTruthy();
+  });
+
+  it('exposes the 3D scene controls and toggles orbit coloring through the store', () => {
+    render(<Controls />);
+    expect(screen.getByLabelText('Ball radius')).toBeTruthy();
+    expect(screen.getByLabelText('Ball color')).toBeTruthy();
+
+    const toggle = screen.getByLabelText('Orbit coloring');
+    expect(useAppStore.getState().orbitColoring).toBe(false);
+    fireEvent.click(toggle);
+    expect(useAppStore.getState().orbitColoring).toBe(true);
   });
 });

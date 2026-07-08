@@ -9,6 +9,8 @@
 
 import type { CSSProperties, ReactElement } from 'react';
 import {
+  BALL_RADIUS_MAX,
+  BALL_RADIUS_MIN,
   BEAT_PERIOD_MAX,
   BEAT_PERIOD_MIN,
   DWELL_MIN,
@@ -89,6 +91,9 @@ export function Controls(): ReactElement {
   const dwellTime = useAppStore((state) => state.dwellTime);
   const playbackSpeed = useAppStore((state) => state.playbackSpeed);
   const handCount = useAppStore((state) => state.handCount);
+  const ballRadius = useAppStore((state) => state.ballRadius);
+  const orbitColoring = useAppStore((state) => state.orbitColoring);
+  const ballColor = useAppStore((state) => state.ballColor);
   const playing = useAppStore((state) => state.playing);
   const sim = useAppStore((state) => state.sim);
 
@@ -96,6 +101,9 @@ export function Controls(): ReactElement {
   const setBeatPeriod = useAppStore((state) => state.setBeatPeriod);
   const setDwellTime = useAppStore((state) => state.setDwellTime);
   const setPlaybackSpeed = useAppStore((state) => state.setPlaybackSpeed);
+  const setBallRadius = useAppStore((state) => state.setBallRadius);
+  const toggleOrbitColoring = useAppStore((state) => state.toggleOrbitColoring);
+  const setBallColor = useAppStore((state) => state.setBallColor);
   const togglePlaying = useAppStore((state) => state.togglePlaying);
   const restart = useAppStore((state) => state.restart);
 
@@ -174,6 +182,33 @@ export function Controls(): ReactElement {
           readout={`${playbackSpeed.toFixed(2)}×`}
           onChange={setPlaybackSpeed}
         />
+        <Slider
+          label="Ball radius"
+          value={ballRadius}
+          min={BALL_RADIUS_MIN}
+          max={BALL_RADIUS_MAX}
+          scale="linear"
+          readout={`${(ballRadius * 100).toFixed(1)} cm`}
+          onChange={setBallRadius}
+        />
+      </div>
+
+      <div style={rowStyle}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
+          <input type="checkbox" checked={orbitColoring} onChange={toggleOrbitColoring} />
+          <span>Orbit coloring</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
+          <span>Ball color</span>
+          <input
+            type="color"
+            value={ballColor}
+            aria-label="Ball color"
+            disabled={orbitColoring}
+            onChange={(event) => setBallColor(event.target.value)}
+            style={{ width: '2.4rem', height: '1.6rem', padding: 0, cursor: 'pointer' }}
+          />
+        </label>
       </div>
     </section>
   );

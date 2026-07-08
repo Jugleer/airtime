@@ -3,10 +3,28 @@ import type * as ReactThreeFiber from '@react-three/fiber';
 import type * as Drei from '@react-three/drei';
 import { apexHeight } from '../core/kinematics';
 
-// Phase 0 placeholder (DESIGN.md §2 "src/render3d", §6 3D scene). The r3f scene,
-// balls, tracers, ghosts and camera arrive from Phase 4. These type-only smoke
-// references make the toolchain resolve r3f + drei now, so a broken install
-// surfaces in Phase 0 rather than mid-Phase-4.
+// Public render3d surface (DESIGN.md §6). <Scene> is the main 3D view; the
+// camera-preset and coloring helpers are pure and unit-tested (the jsdom/WebGL
+// caution keeps the Canvas itself out of tests).
+export { Scene } from './Scene';
+export { Balls } from './Balls';
+export {
+  CAMERA_PRESETS,
+  CAMERA_PRESET_LABELS,
+  presetView,
+  type CameraPreset,
+  type CameraView,
+} from './camera';
+export {
+  ORBIT_PALETTE,
+  orbitColor,
+  buildBallOrbits,
+  type FlightLike,
+  type StaticHoldLike,
+} from './coloring';
+
+// Type-only smoke references kept from Phase 0 so a broken r3f + drei install
+// still surfaces at the module level (belt-and-suspenders alongside <Scene>).
 export type ReactThreeFiberExports = keyof typeof ReactThreeFiber;
 export type DreiExports = keyof typeof Drei;
 

@@ -40,6 +40,19 @@ export const DWELL_MIN = 0.02;
 export const PLAYBACK_MIN = 0.05;
 export const PLAYBACK_MAX = 2;
 
+// --- 3D scene view settings (DESIGN.md §6, §7) ------------------------------
+// These are presentation-only: they never rebuild the simulation (a pure
+// function of time, DESIGN.md §2). The 3D scene reads them; nothing else does.
+
+/** Sphere radius in meters (DESIGN.md §7). */
+export const DEFAULT_BALL_RADIUS = 0.035;
+export const BALL_RADIUS_MIN = 0.01;
+export const BALL_RADIUS_MAX = 0.1;
+/** Single ball color used when orbit coloring is off (DESIGN.md §7). */
+export const DEFAULT_BALL_COLOR = '#2f6fed';
+/** Orbit coloring off by default (single configurable color, DESIGN.md §6, §7). */
+export const DEFAULT_ORBIT_COLORING = false;
+
 /** The t_d slider cap = 0.9·n_h·τ_b (NOTATION.md identity 4; DESIGN.md §7). */
 export function dwellCap(handCount: number, beatPeriod: number): number {
   return DWELL_CAP_FRACTION * handCount * beatPeriod;
@@ -64,6 +77,14 @@ export interface AppStore {
   /** n_h, the hand count (fixed at 2 this phase; stepper is Phase 6). */
   readonly handCount: number;
 
+  // 3D scene view settings (DESIGN.md §6, §7) — presentation only, no rebuild.
+  /** Ball sphere radius in meters. */
+  readonly ballRadius: number;
+  /** When true, color balls by orbit; otherwise use the single {@link ballColor}. */
+  readonly orbitColoring: boolean;
+  /** The single ball color (CSS string) used when orbit coloring is off. */
+  readonly ballColor: string;
+
   // clock (DESIGN.md §2)
   readonly simTime: number;
   readonly playing: boolean;
@@ -83,6 +104,10 @@ export interface AppStore {
   setBeatPeriod(beatPeriod: number): void;
   setDwellTime(dwellTime: number): void;
   setPlaybackSpeed(playbackSpeed: number): void;
+  setBallRadius(ballRadius: number): void;
+  setOrbitColoring(orbitColoring: boolean): void;
+  toggleOrbitColoring(): void;
+  setBallColor(ballColor: string): void;
   setPlaying(playing: boolean): void;
   togglePlaying(): void;
   restart(): void;
@@ -141,6 +166,10 @@ export const useAppStore = create<AppStore>((set, get) => {
     playbackSpeed: DEFAULT_PLAYBACK_SPEED,
     handCount: DEFAULT_HAND_COUNT,
 
+    ballRadius: DEFAULT_BALL_RADIUS,
+    orbitColoring: DEFAULT_ORBIT_COLORING,
+    ballColor: DEFAULT_BALL_COLOR,
+
     simTime: 0,
     playing: true,
 
@@ -188,6 +217,14 @@ export const useAppStore = create<AppStore>((set, get) => {
     setPlaybackSpeed: (raw) => {
       set({ playbackSpeed: clamp(raw, PLAYBACK_MIN, PLAYBACK_MAX) });
     },
+
+    // View settings never touch the sim (DESIGN.md §2): plain, clamped setters.
+    setBallRadius: (raw) => {
+      set({ ballRadius: clamp(raw, BALL_RADIUS_MIN, BALL_RADIUS_MAX) });
+    },
+    setOrbitColoring: (orbitColoring) => set({ orbitColoring }),
+    toggleOrbitColoring: () => set((state) => ({ orbitColoring: !state.orbitColoring })),
+    setBallColor: (ballColor) => set({ ballColor }),
 
     setPlaying: (playing) => set({ playing }),
     togglePlaying: () => set((state) => ({ playing: !state.playing })),

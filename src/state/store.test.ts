@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  BALL_RADIUS_MAX,
+  BALL_RADIUS_MIN,
+  DEFAULT_BALL_COLOR,
+  DEFAULT_BALL_RADIUS,
   DEFAULT_BEAT_PERIOD,
   DEFAULT_DWELL_TIME,
   DEFAULT_HAND_COUNT,
+  DEFAULT_ORBIT_COLORING,
   dwellCap,
   useAppStore,
 } from './index';
@@ -22,6 +27,11 @@ beforeEach(() => {
       dwellTime: DEFAULT_DWELL_TIME,
       handCount: DEFAULT_HAND_COUNT,
     },
+  });
+  useAppStore.setState({
+    ballRadius: DEFAULT_BALL_RADIUS,
+    orbitColoring: DEFAULT_ORBIT_COLORING,
+    ballColor: DEFAULT_BALL_COLOR,
   });
   useAppStore.getState().setPattern('3'); // rebuild a clean sim from defaults
 });
@@ -88,6 +98,38 @@ describe('slider wiring', () => {
     useAppStore.getState().setPlaybackSpeed(1.75);
     expect(useAppStore.getState().sim).toBe(before);
     expect(useAppStore.getState().playbackSpeed).toBe(1.75);
+  });
+});
+
+describe('3D scene view settings', () => {
+  it('has the DESIGN.md §7 defaults', () => {
+    expect(DEFAULT_BALL_RADIUS).toBeCloseTo(0.035, 9);
+    expect(BALL_RADIUS_MIN).toBeCloseTo(0.01, 9);
+    expect(BALL_RADIUS_MAX).toBeCloseTo(0.1, 9);
+    expect(DEFAULT_ORBIT_COLORING).toBe(false);
+    const state = useAppStore.getState();
+    expect(state.ballRadius).toBeCloseTo(DEFAULT_BALL_RADIUS, 9);
+    expect(state.orbitColoring).toBe(false);
+    expect(state.ballColor).toBe(DEFAULT_BALL_COLOR);
+  });
+
+  it('clamps ball radius to [0.01, 0.1] m', () => {
+    useAppStore.getState().setBallRadius(5);
+    expect(useAppStore.getState().ballRadius).toBeCloseTo(BALL_RADIUS_MAX, 9);
+    useAppStore.getState().setBallRadius(0);
+    expect(useAppStore.getState().ballRadius).toBeCloseTo(BALL_RADIUS_MIN, 9);
+    useAppStore.getState().setBallRadius(0.05);
+    expect(useAppStore.getState().ballRadius).toBeCloseTo(0.05, 9);
+  });
+
+  it('toggles orbit coloring and sets the ball color, never rebuilding the sim', () => {
+    const before = useAppStore.getState().sim;
+    useAppStore.getState().toggleOrbitColoring();
+    expect(useAppStore.getState().orbitColoring).toBe(true);
+    useAppStore.getState().setBallColor('#ff8800');
+    expect(useAppStore.getState().ballColor).toBe('#ff8800');
+    // View settings are presentation-only (DESIGN.md §2): the sim is untouched.
+    expect(useAppStore.getState().sim).toBe(before);
   });
 });
 
