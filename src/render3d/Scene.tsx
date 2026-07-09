@@ -23,6 +23,7 @@ import {
 import { Canvas, useThree } from '@react-three/fiber';
 import { Grid, OrbitControls } from '@react-three/drei';
 import { Balls } from './Balls';
+import { Tracers } from './Tracers';
 import {
   CAMERA_PRESETS,
   CAMERA_PRESET_LABELS,
@@ -141,6 +142,7 @@ export function Scene(): ReactElement {
         <color attach="background" args={['#eef1f5']} />
         <Environment />
         <CameraRig preset={preset} />
+        <Tracers />
         <Balls />
       </Canvas>
 

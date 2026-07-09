@@ -8,6 +8,16 @@ import { apexHeight } from '../core/kinematics';
 // caution keeps the Canvas itself out of tests).
 export { Scene } from './Scene';
 export { Balls } from './Balls';
+export { Tracers } from './Tracers';
+export { useBallColorResolver } from './useBallColors';
+export {
+  GHOST_SPAN_SECONDS,
+  TRAIL_SAMPLE_DT,
+  maxGhostPoints,
+  maxTrailPoints,
+  sampleTimeAt,
+  trailPointCount,
+} from './tracers';
 export {
   CAMERA_PRESETS,
   CAMERA_PRESET_LABELS,

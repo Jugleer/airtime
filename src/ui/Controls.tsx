@@ -16,9 +16,12 @@ import {
   DWELL_MIN,
   PLAYBACK_MAX,
   PLAYBACK_MIN,
+  TRAIL_LENGTH_MAX,
+  TRAIL_LENGTH_MIN,
   dwellCap,
   useAppStore,
 } from '../state';
+import { TIMELINE_WINDOW_MAX, TIMELINE_WINDOW_MIN } from '../state/simulation';
 
 const SLIDER_STEPS = 1000;
 
@@ -94,6 +97,9 @@ export function Controls(): ReactElement {
   const ballRadius = useAppStore((state) => state.ballRadius);
   const orbitColoring = useAppStore((state) => state.orbitColoring);
   const ballColor = useAppStore((state) => state.ballColor);
+  const timelineWindow = useAppStore((state) => state.timelineWindow);
+  const trailLength = useAppStore((state) => state.trailLength);
+  const ghostsEnabled = useAppStore((state) => state.ghostsEnabled);
   const playing = useAppStore((state) => state.playing);
   const sim = useAppStore((state) => state.sim);
 
@@ -104,6 +110,9 @@ export function Controls(): ReactElement {
   const setBallRadius = useAppStore((state) => state.setBallRadius);
   const toggleOrbitColoring = useAppStore((state) => state.toggleOrbitColoring);
   const setBallColor = useAppStore((state) => state.setBallColor);
+  const setTimelineWindow = useAppStore((state) => state.setTimelineWindow);
+  const setTrailLength = useAppStore((state) => state.setTrailLength);
+  const toggleGhosts = useAppStore((state) => state.toggleGhosts);
   const togglePlaying = useAppStore((state) => state.togglePlaying);
   const restart = useAppStore((state) => state.restart);
 
@@ -191,12 +200,34 @@ export function Controls(): ReactElement {
           readout={`${(ballRadius * 100).toFixed(1)} cm`}
           onChange={setBallRadius}
         />
+        <Slider
+          label="Timeline window"
+          value={timelineWindow}
+          min={TIMELINE_WINDOW_MIN}
+          max={TIMELINE_WINDOW_MAX}
+          scale="linear"
+          readout={`${timelineWindow.toFixed(1)} s`}
+          onChange={setTimelineWindow}
+        />
+        <Slider
+          label="Trail length"
+          value={trailLength}
+          min={TRAIL_LENGTH_MIN}
+          max={TRAIL_LENGTH_MAX}
+          scale="linear"
+          readout={`${trailLength.toFixed(2)} s`}
+          onChange={setTrailLength}
+        />
       </div>
 
       <div style={rowStyle}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
           <input type="checkbox" checked={orbitColoring} onChange={toggleOrbitColoring} />
           <span>Orbit coloring</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
+          <input type="checkbox" checked={ghostsEnabled} onChange={toggleGhosts} />
+          <span>Future ghosts</span>
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
           <span>Ball color</span>

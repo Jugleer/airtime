@@ -10,13 +10,7 @@
 
 import type { ReactElement } from 'react';
 import { useAppStore } from '../state';
-import {
-  FUTURE_SPAN,
-  PAST_SPAN,
-  WINDOW_SECONDS,
-  firstBeatAtOrAfter,
-  type Simulation,
-} from '../state/simulation';
+import { firstBeatAtOrAfter, windowSpans, type Simulation } from '../state/simulation';
 
 // Logical SVG coordinate space (scaled to the container width via viewBox).
 const W = 1000;
@@ -49,6 +43,7 @@ function ballColor(ballId: number): string {
 interface Frame {
   readonly windowStart: number;
   readonly windowEnd: number;
+  readonly timelineWindow: number;
   readonly plotBottom: number;
   readonly height: number;
   readonly handCount: number;
@@ -56,17 +51,19 @@ interface Frame {
   laneY(hand: number): number;
 }
 
-function makeFrame(simTime: number, handCount: number): Frame {
-  const windowStart = simTime - PAST_SPAN;
-  const windowEnd = simTime + FUTURE_SPAN;
+function makeFrame(simTime: number, handCount: number, timelineWindow: number): Frame {
+  const { pastSpan, futureSpan } = windowSpans(timelineWindow);
+  const windowStart = simTime - pastSpan;
+  const windowEnd = simTime + futureSpan;
   const plotBottom = PLOT_TOP + handCount * LANE_HEIGHT;
   return {
     windowStart,
     windowEnd,
+    timelineWindow,
     plotBottom,
     height: plotBottom + AXIS_ROW,
     handCount,
-    xOf: (time) => PLOT_LEFT + ((time - windowStart) / WINDOW_SECONDS) * PLOT_W,
+    xOf: (time) => PLOT_LEFT + ((time - windowStart) / timelineWindow) * PLOT_W,
     laneY: (hand) => PLOT_TOP + (hand + 0.5) * LANE_HEIGHT,
   };
 }
@@ -250,7 +247,8 @@ export function Ladder(): ReactElement {
   const sim = useAppStore((state) => state.sim);
   const simTime = useAppStore((state) => state.simTime);
   const handCount = useAppStore((state) => state.handCount);
-  const frame = makeFrame(simTime, handCount);
+  const timelineWindow = useAppStore((state) => state.timelineWindow);
+  const frame = makeFrame(simTime, handCount, timelineWindow);
 
   return (
     <svg
@@ -290,7 +288,7 @@ export function Ladder(): ReactElement {
 
       {/* Axis caption. */}
       <text x={PLOT_LEFT} y={frame.height - 8} fontSize={13} fill="#8a93a2">
-        time → (beat index below the axis; window = {WINDOW_SECONDS} s)
+        time → (beat index below the axis; window = {frame.timelineWindow.toFixed(1)} s)
       </text>
     </svg>
   );

@@ -15,10 +15,14 @@ import { validatePattern, type ValidationResult } from '../core/siteswap';
 import type { Epoch, TimelineParams } from '../core/timeline';
 import {
   buildSimulation,
+  DEFAULT_TIMELINE_WINDOW,
   extendedIfNeeded,
   firstBeatAtOrAfter,
   INITIAL_BEATS,
+  TIMELINE_WINDOW_MAX,
+  TIMELINE_WINDOW_MIN,
   upsertEpoch,
+  windowSpans,
   type EpochParams,
   type Simulation,
 } from './simulation';
@@ -53,6 +57,27 @@ export const DEFAULT_BALL_COLOR = '#2f6fed';
 /** Orbit coloring off by default (single configurable color, DESIGN.md §6, §7). */
 export const DEFAULT_ORBIT_COLORING = false;
 
+// --- Timeline-bar settings (DESIGN.md §6) — presentation only ---------------
+// The window, trail length, and ghost toggle shape the timeline bar + 3D tracers
+// (DESIGN.md §6). They never change simulation *content* (a pure function of
+// time, DESIGN.md §2); the only sim touch they make is horizon EXTENSION (growing
+// the generated range, same append-only mechanism as the clock), never a rebuild.
+// The window range/helpers live in ./simulation; views import them from there
+// (as the ladder already does).
+
+/**
+ * Trailing tracer length in seconds (DESIGN.md §6). Default 0.8 s: a "tasteful
+ * ~1 s" trail that at the default 3 s window (past span 0.9 s) leaves the detach
+ * handle just inside the left edge — draggable, not yet pinned. The handle drags
+ * to at most the past span; longer trails (up to {@link TRAIL_LENGTH_MAX}) are set
+ * via the slider and pin the handle to the left edge with a numeric readout.
+ */
+export const DEFAULT_TRAIL_LENGTH = 0.8;
+export const TRAIL_LENGTH_MIN = 0;
+export const TRAIL_LENGTH_MAX = 8;
+/** Future ghost paths on by default so the forward preview is visible (DESIGN.md §6). */
+export const DEFAULT_GHOSTS_ENABLED = true;
+
 /** The t_d slider cap = 0.9·n_h·τ_b (NOTATION.md identity 4; DESIGN.md §7). */
 export function dwellCap(handCount: number, beatPeriod: number): number {
   return DWELL_CAP_FRACTION * handCount * beatPeriod;
@@ -85,6 +110,14 @@ export interface AppStore {
   /** The single ball color (CSS string) used when orbit coloring is off. */
   readonly ballColor: string;
 
+  // timeline-bar settings (DESIGN.md §6) — presentation only, no sim rebuild.
+  /** Visible window width (s) for the timeline bar + ladder (1–15, DESIGN.md §7). */
+  readonly timelineWindow: number;
+  /** Trailing tracer length (s); may exceed the window (handle pins, DESIGN.md §6). */
+  readonly trailLength: number;
+  /** Whether dashed future ghost paths are drawn (DESIGN.md §6, toggleable). */
+  readonly ghostsEnabled: boolean;
+
   // clock (DESIGN.md §2)
   readonly simTime: number;
   readonly playing: boolean;
@@ -108,9 +141,19 @@ export interface AppStore {
   setOrbitColoring(orbitColoring: boolean): void;
   toggleOrbitColoring(): void;
   setBallColor(ballColor: string): void;
+  setTimelineWindow(timelineWindow: number): void;
+  setTrailLength(trailLength: number): void;
+  setGhostsEnabled(ghostsEnabled: boolean): void;
+  toggleGhosts(): void;
   setPlaying(playing: boolean): void;
   togglePlaying(): void;
   restart(): void;
+  /**
+   * Scrub the clock: set `simTime` directly (DESIGN.md §2). Clamps to t ≥ 0 and
+   * triggers horizon extension when dragged forward (same append-only mechanism
+   * as {@link tick}). Works paused or playing; the timeline bar drives it.
+   */
+  setSimTime(simTime: number): void;
   /** Advance the clock by `wallDeltaSeconds` of wall time (rAF loop only). */
   tick(wallDeltaSeconds: number): void;
 }
@@ -170,6 +213,10 @@ export const useAppStore = create<AppStore>((set, get) => {
     orbitColoring: DEFAULT_ORBIT_COLORING,
     ballColor: DEFAULT_BALL_COLOR,
 
+    timelineWindow: DEFAULT_TIMELINE_WINDOW,
+    trailLength: DEFAULT_TRAIL_LENGTH,
+    ghostsEnabled: DEFAULT_GHOSTS_ENABLED,
+
     simTime: 0,
     playing: true,
 
@@ -226,9 +273,45 @@ export const useAppStore = create<AppStore>((set, get) => {
     toggleOrbitColoring: () => set((state) => ({ orbitColoring: !state.orbitColoring })),
     setBallColor: (ballColor) => set({ ballColor }),
 
+    // Timeline-bar settings. Trail length + ghost toggle are pure presentation
+    // (never touch the sim). A wider window may need more future generated, so it
+    // runs the SAME horizon extension as the clock (never a rebuild — past events
+    // stay bit-identical, DESIGN.md §2). At startup the horizon (~40 s) already
+    // covers the widest window, so the common case is a no-op (sim ref preserved).
+    setTimelineWindow: (raw) => {
+      const timelineWindow = clamp(raw, TIMELINE_WINDOW_MIN, TIMELINE_WINDOW_MAX);
+      const state = get();
+      const { futureSpan } = windowSpans(timelineWindow);
+      const nextSim = extendedIfNeeded(
+        state.sim,
+        state.baseParams,
+        state.epochs,
+        state.simTime,
+        futureSpan,
+      );
+      set(nextSim === state.sim ? { timelineWindow } : { timelineWindow, sim: nextSim });
+    },
+    setTrailLength: (raw) => set({ trailLength: clamp(raw, TRAIL_LENGTH_MIN, TRAIL_LENGTH_MAX) }),
+    setGhostsEnabled: (ghostsEnabled) => set({ ghostsEnabled }),
+    toggleGhosts: () => set((state) => ({ ghostsEnabled: !state.ghostsEnabled })),
+
     setPlaying: (playing) => set({ playing }),
     togglePlaying: () => set((state) => ({ playing: !state.playing })),
     restart: () => set({ simTime: 0 }),
+
+    setSimTime: (raw) => {
+      const simTime = Math.max(0, raw);
+      const state = get();
+      const { futureSpan } = windowSpans(state.timelineWindow);
+      const nextSim = extendedIfNeeded(
+        state.sim,
+        state.baseParams,
+        state.epochs,
+        simTime,
+        futureSpan,
+      );
+      set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
+    },
 
     tick: (wallDeltaSeconds) => {
       const state = get();
@@ -236,7 +319,14 @@ export const useAppStore = create<AppStore>((set, get) => {
         return;
       }
       const simTime = state.simTime + wallDeltaSeconds * state.playbackSpeed;
-      const nextSim = extendedIfNeeded(state.sim, state.baseParams, state.epochs, simTime);
+      const { futureSpan } = windowSpans(state.timelineWindow);
+      const nextSim = extendedIfNeeded(
+        state.sim,
+        state.baseParams,
+        state.epochs,
+        simTime,
+        futureSpan,
+      );
       set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
     },
   };

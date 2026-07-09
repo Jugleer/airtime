@@ -44,16 +44,41 @@ export interface Simulation {
   readonly spatialPeriodBeats: number;
 }
 
-// --- Ladder window + horizon geometry (shared by the store and the ladder) ----
+// --- Ladder / timeline window + horizon geometry (shared by store + views) ----
+//
+// The visible window is a fixed, CONFIGURABLE width (DESIGN.md §6, §7: default
+// 3 s, range 1–15 s). It is owned by the store (`timelineWindow`); the ladder and
+// the timeline bar both derive their spans from it via {@link windowSpans}, so a
+// single control drives both views (they "rhyme", DESIGN.md §6). The scroll policy
+// is the same anchored-playhead one the ladder already used: the simTime cursor
+// sits at a fixed fraction ({@link CURSOR_FRACTION}) of the window from the left,
+// so past = window·fraction and future = window·(1−fraction). This holds whether
+// playing, paused, or scrubbing (the timeline bar freezes the window only during
+// an active scrub gesture — see src/ui/TimelineBar).
 
-/** Visible ladder/timeline window width in seconds (DESIGN.md §6 default 3 s). */
-export const WINDOW_SECONDS = 3;
+/** Default visible window width in seconds (DESIGN.md §7 timeline window). */
+export const DEFAULT_TIMELINE_WINDOW = 3;
+/** Timeline-window slider range (DESIGN.md §7: 1–15 s). */
+export const TIMELINE_WINDOW_MIN = 1;
+export const TIMELINE_WINDOW_MAX = 15;
 /** Cursor position as a fraction of the window from the left edge. */
 export const CURSOR_FRACTION = 0.3;
-/** Seconds of history shown left of the simTime cursor. */
-export const PAST_SPAN = WINDOW_SECONDS * CURSOR_FRACTION;
-/** Seconds of future shown right of the simTime cursor. */
-export const FUTURE_SPAN = WINDOW_SECONDS - PAST_SPAN;
+
+/** Past/future split of a window: `past = window·fraction`, `future = rest`. */
+export function windowSpans(timelineWindow: number): {
+  readonly pastSpan: number;
+  readonly futureSpan: number;
+} {
+  const pastSpan = timelineWindow * CURSOR_FRACTION;
+  return { pastSpan, futureSpan: timelineWindow - pastSpan };
+}
+
+/** Default window width (kept for back-compat; equals {@link DEFAULT_TIMELINE_WINDOW}). */
+export const WINDOW_SECONDS = DEFAULT_TIMELINE_WINDOW;
+/** Seconds of history shown left of the simTime cursor at the default window. */
+export const PAST_SPAN = windowSpans(WINDOW_SECONDS).pastSpan;
+/** Seconds of future shown right of the simTime cursor at the default window. */
+export const FUTURE_SPAN = windowSpans(WINDOW_SECONDS).futureSpan;
 /** Extra seconds kept generated beyond the window so scrolling never runs dry. */
 export const HORIZON_MARGIN_SECONDS = 6;
 /** Beats added per horizon extension (kept coarse so rebuilds are rare). */
@@ -61,9 +86,14 @@ export const HORIZON_CHUNK_BEATS = 128;
 /** Beats generated at startup (covers ~40 s at the default τ_b). */
 export const INITIAL_BEATS = 160;
 
-/** The sim time the current window's right edge (plus margin) needs generated. */
-export function neededHorizonTime(simTime: number): number {
-  return simTime + FUTURE_SPAN + HORIZON_MARGIN_SECONDS;
+/**
+ * The sim time the current window's right edge (plus margin) needs generated.
+ * `futureSpan` is the window's forward span (default = the 3 s window's future);
+ * the margin (≥ any ghost span, {@link HORIZON_MARGIN_SECONDS} = 6 s) keeps future
+ * ghosts inside the generated range for free.
+ */
+export function neededHorizonTime(simTime: number, futureSpan: number = FUTURE_SPAN): number {
+  return simTime + futureSpan + HORIZON_MARGIN_SECONDS;
 }
 
 /** Generated horizon in seconds: the start time of the first ungenerated beat. */
@@ -132,8 +162,9 @@ export function extendedIfNeeded(
   baseParams: TimelineParams,
   epochs: readonly Epoch[],
   simTime: number,
+  futureSpan: number = FUTURE_SPAN,
 ): Simulation {
-  const target = neededHorizonTime(simTime);
+  const target = neededHorizonTime(simTime, futureSpan);
   if (horizonTime(sim) >= target) {
     return sim;
   }

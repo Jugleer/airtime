@@ -6,11 +6,33 @@ import {
   DEFAULT_BALL_RADIUS,
   DEFAULT_BEAT_PERIOD,
   DEFAULT_DWELL_TIME,
+  DEFAULT_GHOSTS_ENABLED,
   DEFAULT_HAND_COUNT,
   DEFAULT_ORBIT_COLORING,
+  DEFAULT_TRAIL_LENGTH,
+  TRAIL_LENGTH_MAX,
+  TRAIL_LENGTH_MIN,
   dwellCap,
   useAppStore,
 } from './index';
+import {
+  DEFAULT_TIMELINE_WINDOW,
+  TIMELINE_WINDOW_MAX,
+  TIMELINE_WINDOW_MIN,
+  buildSimulation,
+  horizonTime,
+  neededHorizonTime,
+  windowSpans,
+} from './simulation';
+import { validatePattern } from '../core/siteswap';
+
+function valuesOf(text: string): number[] {
+  const result = validatePattern(text);
+  if (!result.ok) {
+    throw new Error(`fixture ${text} invalid`);
+  }
+  return result.values;
+}
 
 // The store is a module singleton; reset it to defaults before each test.
 beforeEach(() => {
@@ -32,6 +54,9 @@ beforeEach(() => {
     ballRadius: DEFAULT_BALL_RADIUS,
     orbitColoring: DEFAULT_ORBIT_COLORING,
     ballColor: DEFAULT_BALL_COLOR,
+    timelineWindow: DEFAULT_TIMELINE_WINDOW,
+    trailLength: DEFAULT_TRAIL_LENGTH,
+    ghostsEnabled: DEFAULT_GHOSTS_ENABLED,
   });
   useAppStore.getState().setPattern('3'); // rebuild a clean sim from defaults
 });
@@ -157,5 +182,112 @@ describe('runtime parameter epochs (past immutable)', () => {
     const state = useAppStore.getState();
     expect(state.epochs).toHaveLength(0);
     expect(state.baseParams.beatPeriod).toBe(0.5);
+  });
+});
+
+describe('timeline-bar settings (DESIGN.md §6)', () => {
+  it('has the DESIGN.md §7 defaults', () => {
+    expect(DEFAULT_TIMELINE_WINDOW).toBe(3);
+    expect(TIMELINE_WINDOW_MIN).toBe(1);
+    expect(TIMELINE_WINDOW_MAX).toBe(15);
+    const state = useAppStore.getState();
+    expect(state.timelineWindow).toBe(3);
+    expect(state.trailLength).toBeCloseTo(DEFAULT_TRAIL_LENGTH, 9);
+    expect(state.ghostsEnabled).toBe(DEFAULT_GHOSTS_ENABLED);
+  });
+
+  it('clamps the timeline window to [1, 15] s', () => {
+    useAppStore.getState().setTimelineWindow(100);
+    expect(useAppStore.getState().timelineWindow).toBe(TIMELINE_WINDOW_MAX);
+    useAppStore.getState().setTimelineWindow(0);
+    expect(useAppStore.getState().timelineWindow).toBe(TIMELINE_WINDOW_MIN);
+    useAppStore.getState().setTimelineWindow(5);
+    expect(useAppStore.getState().timelineWindow).toBe(5);
+  });
+
+  it('clamps the trail length to [0, 8] s', () => {
+    useAppStore.getState().setTrailLength(100);
+    expect(useAppStore.getState().trailLength).toBe(TRAIL_LENGTH_MAX);
+    useAppStore.getState().setTrailLength(-1);
+    expect(useAppStore.getState().trailLength).toBe(TRAIL_LENGTH_MIN);
+  });
+
+  it('toggles ghosts', () => {
+    const before = useAppStore.getState().ghostsEnabled;
+    useAppStore.getState().toggleGhosts();
+    expect(useAppStore.getState().ghostsEnabled).toBe(!before);
+    useAppStore.getState().setGhostsEnabled(true);
+    expect(useAppStore.getState().ghostsEnabled).toBe(true);
+  });
+
+  it('trail + ghost settings never rebuild the simulation (presentation only)', () => {
+    const before = useAppStore.getState().sim;
+    useAppStore.getState().setTrailLength(2.5);
+    useAppStore.getState().toggleGhosts();
+    expect(useAppStore.getState().sim).toBe(before);
+  });
+
+  it('changing the window does not rebuild the sim when the horizon already covers it', () => {
+    // At startup the horizon spans ~40 s, well beyond the widest window's needs.
+    const before = useAppStore.getState().sim;
+    useAppStore.getState().setTimelineWindow(TIMELINE_WINDOW_MAX);
+    expect(useAppStore.getState().sim).toBe(before);
+    expect(useAppStore.getState().timelineWindow).toBe(TIMELINE_WINDOW_MAX);
+  });
+
+  it('a wider window extends (never rebuilds) the horizon when it would run dry', () => {
+    // Start from a deliberately short horizon so a wide window needs more future.
+    const values = valuesOf('3');
+    const shortSim = buildSimulation(
+      values,
+      '3',
+      { beatPeriod: 0.25, dwellTime: 0.3, handCount: 2 },
+      [],
+      20, // ~5 s generated
+    );
+    useAppStore.setState({ sim: shortSim, simTime: 4 });
+    const beat2Before = shortSim.timeline.beatTime(2);
+
+    useAppStore.getState().setTimelineWindow(TIMELINE_WINDOW_MAX);
+    const after = useAppStore.getState();
+    const { futureSpan } = windowSpans(TIMELINE_WINDOW_MAX);
+    // Horizon grew to cover the wide window; past beats stay bit-identical.
+    expect(horizonTime(after.sim)).toBeGreaterThanOrEqual(neededHorizonTime(4, futureSpan));
+    expect(after.sim.timeline.beatTime(2)).toBeCloseTo(beat2Before, 12);
+  });
+});
+
+describe('scrub (setSimTime)', () => {
+  it('sets simTime directly and clamps to t ≥ 0', () => {
+    useAppStore.getState().setSimTime(2.5);
+    expect(useAppStore.getState().simTime).toBeCloseTo(2.5, 9);
+    useAppStore.getState().setSimTime(-3);
+    expect(useAppStore.getState().simTime).toBe(0);
+  });
+
+  it('works while paused (does not depend on the playing flag)', () => {
+    useAppStore.setState({ playing: false });
+    useAppStore.getState().setSimTime(1.75);
+    expect(useAppStore.getState().simTime).toBeCloseTo(1.75, 9);
+    expect(useAppStore.getState().playing).toBe(false);
+  });
+
+  it('scrubbing forward past the horizon extends it (never rebuilds the past)', () => {
+    const values = valuesOf('3');
+    const shortSim = buildSimulation(
+      values,
+      '3',
+      { beatPeriod: 0.25, dwellTime: 0.3, handCount: 2 },
+      [],
+      20, // ~5 s generated
+    );
+    useAppStore.setState({ sim: shortSim, simTime: 0, timelineWindow: DEFAULT_TIMELINE_WINDOW });
+    const beat2Before = shortSim.timeline.beatTime(2);
+
+    useAppStore.getState().setSimTime(30); // far past the short horizon
+    const after = useAppStore.getState();
+    expect(after.simTime).toBe(30);
+    expect(horizonTime(after.sim)).toBeGreaterThanOrEqual(neededHorizonTime(30));
+    expect(after.sim.timeline.beatTime(2)).toBeCloseTo(beat2Before, 12);
   });
 });

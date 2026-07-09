@@ -5,12 +5,14 @@ honest timing, manipulate them live (tempo, dwell, gravity, hand geometry), navi
 the siteswap state graph by clicking, and see the kinematics no other tool shows you —
 implied hand velocity/acceleration/jerk and per-hand energy.
 
-> **Status**: Phase 4 (3D scene) done — the main view: a react-three-fiber scene
-> where the balls fly, evaluated from the one global clock, with a navigable orbit
-> camera + front/side/top/juggler-POV presets, a subtle ground grid, ball-radius and
-> single-color/orbit-coloring controls, and the ladder diagram kept below as the
-> engine debug view. The build is executed phase-by-phase by AI agents — see
-> `PLAN.md` (what) and `BUILD_LOG.md` (progress).
+> **Status**: Phase 5 (timeline bar, tracers, ghosts) done — a full-width timeline
+> bar with a mini-ladder tick background, a scrub playhead (drag sets the one clock,
+> paused or playing), and a detachable trail-length handle that pins to the left
+> edge with a readout when the trail outgrows the window; 3D ball trails and dashed
+> future ghosts as closed-form `position(t)` polylines; a configurable window (1–15 s)
+> shared with the ladder, plus a "pattern repeats every X s" readout. The build is
+> executed phase-by-phase by AI agents — see `PLAN.md` (what) and `BUILD_LOG.md`
+> (progress).
 
 ## Planned feature set (v1)
 

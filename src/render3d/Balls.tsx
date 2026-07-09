@@ -19,7 +19,7 @@ import { useMemo, useRef, type ReactElement } from 'react';
 import { useFrame } from '@react-three/fiber';
 import type { Mesh } from 'three';
 import { useAppStore } from '../state';
-import { buildBallOrbits, orbitColor } from './coloring';
+import { useBallColorResolver } from './useBallColors';
 
 /** Sphere tessellation — smooth enough at 0.01–0.1 m, cheap for ≲ 9 balls. */
 const SPHERE_WIDTH_SEGMENTS = 32;
@@ -30,8 +30,6 @@ export function Balls(): ReactElement {
   // and the view settings. Per-frame position comes from getState() in useFrame.
   const sim = useAppStore((state) => state.sim);
   const ballRadius = useAppStore((state) => state.ballRadius);
-  const orbitColoring = useAppStore((state) => state.orbitColoring);
-  const ballColor = useAppStore((state) => state.ballColor);
 
   const kinematics = sim.kinematics;
 
@@ -41,20 +39,8 @@ export function Balls(): ReactElement {
     return [...kinematics.ballIds(), ...holds];
   }, [kinematics]);
 
-  // ballId → orbit index, derived from orbits() + the timeline's flights.
-  const orbitOfBall = useMemo(
-    () =>
-      buildBallOrbits(
-        sim.values,
-        sim.timeline.flights,
-        kinematics.staticHolds(),
-        kinematics.handCount,
-      ),
-    [sim, kinematics],
-  );
-
-  const colorForBall = (ballId: number): string =>
-    orbitColoring ? orbitColor(orbitOfBall.get(ballId) ?? 0) : ballColor;
+  // Shared color resolver (orbit palette or single color; DESIGN.md §6).
+  const colorForBall = useBallColorResolver(sim);
 
   const meshes = useRef(new Map<number, Mesh>());
 

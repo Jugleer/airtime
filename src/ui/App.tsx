@@ -7,6 +7,7 @@ import type { ReactElement } from 'react';
 import { Scene } from '../render3d';
 import { Controls } from './Controls';
 import { Ladder } from './Ladder';
+import { TimelineBar } from './TimelineBar';
 import { useClock } from './useClock';
 
 export function App(): ReactElement {
@@ -59,6 +60,11 @@ export function App(): ReactElement {
         <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#3b4252' }}>Ladder diagram</h2>
         <Ladder />
       </section>
+
+      {/* Timeline bar: DESIGN.md §6 "bottom, full width" — here, the full width of
+          the app's content column. Scrubbing it moves the one clock, so the 3D
+          scene, ladder, and tracers all follow (DESIGN.md §2). */}
+      <TimelineBar />
     </main>
   );
 }
