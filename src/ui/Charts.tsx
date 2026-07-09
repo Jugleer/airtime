@@ -31,7 +31,7 @@ import {
   type ReactElement,
 } from 'react';
 import { HAND_COUNT_MAX, useAppStore, type ChartAxisMode } from '../state';
-import { windowSpans } from '../state/simulation';
+import { CURSOR_FRACTION } from '../state/simulation';
 import { EnergyPanel } from './EnergyPanel';
 import {
   foldSampleRange,
@@ -228,8 +228,9 @@ function ChartsBody(): ReactElement {
   );
 
   useEffect(() => {
-    const { pastSpan } = windowSpans(timelineWindow);
-    const windowStart = simTime - pastSpan;
+    // Inline the past-span (avoid a per-frame windowSpans object): this effect
+    // runs every frame while playing (Phase 9 hot-path pass).
+    const windowStart = simTime - timelineWindow * CURSOR_FRACTION;
     const kinematics = sim.kinematics;
     const hands = Math.min(handCount, HAND_COUNT_MAX);
 

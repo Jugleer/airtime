@@ -7,14 +7,20 @@ import type { ReactElement } from 'react';
 import { Scene } from '../render3d';
 import { Charts } from './Charts';
 import { Controls } from './Controls';
+import { Help } from './Help';
 import { Ladder } from './Ladder';
+import { SharePanel } from './SharePanel';
 import { StateGraph } from './StateGraph';
 import { TimelineBar } from './TimelineBar';
+import { useAudio } from './useAudio';
 import { useClock } from './useClock';
 
 export function App(): ReactElement {
-  // Mount the single wall-clock loop that drives simTime (DESIGN.md §2).
+  // Mount the single wall-clock loop that drives simTime (DESIGN.md §2) and the
+  // WebAudio tick scheduler (DESIGN.md §6; a no-op until audio is enabled / where
+  // WebAudio is unavailable).
   useClock();
+  useAudio();
 
   return (
     <main
@@ -29,12 +35,17 @@ export function App(): ReactElement {
         color: '#1f2530',
       }}
     >
-      <header>
-        <h1 style={{ margin: '0 0 0.15rem' }}>Airtime</h1>
-        <p style={{ margin: 0, color: '#5b6472' }}>
-          Siteswap 3D visualizer. Try <code>3</code>, <code>441</code>, <code>531</code>,{' '}
-          <code>40</code>, <code>522</code>.
-        </p>
+      <header
+        style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}
+      >
+        <div>
+          <h1 style={{ margin: '0 0 0.15rem' }}>Airtime</h1>
+          <p style={{ margin: 0, color: '#5b6472' }}>
+            Siteswap 3D visualizer. Try <code>3</code>, <code>441</code>, <code>531</code>,{' '}
+            <code>40</code>, <code>522</code>.
+          </p>
+        </div>
+        <Help />
       </header>
 
       <Controls />
@@ -78,6 +89,10 @@ export function App(): ReactElement {
           the app's content column. Scrubbing it moves the one clock, so the 3D
           scene, ladder, and tracers all follow (DESIGN.md §2). */}
       <TimelineBar />
+
+      {/* Save / share + audio (DESIGN.md §6): shareable URL, presets, JSON, PNG,
+          and synthesized ticks. */}
+      <SharePanel />
     </main>
   );
 }

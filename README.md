@@ -3,40 +3,95 @@
 **An interactive 3D siteswap laboratory.** Animate juggling patterns with physically
 honest timing, manipulate them live (tempo, dwell, gravity, hand geometry), navigate
 the siteswap state graph by clicking, and see the kinematics no other tool shows you —
-implied hand velocity/acceleration/jerk and per-hand energy.
+implied hand velocity/acceleration/jerk and per-hand energy. Then share the exact scene
+as a link.
 
-> **Status**: Phase 8 (state graph) done — a collapsible "State graph" panel
-> renders the (b, N) landing-schedule graph (C(N, b) states in deterministic
-> excitation-level columns), highlights the running pattern's cycle, and hops a
-> marker state-to-state every beat. Click any state — or type a same-b pattern —
-> and the app BFS-plans the shortest (lexicographically smallest) transition
-> throw sequence and SPLICES it into the running timeline: the past stays
-> bit-identical, in-flight balls keep flying, and the 3D pattern morphs without a
-> glitch, with a live "transitioning to 531 (2 beats)" status. Bare states hold
-> the shortest cycle through them (which becomes the running pattern); N
-> auto-expands to fit typed patterns (cap 11, warning at ≥ 9); different-b or
-> beyond-cap patterns hard-reset with a visible notice, and a hard-reset button
-> restarts clean. Prior phases: charts & energy panel, live runtime physics
-> (slew-limited tempo, gravity, hold depth, carry-path toggle, hand geometry
-> editor), timeline bar with trails/ghosts, the 3D scene, and the ladder debug
-> view. The build is executed phase-by-phase by AI agents — see `PLAN.md` (what)
-> and `BUILD_LOG.md` (progress).
+Airtime is a pure client-side TypeScript SPA: no backend, no external requests, no
+assets — everything (including the audio ticks) is synthesized or bundled. The whole
+simulation is a **closed-form function of time**, which is what makes scrubbing, trails,
+live charts, deterministic playback, and pixel-identical share links essentially free.
 
-## Planned feature set (v1)
+> **Status: v1 feature-complete.** All nine build phases are in: the deterministic
+> core (siteswap, timing, event timeline, kinematics, energy, state graph), the 3D
+> scene, ladder diagram, timeline bar with trails/ghosts, live runtime physics, per-hand
+> charts + energy panel, click-to-transition state graph, and — this phase — save/share
+> (URL codec, presets, JSON, PNG), synthesized audio ticks, the pattern library, a help
+> overlay, and a GitHub Pages deploy. Built phase-by-phase by AI agents; see `PLAN.md`
+> (what) and `BUILD_LOG.md` (progress).
 
-- Vanilla async siteswap (`0–9`, `a–z`), live validation with beat-accurate errors
-- 3D scene with navigable camera — balls only, no hands rendered
-- Runtime controls: beat period (slew-limited — watch the pattern rise as it slows),
-  dwell time, gravity, playback speed, 1–8 hands with freely placeable
-  catch/throw points (line/circle presets)
-- Ladder diagram + full-width timeline bar with scrubbing, ball trails, future ghosts
-- State-graph view: current state hops beat-by-beat; click any pattern/state to
-  transition via the shortest valid throw sequence
-- Per-hand |v|/|a|/|j| charts and energy accounting (throw work vs catch absorption)
-- Shareable URLs, named presets, PNG capture, synthesized audio ticks
+## Features
 
-Deferred to later versions: synchronous & multiplex patterns, GIF/video export,
-and more — see `DESIGN.md` §1.
+- **Vanilla async siteswap** (`0–9`, `a–z`) with live validation and beat-accurate
+  error messages (it names the colliding beats).
+- **3D scene** — balls only (no hands/juggler), navigable orbit camera with front /
+  side / top / juggler-POV presets, single-color or per-orbit coloring, ground grid.
+- **Live runtime physics** — beat period (slew-limited: watch a pattern rise as it
+  slows), dwell time (with the effective-dwell clamp shown in amber), gravity, hold
+  depth, quintic vs cubic carry path. Changes affect *future* events only, so history
+  stays scrubbable and balls already in the air keep their parabola.
+- **1–8 hands** with line/circle presets and a draggable per-hand catch/throw editor.
+- **Ladder diagram** — time-vs-hands event chart (the engine's debug view).
+- **Timeline bar** — a fixed, configurable window with a scrub playhead and a
+  detachable trail-length handle; ball trails and dashed future ghosts.
+- **Charts + energy** — per-hand |v|/|a|/|j| (magnitude or per-axis) over the timeline
+  window, plus a per-hand energy table (throw work, catch absorption, net, avg power).
+- **State graph** — the (b, N) landing-schedule graph with the running cycle
+  highlighted and a marker that hops each beat. Click any state or pattern (or type a
+  same-ball-count pattern) and Airtime plans the shortest legal transition and splices
+  it into the running timeline — the past stays bit-identical, the pattern morphs
+  without a glitch.
+- **Pattern library** — a curated, named menu (2–5 balls) that routes through the same
+  smooth-transition machinery.
+- **Save / share** — a versioned URL that reproduces the whole scene, named
+  localStorage presets, JSON export/import, and a PNG frame capture.
+- **Audio** — synthesized throw (and optional catch) ticks, scheduled against the
+  WebAudio clock so they stay aligned with the throws; master toggle + volume.
+- **Help overlay** — the `?` button explains siteswap and every control group.
+
+## Controls at a glance
+
+| Group | Controls |
+|---|---|
+| Pattern | Text input (live validation), library dropdown, play/pause, restart |
+| Tempo & physics | Beat period, dwell time, gravity, hold depth, carry path (quintic/cubic) |
+| Playback & view | Playback speed (viewing only — not physics), ball radius, timeline window, trail length |
+| Hands & geometry | Hand count (1–8), line/circle preset, draggable catch/throw editor |
+| Coloring | Orbit coloring, future ghosts, single ball color |
+| State graph | N stepper (auto-expands, warns ≥ 9), collapsible panel, hard reset |
+| Save/share & audio | Copy share link, Save PNG, Export/Import JSON, named presets, audio toggle + volume |
+
+## Sharing & persistence
+
+- **Copy share link** builds a compact versioned URL (`?v=1&…`) holding the full
+  config — pattern, every slider, hand geometry, view toggles, audio settings, and the
+  live camera — copies it to the clipboard (with a visible fallback field), and syncs
+  the address bar. Opening that link in another browser reproduces the identical scene
+  at `t = 0`. The URL is read once on boot (**URL > defaults**); a malformed URL is
+  ignored parameter-by-parameter and simply falls back to defaults — it never crashes.
+- **Presets** are named saves in `localStorage` (the same payload). Private-mode /
+  disabled storage degrades to a no-op rather than erroring.
+- **Export/Import JSON** downloads / restores that payload as a file (a browser
+  download — the app writes nothing server-side); a bad file gives a clear error.
+- **Save PNG** captures the current 3D frame (`preserveDrawingBuffer` keeps the buffer
+  readable).
+
+## Screenshots
+
+Captured headless from the running app (pattern `531`, opened via a share link):
+
+**3D scene** — the 531 pattern mid-flight with trails and dashed future ghosts:
+
+![3D scene](docs/screenshot-scene.png)
+
+**State graph** — the 35 states of (b = 3, N = 7) in excitation-level columns, the
+running 531 cycle highlighted, and the beat-hopping marker:
+
+![State graph](docs/screenshot-graph.png)
+
+**Charts & energy** — per-hand |v|/|a|/|j| over the timeline window, plus the per-hand
+energy table:
+
+![Charts and energy](docs/screenshot-charts.png)
 
 ## Stack
 
@@ -44,16 +99,26 @@ Vite · TypeScript (strict) · React · three.js (react-three-fiber) · zustand 
 vitest + fast-check. Pure client-side SPA, statically hosted, zero backend.
 
 The architectural heart: the whole simulation is a **closed-form function of time**
-(append-only event timeline + analytic kinematics), which is what makes scrubbing,
-tracers, live charts, and determinism essentially free. See `DESIGN.md` §2.
+(an append-only event timeline + analytic kinematics), evaluated at any `t`. `src/core`
+is pure and deterministic (no `Date.now`/`Math.random`/`performance`, time is always an
+argument); the dependency direction is strictly `ui / render3d → state → core`. See
+`DESIGN.md` §2 for why this is load-bearing.
 
 ## Development
 
 ```bash
 npm ci
-npm run dev -- --host   # LAN-accessible dev server
-npm run gate            # typecheck && lint && test && build
+npm run dev -- --host   # LAN-accessible dev server (open the URL on your desktop)
+npm run gate            # typecheck && lint && test && build — the pre-commit gate
+npm run test            # vitest watch mode
 ```
+
+## Deployment
+
+Pushing to `main` runs `.github/workflows/deploy.yml`, which builds the SPA and
+publishes it to GitHub Pages (enable **Settings → Pages → Source: GitHub Actions**
+once). `vite.config.ts` uses `base: './'`, so assets resolve correctly under a project
+subpath. The gate (`.github/workflows/ci.yml`) runs on every push and PR.
 
 ## License
 

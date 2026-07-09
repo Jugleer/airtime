@@ -1,0 +1,48 @@
+name: deploy
+
+# Deploy the static SPA to GitHub Pages on every push to main (activates once the
+# repo has a remote and Pages is enabled — Settings → Pages → Source: GitHub
+# Actions). The build is the same one the gate runs; vite's base './' (vite.config)
+# makes the emitted asset URLs relative, so the app resolves under a project
+# subpath (https://<user>.github.io/<repo>/). The gate workflow (ci.yml) is
+# unchanged and still runs the full typecheck/lint/test/build on every push + PR.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least-privilege token for Pages; allow one in-flight deployment at a time.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

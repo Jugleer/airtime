@@ -25,6 +25,9 @@ import { Grid, OrbitControls } from '@react-three/drei';
 import { Balls } from './Balls';
 import { Tracers } from './Tracers';
 import { HandGizmos } from './HandGizmos';
+import { useAppStore } from '../state';
+import { setCameraSampler, setCanvasElement } from '../state/sceneBridge';
+import type { CameraPose } from '../state/codec';
 import {
   CAMERA_PRESETS,
   CAMERA_PRESET_LABELS,
@@ -58,25 +61,42 @@ function webglAvailable(): boolean {
 }
 
 /**
- * Applies the active camera preset to the three camera + OrbitControls, and hosts
- * the controls themselves. Runs inside <Canvas>. Snapping on preset change is
- * intentional (an instant "jump to view"); free orbit/zoom/pan in between.
+ * Applies the store's camera pose (set by a preset button or a shared URL, §6) to
+ * the three camera + OrbitControls, hosts the controls, and registers a live-camera
+ * sampler so "Copy share link" captures wherever the user has orbited to. Runs
+ * inside <Canvas>. Snapping on a pose change is intentional (an instant "jump to
+ * view"); free orbit/zoom/pan in between.
  */
-function CameraRig({ preset }: { preset: CameraPreset }): ReactElement {
+function CameraRig(): ReactElement {
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
   const camera = useThree((state) => state.camera);
+  const cameraView = useAppStore((state) => state.cameraView);
 
   useEffect(() => {
-    const view = presetView(preset);
-    camera.position.set(view.position[0], view.position[1], view.position[2]);
+    camera.position.set(cameraView.position[0], cameraView.position[1], cameraView.position[2]);
     const orbit = controls.current;
     if (orbit) {
-      orbit.target.set(view.target[0], view.target[1], view.target[2]);
+      orbit.target.set(cameraView.target[0], cameraView.target[1], cameraView.target[2]);
       orbit.update();
     } else {
-      camera.lookAt(view.target[0], view.target[1], view.target[2]);
+      camera.lookAt(cameraView.target[0], cameraView.target[1], cameraView.target[2]);
     }
-  }, [preset, camera]);
+  }, [cameraView, camera]);
+
+  // Sample the LIVE camera on demand for share links (the user free-orbits without
+  // touching the store); cleared on unmount so a stale sampler never fires.
+  useEffect(() => {
+    setCameraSampler((): CameraPose => {
+      const orbit = controls.current;
+      return {
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: orbit
+          ? [orbit.target.x, orbit.target.y, orbit.target.z]
+          : [cameraView.target[0], cameraView.target[1], cameraView.target[2]],
+      };
+    });
+    return () => setCameraSampler(null);
+  }, [camera, cameraView]);
 
   return (
     <OrbitControls
@@ -116,8 +136,12 @@ function Environment(): ReactElement {
 /** The 3D scene view. */
 export function Scene(): ReactElement {
   const [preset, setPreset] = useState<CameraPreset>('front');
+  const setCameraView = useAppStore((state) => state.setCameraView);
   // Decide once; capability does not change during a session.
   const [supported] = useState(webglAvailable);
+
+  // Clear the registered canvas element when the scene unmounts (PNG capture bridge).
+  useEffect(() => () => setCanvasElement(null), []);
 
   if (!supported) {
     return (
@@ -133,6 +157,12 @@ export function Scene(): ReactElement {
       <Canvas
         style={{ width: '100%', height: '100%', display: 'block' }}
         dpr={[1, 2]}
+        // preserveDrawingBuffer keeps the framebuffer readable after the render so
+        // the "Save PNG" button's canvas.toBlob() captures the current frame
+        // (DESIGN.md §6). Cost: the driver cannot discard the buffer between frames
+        // — a small, constant memory/bandwidth overhead, negligible for this scene.
+        gl={{ preserveDrawingBuffer: true }}
+        onCreated={(state) => setCanvasElement(state.gl.domElement)}
         camera={{
           position: [initial.position[0], initial.position[1], initial.position[2]],
           fov: 50,
@@ -142,7 +172,7 @@ export function Scene(): ReactElement {
       >
         <color attach="background" args={['#eef1f5']} />
         <Environment />
-        <CameraRig preset={preset} />
+        <CameraRig />
         <Tracers />
         <Balls />
         <HandGizmos />
@@ -153,7 +183,10 @@ export function Scene(): ReactElement {
           <button
             key={option}
             type="button"
-            onClick={() => setPreset(option)}
+            onClick={() => {
+              setPreset(option);
+              setCameraView(presetView(option));
+            }}
             aria-pressed={preset === option}
             style={{
               ...presetButtonStyle,

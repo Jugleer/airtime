@@ -64,6 +64,16 @@ import {
   type Simulation,
   type TransitionInfo,
 } from './simulation';
+import type { CameraPose, ShareConfig } from './codec';
+import {
+  deletePresetFrom,
+  getLocalStorage,
+  loadPresetFrom,
+  presetNamesOf,
+  readPresetMap,
+  savePresetTo,
+} from './presets';
+import { sampleCamera } from './sceneBridge';
 
 // --- Defaults & slider ranges (DESIGN.md §7) --------------------------------
 
@@ -198,6 +208,28 @@ export const DEFAULT_GRAPH_MAX_HEIGHT = GRAPH_DEFAULT_N;
 /** Graph panel shown by default (collapsible like the charts, DESIGN.md §6). */
 export const DEFAULT_GRAPH_VISIBLE = true;
 
+// --- Audio settings (DESIGN.md §6) — the WebAudio ticks live in ui/useAudio; the
+// store owns the toggles + volume so they persist through the URL codec and
+// presets. Default OFF is the autoplay-policy-safe choice: enabling audio is a
+// user gesture, which is exactly when the AudioContext may be created/resumed.
+export const DEFAULT_AUDIO_ENABLED = false;
+/** A separate catch tick (on top of the throw tick), on by default when audio is. */
+export const DEFAULT_CATCH_TICK_ENABLED = true;
+/** Master tick volume (0–1). */
+export const DEFAULT_AUDIO_VOLUME = 0.5;
+export const AUDIO_VOLUME_MIN = 0;
+export const AUDIO_VOLUME_MAX = 1;
+
+// --- Camera (DESIGN.md §6) — the store holds the camera pose so it round-trips
+// through the URL codec (applying a URL sets the camera). The live OrbitControls
+// view (a user free-orbits without touching the store) is sampled on demand via
+// the scene bridge when building a share link. Default = the front preset view
+// (mirrors render3d's presetView('front'); kept in sync by the preset buttons).
+export const DEFAULT_CAMERA_POSE: CameraPose = {
+  position: [0, 1.35, 3.2],
+  target: [0, 1.35, 0],
+};
+
 /** The t_d slider cap = 0.9·n_h·τ_b (NOTATION.md identity 4; DESIGN.md §7). */
 export function dwellCap(handCount: number, beatPeriod: number): number {
   return DWELL_CAP_FRACTION * handCount * beatPeriod;
@@ -270,6 +302,22 @@ export interface AppStore {
   readonly transition: TransitionInfo | null;
   /** The last navigation notice (hard reset / graph unavailable), or null. */
   readonly graphNotice: string | null;
+
+  // audio settings (DESIGN.md §6) — WebAudio ticks synthesized in ui/useAudio.
+  /** Master audio toggle (default OFF for autoplay policy). */
+  readonly audioEnabled: boolean;
+  /** Whether a distinct catch tick plays in addition to the throw tick. */
+  readonly catchTickEnabled: boolean;
+  /** Master tick volume (0–1). */
+  readonly audioVolume: number;
+
+  // camera (DESIGN.md §6) — the pose the codec persists / a URL applies.
+  /** The camera pose applied on boot / by preset; sampled live for share links. */
+  readonly cameraView: CameraPose;
+
+  // presets (DESIGN.md §6) — names of the localStorage saves (config lives there).
+  /** Sorted names of the saved presets (empty when storage is unavailable). */
+  readonly presetNames: string[];
 
   // clock (DESIGN.md §2)
   readonly simTime: number;
@@ -360,6 +408,40 @@ export interface AppStore {
   setSimTime(simTime: number): void;
   /** Advance the clock by `wallDeltaSeconds` of wall time (rAF loop only). */
   tick(wallDeltaSeconds: number): void;
+
+  // --- Audio (DESIGN.md §6) --------------------------------------------------
+  setAudioEnabled(enabled: boolean): void;
+  toggleAudio(): void;
+  setCatchTickEnabled(enabled: boolean): void;
+  toggleCatchTick(): void;
+  setAudioVolume(volume: number): void;
+
+  // --- Camera (DESIGN.md §6) — preset buttons + URL boot set the pose --------
+  setCameraView(view: CameraPose): void;
+
+  // --- Save / share (DESIGN.md §6) ------------------------------------------
+  /**
+   * Snapshot the full shareable config (the URL codec / preset / JSON payload):
+   * the running valid pattern, every slider, the hand geometry, view toggles,
+   * audio, and the LIVE camera (sampled from OrbitControls via the scene bridge).
+   */
+  currentConfig(): ShareConfig;
+  /**
+   * Apply a full config (URL boot > defaults, or a loaded preset / imported JSON):
+   * a clean rebuild at t = 0 — base params + kinematics folded from the config,
+   * epochs cleared, every view/audio/camera field set. Out-of-range values are
+   * clamped and a bad pattern falls back to the default so a malformed payload
+   * never crashes (DESIGN.md §6).
+   */
+  applyConfig(config: ShareConfig): void;
+  /** Save the current config under `name` in localStorage (no-op if unavailable). */
+  savePreset(name: string): void;
+  /** Load a named preset and apply it (no-op when the name is absent). */
+  loadPreset(name: string): void;
+  /** Delete a named preset from localStorage. */
+  deletePreset(name: string): void;
+  /** Re-read the preset name list from localStorage (e.g. after an import). */
+  refreshPresetNames(): void;
 }
 
 function initialBaseParams(): TimelineParams {
@@ -597,6 +679,14 @@ export const useAppStore = create<AppStore>((set, get) => {
     graphVisible: DEFAULT_GRAPH_VISIBLE,
     transition: null,
     graphNotice: null,
+
+    audioEnabled: DEFAULT_AUDIO_ENABLED,
+    catchTickEnabled: DEFAULT_CATCH_TICK_ENABLED,
+    audioVolume: DEFAULT_AUDIO_VOLUME,
+
+    cameraView: DEFAULT_CAMERA_POSE,
+
+    presetNames: presetNamesOf(readPresetMap(getLocalStorage())),
 
     simTime: 0,
     playing: true,
@@ -1008,6 +1098,170 @@ export const useAppStore = create<AppStore>((set, get) => {
       );
       set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
     },
+
+    // --- Audio (DESIGN.md §6): plain presentation-only setters (the ticks are
+    // synthesized in ui/useAudio; the store never touches WebAudio or the sim). ---
+    setAudioEnabled: (audioEnabled) => set({ audioEnabled }),
+    toggleAudio: () => set((state) => ({ audioEnabled: !state.audioEnabled })),
+    setCatchTickEnabled: (catchTickEnabled) => set({ catchTickEnabled }),
+    toggleCatchTick: () => set((state) => ({ catchTickEnabled: !state.catchTickEnabled })),
+    setAudioVolume: (raw) => set({ audioVolume: clamp(raw, AUDIO_VOLUME_MIN, AUDIO_VOLUME_MAX) }),
+
+    // --- Camera: preset buttons + URL boot store the pose here; the scene applies
+    // it (and free-orbit changes are sampled live for share links). No sim touch. ---
+    setCameraView: (cameraView) => set({ cameraView }),
+
+    // --- Save / share (DESIGN.md §6) ------------------------------------------
+    currentConfig: () => {
+      const s = get();
+      const camera = sampleCamera(s.cameraView);
+      return {
+        // The RUNNING valid pattern (never a half-typed invalid input) so the
+        // share link always reproduces a real scene.
+        pattern: s.sim.patternText,
+        beatPeriod: s.beatPeriod,
+        dwellTime: s.dwellTime,
+        playbackSpeed: s.playbackSpeed,
+        gravity: s.gravity,
+        holdDepth: s.holdDepth,
+        carryPathKind: s.carryPathKind,
+        handCount: s.handCount,
+        handPreset: s.handPreset,
+        handThrowPoints: s.handThrowPoints.map((point) => ({ x: point.x, z: point.z })),
+        handCatchPoints: s.handCatchPoints.map((point) => ({ x: point.x, z: point.z })),
+        ballRadius: s.ballRadius,
+        ballColor: s.ballColor,
+        orbitColoring: s.orbitColoring,
+        timelineWindow: s.timelineWindow,
+        trailLength: s.trailLength,
+        ghostsEnabled: s.ghostsEnabled,
+        chartsVisible: s.chartsVisible,
+        chartAxisMode: s.chartAxisMode,
+        graphMaxHeight: s.graphMaxHeight,
+        graphVisible: s.graphVisible,
+        audioEnabled: s.audioEnabled,
+        catchTickEnabled: s.catchTickEnabled,
+        audioVolume: s.audioVolume,
+        camera,
+      };
+    },
+
+    applyConfig: (config) => {
+      // Pattern: fall back to the default if the shared text is invalid (never crash).
+      const parsed = validatePattern(config.pattern);
+      const values = parsed.ok ? parsed.values : [3];
+      const patternText = parsed.ok ? config.pattern : DEFAULT_PATTERN;
+      const validation = parsed.ok ? parsed : validatePattern(DEFAULT_PATTERN);
+
+      const handCount = clamp(Math.round(config.handCount), HAND_COUNT_MIN, HAND_COUNT_MAX);
+      const handPreset: HandPreset = config.handPreset === 'circle' ? 'circle' : 'line';
+
+      // Hand points: use the config's if they match the hand count, else re-derive
+      // the preset geometry (a hand-crafted / stale payload degrades gracefully).
+      let throwPoints: Vec3[];
+      let catchPoints: Vec3[];
+      if (
+        config.handThrowPoints.length === handCount &&
+        config.handCatchPoints.length === handCount
+      ) {
+        throwPoints = config.handThrowPoints.map((point) => vec3(point.x, HAND_Y, point.z));
+        catchPoints = config.handCatchPoints.map((point) => vec3(point.x, HAND_Y, point.z));
+      } else {
+        const sampled = sampleHandPoints(presetGeometry(handPreset, handCount), handCount);
+        throwPoints = sampled.throwPoints;
+        catchPoints = sampled.catchPoints;
+      }
+      const geometry = makeHandGeometry(throwPoints, catchPoints);
+
+      const beatPeriod = clamp(config.beatPeriod, BEAT_PERIOD_MIN, BEAT_PERIOD_MAX);
+      const dwellTime = clamp(config.dwellTime, DWELL_MIN, dwellCap(handCount, beatPeriod));
+      const gravity = clamp(config.gravity, GRAVITY_MIN, GRAVITY_MAX);
+      const holdDepth = clamp(config.holdDepth, HOLD_DEPTH_MIN, HOLD_DEPTH_MAX);
+      const carryPathKind: CarryPathKind = config.carryPathKind === 'cubic' ? 'cubic' : 'quintic';
+
+      const baseParams: TimelineParams = { beatPeriod, dwellTime, handCount };
+      const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
+        gravity,
+        holdDepth,
+        carryPath: carryPathOf(carryPathKind),
+        geometry,
+      };
+      const sim = buildSimulation(
+        values,
+        patternText,
+        baseParams,
+        [],
+        INITIAL_BEATS,
+        kinematicsConfigOf(baseKinematics, []),
+      );
+
+      // N floor = the pattern's max throw (so its cycle stays representable),
+      // unless it is off-graph (then the panel just shows "unavailable").
+      const targetMax = maxThrowOf(values);
+      const floor = targetMax <= GRAPH_N_MAX ? Math.max(GRAPH_N_MIN, targetMax) : GRAPH_N_MIN;
+      const graphMaxHeight = clamp(Math.round(config.graphMaxHeight), floor, GRAPH_N_MAX);
+
+      set({
+        pattern: patternText,
+        validation,
+        beatPeriod,
+        dwellTime,
+        playbackSpeed: clamp(config.playbackSpeed, PLAYBACK_MIN, PLAYBACK_MAX),
+        gravity,
+        holdDepth,
+        carryPathKind,
+        handCount,
+        handPreset,
+        handThrowPoints: throwPoints,
+        handCatchPoints: catchPoints,
+        positionsEditorOpen: false,
+        ballRadius: clamp(config.ballRadius, BALL_RADIUS_MIN, BALL_RADIUS_MAX),
+        orbitColoring: config.orbitColoring,
+        ballColor: config.ballColor,
+        timelineWindow: clamp(config.timelineWindow, TIMELINE_WINDOW_MIN, TIMELINE_WINDOW_MAX),
+        trailLength: clamp(config.trailLength, TRAIL_LENGTH_MIN, TRAIL_LENGTH_MAX),
+        ghostsEnabled: config.ghostsEnabled,
+        chartsVisible: config.chartsVisible,
+        chartAxisMode: config.chartAxisMode,
+        graphMaxHeight,
+        graphVisible: config.graphVisible,
+        audioEnabled: config.audioEnabled,
+        catchTickEnabled: config.catchTickEnabled,
+        audioVolume: clamp(config.audioVolume, AUDIO_VOLUME_MIN, AUDIO_VOLUME_MAX),
+        cameraView: config.camera,
+        baseParams,
+        epochs: [],
+        baseKinematics,
+        kinematicsEpochs: [],
+        sim,
+        simTime: 0,
+        playing: true,
+        transition: null,
+        graphNotice: null,
+      });
+    },
+
+    savePreset: (name) => {
+      const config = get().currentConfig();
+      const names = savePresetTo(getLocalStorage(), name, config);
+      if (names !== null) {
+        set({ presetNames: names });
+      }
+    },
+    loadPreset: (name) => {
+      const config = loadPresetFrom(getLocalStorage(), name);
+      if (config !== null) {
+        get().applyConfig(config);
+      }
+    },
+    deletePreset: (name) => {
+      const names = deletePresetFrom(getLocalStorage(), name);
+      if (names !== null) {
+        set({ presetNames: names });
+      }
+    },
+    refreshPresetNames: () =>
+      set({ presetNames: presetNamesOf(readPresetMap(getLocalStorage())) }),
   };
 });
 

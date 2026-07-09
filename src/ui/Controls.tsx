@@ -34,6 +34,7 @@ import {
   type HandPointKind,
 } from '../state';
 import { TIMELINE_WINDOW_MAX, TIMELINE_WINDOW_MIN } from '../state/simulation';
+import { PATTERN_LIBRARY } from './library';
 
 const SLIDER_STEPS = 1000;
 const AMBER = '#b7791f';
@@ -340,6 +341,27 @@ export function Controls(): ReactElement {
           />
         </label>
 
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: '0 1 14rem' }}>
+          <span style={{ fontWeight: 600 }}>Library</span>
+          <select
+            aria-label="Pattern library"
+            value=""
+            onChange={(event) => {
+              if (event.target.value) {
+                setPattern(event.target.value);
+              }
+            }}
+            style={selectStyle}
+          >
+            <option value="">Choose a pattern…</option>
+            {PATTERN_LIBRARY.map((entry) => (
+              <option key={entry.pattern} value={entry.pattern}>
+                {entry.pattern} — {entry.name} ({entry.ballCount}-ball)
+              </option>
+            ))}
+          </select>
+        </label>
+
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
           <button type="button" onClick={togglePlaying} aria-pressed={playing} style={buttonStyle}>
             {playing ? 'Pause' : 'Play'}
@@ -618,6 +640,15 @@ const numberInputStyle: CSSProperties = {
   borderRadius: '0.3rem',
   border: '1px solid #c8cdd6',
   fontVariantNumeric: 'tabular-nums',
+};
+
+const selectStyle: CSSProperties = {
+  padding: '0.4rem 0.5rem',
+  borderRadius: '0.4rem',
+  border: '1px solid #c8cdd6',
+  background: '#ffffff',
+  fontSize: '0.95rem',
+  cursor: 'pointer',
 };
 
 const thStyle: CSSProperties = {

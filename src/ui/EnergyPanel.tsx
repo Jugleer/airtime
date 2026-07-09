@@ -44,7 +44,7 @@ export function EnergyPanel(): ReactElement {
     values: readonly number[],
     isTotal: boolean,
   ): ReactElement => (
-    <tr style={isTotal ? totalRowStyle : undefined}>
+    <tr key={label} style={isTotal ? totalRowStyle : undefined}>
       <td style={{ ...tdStyle, textAlign: 'left', fontWeight: isTotal ? 700 : 400 }}>{label}</td>
       {values.map((value, index) => (
         <td key={index} style={tdStyle}>
