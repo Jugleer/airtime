@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 7**
+**Next phase: 8**
 
 ---
 
@@ -171,3 +171,20 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - [ ] Gravity slider low (moon) and high: arcs flatten/heighten from the change onward only; dwell readout turns amber when clamping (try pattern 1 or 51 with long dwell).
   - [ ] Carry-path toggle quintic → cubic: hold dip disappears (cubic has no via-point) — the acceleration-jump character shows in Phase 7 charts.
   - [ ] Held-2 note appears for e.g. pattern 522 at n_h=3.
+
+## Phase 7 — Charts & energy panel            DONE
+- Date: 2026-07-09
+- Commit: 2e8aab5
+- Gate: (2026-07-09, "npm run gate", green — 22 test files / 261 tests, typecheck + lint clean, build ok; run independently by orchestrator)
+- Note: 30-minute pre-phase pause waived by explicit user permission for this phase.
+- Builder deviations from plan: none material. No core changes (energyReport + handState sufficed). Charts hand-rolled canvas (no chart lib), hands overlaid per quantity with a global magnitude/x/y/z selector.
+- Decisions made (reversible forks):
+  - Energy panel shows the FIRST spatial period under start-of-pattern params (epochs land at future beats and don't move the steady-state figures; folded-to-base changes do) — documented in the panel caption.
+  - Charts section unmounts entirely when hidden (zero sampling cost).
+- Deferred items: none new.
+- Operator visual checks pending (npm run dev -- --host, LAN URL from desktop):
+  - [ ] Jerk trace finite everywhere with visible steps at events (quintic path).
+  - [ ] Switch carry path to cubic: acceleration chart shows jumps at catch/throw events (and the hold dip disappears in 3D).
+  - [ ] Energy panel: net ≈ throw work − catch absorption per row and in totals; average power plausible (e.g. pattern 3 at defaults vs 531 — 531 should cost more).
+  - [ ] Pattern 51 or 1: the hand catching the 1s shows the dwell-clamp spike in |v|/|a| (fast hand), amber dwell readout agrees.
+  - [ ] Cursor line tracks the playhead across all three charts and matches the bar/ladder position; scrubbing while paused redraws charts correctly.
