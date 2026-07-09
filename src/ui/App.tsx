@@ -5,6 +5,7 @@
 
 import type { ReactElement } from 'react';
 import { Scene } from '../render3d';
+import { Charts } from './Charts';
 import { Controls } from './Controls';
 import { Ladder } from './Ladder';
 import { TimelineBar } from './TimelineBar';
@@ -60,6 +61,11 @@ export function App(): ReactElement {
         <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#3b4252' }}>Ladder diagram</h2>
         <Ladder />
       </section>
+
+      {/* Charts + energy panel (DESIGN.md §6): per-hand |v|/|a|/|j| over the same
+          window as the timeline bar, plus the per-hand energy table. Collapsible;
+          hidden ⇒ no per-frame sampling. */}
+      <Charts />
 
       {/* Timeline bar: DESIGN.md §6 "bottom, full width" — here, the full width of
           the app's content column. Scrubbing it moves the one clock, so the 3D

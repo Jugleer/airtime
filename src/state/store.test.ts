@@ -5,6 +5,8 @@ import {
   DEFAULT_BALL_COLOR,
   DEFAULT_BALL_RADIUS,
   DEFAULT_BEAT_PERIOD,
+  DEFAULT_CHART_AXIS_MODE,
+  DEFAULT_CHARTS_VISIBLE,
   DEFAULT_DWELL_TIME,
   DEFAULT_GHOSTS_ENABLED,
   DEFAULT_GRAVITY_VALUE,
@@ -66,6 +68,8 @@ beforeEach(() => {
     timelineWindow: DEFAULT_TIMELINE_WINDOW,
     trailLength: DEFAULT_TRAIL_LENGTH,
     ghostsEnabled: DEFAULT_GHOSTS_ENABLED,
+    chartsVisible: DEFAULT_CHARTS_VISIBLE,
+    chartAxisMode: DEFAULT_CHART_AXIS_MODE,
   });
   const geometry = presetGeometry('line', DEFAULT_HAND_COUNT);
   const points = sampleHandPoints(geometry, DEFAULT_HAND_COUNT);
@@ -405,6 +409,32 @@ describe('timeline-bar settings (DESIGN.md §6)', () => {
     // Horizon grew to cover the wide window; past beats stay bit-identical.
     expect(horizonTime(after.sim)).toBeGreaterThanOrEqual(neededHorizonTime(4, futureSpan));
     expect(after.sim.timeline.beatTime(2)).toBeCloseTo(beat2Before, 12);
+  });
+});
+
+describe('charts & energy panel settings (DESIGN.md §6)', () => {
+  it('has the presentation-only defaults', () => {
+    expect(DEFAULT_CHARTS_VISIBLE).toBe(true);
+    expect(DEFAULT_CHART_AXIS_MODE).toBe('magnitude');
+    const state = useAppStore.getState();
+    expect(state.chartsVisible).toBe(true);
+    expect(state.chartAxisMode).toBe('magnitude');
+  });
+
+  it('toggles visibility and sets the axis mode', () => {
+    useAppStore.getState().toggleCharts();
+    expect(useAppStore.getState().chartsVisible).toBe(false);
+    useAppStore.getState().setChartsVisible(true);
+    expect(useAppStore.getState().chartsVisible).toBe(true);
+    useAppStore.getState().setChartAxisMode('y');
+    expect(useAppStore.getState().chartAxisMode).toBe('y');
+  });
+
+  it('never rebuilds the simulation (presentation only)', () => {
+    const before = useAppStore.getState().sim;
+    useAppStore.getState().toggleCharts();
+    useAppStore.getState().setChartAxisMode('z');
+    expect(useAppStore.getState().sim).toBe(before);
   });
 });
 

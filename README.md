@@ -5,16 +5,19 @@ honest timing, manipulate them live (tempo, dwell, gravity, hand geometry), navi
 the siteswap state graph by clicking, and see the kinematics no other tool shows you —
 implied hand velocity/acceleration/jerk and per-hand energy.
 
-> **Status**: Phase 6 (runtime parameters & hand geometry) done — live physics you
-> can steer: a slew-limited tempo slider (grouped as "Tempo & physics", distinct
-> from the "Playback speed & view" section), gravity and hold-depth sliders, and a
-> quintic/cubic carry-path toggle — each applied as a future-only kinematics epoch
-> (an in-flight ball keeps the parabola it was aimed with). An n_h stepper (1–8)
-> with line/circle presets (a full rebuild), a numeric hand-positions editor plus
-> draggable catch/throw gizmos in the 3D scene (future throws only), an amber
-> dwell-clamp readout, and a non-blocking held-2 note at n_h ≠ 2. The build is
-> executed phase-by-phase by AI agents — see `PLAN.md` (what) and `BUILD_LOG.md`
-> (progress).
+> **Status**: Phase 7 (charts & energy panel) done — a collapsible "Charts &
+> energy" section with three hand-rolled canvas charts (hand speed |v|,
+> acceleration |a|, jerk |j|), every hand overlaid with a color legend and a
+> per-axis toggle (magnitude / x / y / z), sharing the timeline bar's window and
+> simTime cursor: the quintic jerk trace is finite everywhere with steps at
+> events, and switching to the cubic carry path shows the acceleration
+> discontinuity. Below it, a per-hand energy table (throw work W⁺, catch
+> absorption |W⁻|, net, average power, with a totals row) aggregated over one
+> spatial period. Prior phases: live physics you can steer via a slew-limited
+> tempo slider, gravity/hold-depth sliders, a quintic/cubic carry-path toggle
+> (future-only kinematics epochs), an n_h stepper (1–8) with line/circle presets,
+> and a numeric + gizmo hand-positions editor. The build is executed
+> phase-by-phase by AI agents — see `PLAN.md` (what) and `BUILD_LOG.md` (progress).
 
 ## Planned feature set (v1)
 

@@ -148,6 +148,20 @@ export const TRAIL_LENGTH_MAX = 8;
 /** Future ghost paths on by default so the forward preview is visible (DESIGN.md §6). */
 export const DEFAULT_GHOSTS_ENABLED = true;
 
+// --- Charts & energy panel settings (DESIGN.md §6) — presentation only --------
+// The charts panel plots per-hand |v|/|a|/|j| over the same window as the
+// timeline bar; the axis mode selects magnitude or a single component. Both are
+// presentation-only (like ballRadius): they never touch the sim (a pure function
+// of time, DESIGN.md §2). `chartsVisible` also gates the per-frame sampling —
+// when the panel is hidden nothing is sampled or drawn.
+
+/** Which scalar the charts plot: the vector magnitude or one axis component. */
+export type ChartAxisMode = 'magnitude' | 'x' | 'y' | 'z';
+/** Charts + energy panel shown by default (collapsible, DESIGN.md §6). */
+export const DEFAULT_CHARTS_VISIBLE = true;
+/** Charts plot magnitude by default; the per-axis toggle switches to x/y/z. */
+export const DEFAULT_CHART_AXIS_MODE: ChartAxisMode = 'magnitude';
+
 /** The t_d slider cap = 0.9·n_h·τ_b (NOTATION.md identity 4; DESIGN.md §7). */
 export function dwellCap(handCount: number, beatPeriod: number): number {
   return DWELL_CAP_FRACTION * handCount * beatPeriod;
@@ -205,6 +219,12 @@ export interface AppStore {
   /** Whether dashed future ghost paths are drawn (DESIGN.md §6, toggleable). */
   readonly ghostsEnabled: boolean;
 
+  // charts & energy panel settings (DESIGN.md §6) — presentation only, no rebuild.
+  /** Whether the charts + energy panel is shown (also gates per-frame sampling). */
+  readonly chartsVisible: boolean;
+  /** Which scalar the charts plot: magnitude (default) or one axis component. */
+  readonly chartAxisMode: ChartAxisMode;
+
   // clock (DESIGN.md §2)
   readonly simTime: number;
   readonly playing: boolean;
@@ -252,6 +272,11 @@ export interface AppStore {
   setTrailLength(trailLength: number): void;
   setGhostsEnabled(ghostsEnabled: boolean): void;
   toggleGhosts(): void;
+  /** Show/hide the charts + energy panel (hidden ⇒ no per-frame sampling). */
+  setChartsVisible(chartsVisible: boolean): void;
+  toggleCharts(): void;
+  /** Choose the charts' plotted scalar: magnitude or an x/y/z component. */
+  setChartAxisMode(chartAxisMode: ChartAxisMode): void;
   setPlaying(playing: boolean): void;
   togglePlaying(): void;
   restart(): void;
@@ -387,6 +412,9 @@ export const useAppStore = create<AppStore>((set, get) => {
     timelineWindow: DEFAULT_TIMELINE_WINDOW,
     trailLength: DEFAULT_TRAIL_LENGTH,
     ghostsEnabled: DEFAULT_GHOSTS_ENABLED,
+
+    chartsVisible: DEFAULT_CHARTS_VISIBLE,
+    chartAxisMode: DEFAULT_CHART_AXIS_MODE,
 
     simTime: 0,
     playing: true,
@@ -580,6 +608,11 @@ export const useAppStore = create<AppStore>((set, get) => {
     setTrailLength: (raw) => set({ trailLength: clamp(raw, TRAIL_LENGTH_MIN, TRAIL_LENGTH_MAX) }),
     setGhostsEnabled: (ghostsEnabled) => set({ ghostsEnabled }),
     toggleGhosts: () => set((state) => ({ ghostsEnabled: !state.ghostsEnabled })),
+
+    // Charts settings never touch the sim (DESIGN.md §2): plain presentation setters.
+    setChartsVisible: (chartsVisible) => set({ chartsVisible }),
+    toggleCharts: () => set((state) => ({ chartsVisible: !state.chartsVisible })),
+    setChartAxisMode: (chartAxisMode) => set({ chartAxisMode }),
 
     setPlaying: (playing) => set({ playing }),
     togglePlaying: () => set((state) => ({ playing: !state.playing })),
