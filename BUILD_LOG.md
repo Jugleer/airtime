@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 8**
+**Next phase: 9**
 
 ---
 
@@ -188,3 +188,33 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - [ ] Energy panel: net ≈ throw work − catch absorption per row and in totals; average power plausible (e.g. pattern 3 at defaults vs 531 — 531 should cost more).
   - [ ] Pattern 51 or 1: the hand catching the 1s shows the dwell-clamp spike in |v|/|a| (fast hand), amber dwell readout agrees.
   - [ ] Cursor line tracks the playhead across all three charts and matches the bar/ladder position; scrubbing while paused redraws charts correctly.
+
+## Phase 8 — State graph            DONE
+- Date: 2026-07-09
+- Commit: e112a8c
+- Gate: (2026-07-09, "npm run gate", green — 24 test files / 325 tests, typecheck + lint clean, build ok; run independently by orchestrator after builder AND after fixup)
+- Coverage (orchestrator-verified from coverage JSON, lines): stategraph 97.4 %, timeline 97.4 %, kinematics 99.2 %, siteswap 98.1 %, energy 100 %, timing 100 % — bar ≥ 90 %.
+- Build incidents (transient, no data loss): builder was killed mid-phase by an API 529 and later the fixup by a session limit; both resumed from their transcripts via SendMessage and completed normally.
+- Review (math-heavy phase — fresh Opus reviewer, independent probes incl. N=7 lex-min cross-check): graph construction, BFS shortest+lex-min descent, shortest-cycle, splice phasing, bit-identical past (ballId forward-only anchoring), and glitch-free swap all verified sound. ONE HIGH: transitioning into a pattern with an all-2 hand (3→42, 31→2) rendered b+1 balls forever (synthetic static hold + settled dynamic ball both drawn). FIXED at the reviewer's seam — static holds suppressed for hands receiving a timeline flight (extension-stable: the flights set only grows and steady-state all-2 hands never receive flights); 4 regression tests added (periodic pin, 3→42, 31→2, stability under horizon extension).
+- Review LOWs recorded (not fixed):
+  - Hold events excluded from bit-identical-past assertions (property true but untested for holds; avoids false negatives on straddling holds).
+  - stateAtBits ≡ stateAt pin is structurally tautological; mitigated by the independent landingScheduleAt == stateAt oracle.
+  - In-repo lex-min brute force caps at N ≤ 5 (reviewer probe validated N=7).
+  - earliestGlitchFreeSpliceBeat can exceed the generated horizon under very long held-2 carries; self-correcting via extension.
+- Builder deviations from plan:
+  - Typed different-b / beyond-cap patterns hard-reset but carry the clock; the hard-reset BUTTON zeroes it ("restarts clean" read as the button's semantics).
+  - Splice beat pushed past carries active at the playhead (~≤ 2 beats at defaults) for the glitch-free guarantee.
+  - On-cycle node clicks re-enter the pattern at that phase (BFS shortcut) rather than no-op.
+  - ballId ordering convention changed to first-handling-beat ≥ 0 (needed for splice invariance; all prior tests pass unchanged).
+- Deferred items:
+  - Schedule segment list grows per navigation; valueFromSchedule is linear in segments — compact/binary-search if hundreds of navigations per session ever matter.
+  - Transitions FROM all-2 static-hold patterns may pop visually (no delivering flight for the held ball) — folds into the held-2 pending design decision.
+  - After a transition INTO an all-2 hand, the hand mesh rests at its throw point while the settled ball rests at the catch point (hand doesn't "ride" the ball as in periodic holds) — cosmetic, fixup-flagged.
+  - Marker hidden for a few beats after a beyond-cap hard reset while in-flight balls exceed N (documented in-code).
+- Operator visual checks pending (npm run dev -- --host, LAN URL from desktop):
+  - [ ] Juggle `3`, click the `51` cycle in the graph: marker walks the transition, status line shows "transitioning to 51 (N beats)", 3D morphs without any ball jumping.
+  - [ ] Click a bare (non-cycle) state: app navigates there and holds the shortest cycle through it; pattern input updates.
+  - [ ] Type `531` while juggling `3`: smooth transition (same b); type `40` (different b): hard reset with a visible notice.
+  - [ ] N stepper: raise to 9+ → warning appears; graph stays readable at N=7 defaults; type a pattern with max throw > 11 (e.g. `c11` invalid… use letters: `b1` at b=6? any max-throw-12+ same-b pattern) → graph unavailable notice, sim still runs.
+  - [ ] Hard-reset button restarts the pattern clean at t=0.
+  - [ ] Transition 3 → 42: exactly 3 balls after the morph (one settles into a held 2 on one hand).
