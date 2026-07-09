@@ -2,15 +2,33 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { orbits, stateAt, validatePattern } from '../siteswap';
 import {
+  bitsToState,
+  buildStateGraph,
+  maxThrowOf,
+  patternCycle,
+  planTransition,
+  shortestCycle,
+  stateAtBits,
+  type StateBits,
+} from '../stategraph';
+import {
   buildTimeline,
+  periodicSchedule,
+  spliceSchedule,
+  valueFromSchedule,
   type Carry,
   type CatchEvent,
   type Epoch,
   type HoldEvent,
+  type PatternSchedule,
   type ThrowEvent,
   type TimelineEvent,
   type TimelineParams,
 } from './index';
+
+function floorMod(value: number, modulus: number): number {
+  return ((value % modulus) + modulus) % modulus;
+}
 
 const DEFAULT_PARAMS: TimelineParams = {
   beatPeriod: 0.25,
@@ -315,6 +333,212 @@ describe('property: epoch immutability', () => {
         },
       ),
     );
+  });
+});
+
+// --- Pattern schedule (state-graph transitions) ------------------------------
+
+describe('schedule helpers', () => {
+  it('periodicSchedule reproduces values[beat mod L]', () => {
+    const schedule = periodicSchedule([5, 3, 1]);
+    for (let beat = -6; beat < 9; beat++) {
+      expect(valueFromSchedule(schedule, beat)).toBe([5, 3, 1][floorMod(beat, 3)]);
+    }
+  });
+
+  it('spliceSchedule keeps the prefix, inserts the bridge, then phases the target', () => {
+    const schedule = spliceSchedule(periodicSchedule([3]), 4, [5, 5], [5, 1], 0);
+    // Prehistory + beats < 4 are the prefix 3.
+    expect(valueFromSchedule(schedule, -1)).toBe(3);
+    expect(valueFromSchedule(schedule, 3)).toBe(3);
+    // Bridge at beats 4,5.
+    expect(valueFromSchedule(schedule, 4)).toBe(5);
+    expect(valueFromSchedule(schedule, 5)).toBe(5);
+    // Target 51 from beat 6, phase 0 → 5,1,5,1,...
+    expect(valueFromSchedule(schedule, 6)).toBe(5);
+    expect(valueFromSchedule(schedule, 7)).toBe(1);
+    expect(valueFromSchedule(schedule, 8)).toBe(5);
+  });
+
+  it('spliceSchedule with an empty bridge starts the target at the splice beat', () => {
+    const schedule = spliceSchedule(periodicSchedule([3]), 4, [], [5, 3, 1], 1);
+    expect(valueFromSchedule(schedule, 3)).toBe(3);
+    // Target 531 phased at 1 → beat4 = values[1] = 3, beat5 = values[2] = 1, ...
+    expect(valueFromSchedule(schedule, 4)).toBe(3);
+    expect(valueFromSchedule(schedule, 5)).toBe(1);
+    expect(valueFromSchedule(schedule, 6)).toBe(5);
+  });
+});
+
+/**
+ * A realistic, collision-free transition schedule from a valid prefix pattern to a
+ * valid target pattern (both ball count b, fitting N), planned through the state
+ * graph so the seams are legal. Returns the schedule plus the metadata a splice
+ * property needs.
+ */
+function makeTransition(
+  prefixValues: readonly number[],
+  targetValues: readonly number[],
+  maxHeight: number,
+  spliceBeat: number,
+): { schedule: PatternSchedule; bridgeEndBeat: number; targetPhase: number } {
+  const b = validatePattern(prefixValues).ok ? (validatePattern(prefixValues) as { ballCount: number }).ballCount : 0;
+  const graph = buildStateGraph(b, maxHeight);
+  const currentState = stateAtBits(prefixValues, spliceBeat, maxHeight);
+  const cycle = patternCycle(targetValues, maxHeight);
+  const plan = planTransition(graph, currentState, cycle.nodeSet);
+  const targetPhase = cycle.phaseOf.get(plan.to) ?? 0;
+  const schedule = spliceSchedule(
+    periodicSchedule(prefixValues),
+    spliceBeat,
+    plan.throws,
+    targetValues,
+    targetPhase,
+  );
+  return { schedule, bridgeEndBeat: spliceBeat + plan.throws.length, targetPhase };
+}
+
+describe('buildTimeline — splice: bit-identical past', () => {
+  it('3 -> 51 keeps every pre-splice event bit-identical (incl. ballId)', () => {
+    const spliceBeat = 12;
+    const { schedule } = makeTransition([3], [5, 1], 5, spliceBeat);
+    const beatCount = 40;
+    const baseline = buildTimeline([3], { beatCount, params: DEFAULT_PARAMS });
+    const spliced = buildTimeline([3], { beatCount, params: DEFAULT_PARAMS, schedule });
+    const spliceTime = baseline.beatTime(spliceBeat);
+
+    // Beat schedule up to the splice is identical.
+    for (let beat = 0; beat <= spliceBeat; beat++) {
+      expect(spliced.beatTime(beat)).toBeCloseTo(baseline.beatTime(beat), 12);
+    }
+    // Instantaneous events strictly before the splice are bit-identical.
+    const before = (e: TimelineEvent): boolean => e.kind !== 'hold' && eventTime(e) < spliceTime - 1e-9;
+    expect(spliced.events.filter(before)).toEqual(baseline.events.filter(before));
+  });
+
+  it('property: any same-b transition leaves the past bit-identical', () => {
+    const arb = fc
+      .record({ b: fc.integer({ min: 1, max: 3 }), extra: fc.integer({ min: 1, max: 3 }) })
+      .map(({ b, extra }) => ({ b, n: Math.min(6, b + extra) }));
+    fc.assert(
+      fc.property(arb, fc.nat(), fc.nat(), ({ b, n }, pickA, pickB) => {
+        const graph = buildStateGraph(b, n);
+        const prefixValues = shortestCycle(graph, graph.nodes[pickA % graph.nodes.length] as StateBits);
+        const targetValues = shortestCycle(graph, graph.nodes[pickB % graph.nodes.length] as StateBits);
+        const spliceBeat = n + prefixValues.length + 4;
+        const { schedule } = makeTransition(prefixValues, targetValues, n, spliceBeat);
+        const beatCount = spliceBeat + 24;
+        const baseline = buildTimeline(prefixValues, { beatCount, params: DEFAULT_PARAMS });
+        const spliced = buildTimeline(prefixValues, { beatCount, params: DEFAULT_PARAMS, schedule });
+        const spliceTime = baseline.beatTime(spliceBeat);
+        const before = (e: TimelineEvent): boolean =>
+          e.kind !== 'hold' && eventTime(e) < spliceTime - 1e-9;
+        expect(spliced.events.filter(before)).toEqual(baseline.events.filter(before));
+      }),
+      { numRuns: 60 },
+    );
+  });
+});
+
+describe('buildTimeline — splice: post-transition steady state', () => {
+  it('property: landing schedules match the phased target once the bridge completes', () => {
+    const arb = fc
+      .record({ b: fc.integer({ min: 1, max: 3 }), extra: fc.integer({ min: 1, max: 3 }) })
+      .map(({ b, extra }) => ({ b, n: Math.min(6, b + extra) }));
+    fc.assert(
+      fc.property(arb, fc.nat(), fc.nat(), ({ b, n }, pickA, pickB) => {
+        const graph = buildStateGraph(b, n);
+        const prefixValues = shortestCycle(graph, graph.nodes[pickA % graph.nodes.length] as StateBits);
+        const targetValues = shortestCycle(graph, graph.nodes[pickB % graph.nodes.length] as StateBits);
+        const spliceBeat = n + prefixValues.length + 4;
+        const { schedule, bridgeEndBeat, targetPhase } = makeTransition(
+          prefixValues,
+          targetValues,
+          n,
+          spliceBeat,
+        );
+        const beatCount = bridgeEndBeat + 3 * n + 16;
+        const spliced = buildTimeline(targetValues, { beatCount, params: DEFAULT_PARAMS, schedule });
+        // Well past the bridge (all landing sources are in the target region), the
+        // state equals stateAt of the phased target — steady-state has been reached.
+        const start = bridgeEndBeat + maxThrowOf(targetValues) + n;
+        for (let beat = start; beat < beatCount; beat++) {
+          const phase = floorMod(targetPhase + beat - bridgeEndBeat, targetValues.length);
+          expect(spliced.landingScheduleAt(beat, n)).toEqual(
+            bitsToState(stateAtBits(targetValues, phase, n), n),
+          );
+        }
+      }),
+      { numRuns: 60 },
+    );
+  });
+});
+
+describe('buildTimeline — splice: identity + held-2 across the seam', () => {
+  it('threads ball identity and conserves balls straight through the splice', () => {
+    const arb = fc
+      .record({ b: fc.integer({ min: 1, max: 3 }), extra: fc.integer({ min: 1, max: 3 }) })
+      .map(({ b, extra }) => ({ b, n: Math.min(6, b + extra) }));
+    fc.assert(
+      fc.property(arb, fc.nat(), fc.nat(), ({ b, n }, pickA, pickB) => {
+        const graph = buildStateGraph(b, n);
+        const prefixValues = shortestCycle(graph, graph.nodes[pickA % graph.nodes.length] as StateBits);
+        const targetValues = shortestCycle(graph, graph.nodes[pickB % graph.nodes.length] as StateBits);
+        // A held-forever orbit (all-2 pattern) has no bounded carry model; skip.
+        const allTwo = (values: readonly number[]): boolean =>
+          orbits(values).some((cycle) => cycle.every((i) => values[i] === 2));
+        if (b === 0 || allTwo(prefixValues) || allTwo(targetValues)) {
+          return;
+        }
+        const spliceBeat = n + prefixValues.length + 4;
+        const { schedule } = makeTransition(prefixValues, targetValues, n, spliceBeat);
+        const beatCount = spliceBeat + 20;
+        const timeline = buildTimeline(targetValues, {
+          beatCount,
+          params: DEFAULT_PARAMS,
+          schedule,
+        });
+        // Balls conserved at every interior midpoint, including across the splice.
+        for (let beat = 6; beat < beatCount - 6; beat++) {
+          const t = (timeline.beatTime(beat) + timeline.beatTime(beat + 1)) / 2;
+          let active = 0;
+          for (const flight of timeline.flights) {
+            if (flight.throwTime < t && t < flight.arrivalTime) {
+              active++;
+            }
+          }
+          for (const carry of timeline.carries) {
+            if (carry.startTime < t && t < carry.endTime) {
+              active++;
+            }
+          }
+          expect(active).toBe(b);
+        }
+        // Every carry keeps a non-negative dwell across the seam.
+        for (const carry of timeline.carries) {
+          expect(carry.endTime).toBeGreaterThan(carry.startTime - 1e-9);
+        }
+      }),
+      { numRuns: 60 },
+    );
+  });
+
+  it('carries a held 2 across the splice as one merged carry (522 -> 522 via bridge)', () => {
+    // Both patterns contain a held 2; a splice mid-pattern must still merge held
+    // runs into one carry (no crash, positive dwell).
+    const spliceBeat = 15;
+    const { schedule } = makeTransition([5, 2, 2], [4, 4, 1], 5, spliceBeat);
+    const timeline = buildTimeline([4, 4, 1], {
+      beatCount: 40,
+      params: DEFAULT_PARAMS,
+      schedule,
+    });
+    // The prefix 522's held 2s (beats before the splice) still produce hold events.
+    const holds = timeline.events.filter((e): e is HoldEvent => e.kind === 'hold');
+    expect(holds.length).toBeGreaterThan(0);
+    for (const carry of timeline.carries) {
+      expect(carry.endTime).toBeGreaterThanOrEqual(carry.startTime - 1e-9);
+    }
   });
 });
 

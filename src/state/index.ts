@@ -11,8 +11,27 @@
 
 import { create } from 'zustand';
 import { DWELL_CAP_FRACTION, effectiveDwell } from '../core/timing';
-import { validatePattern, type ValidationResult } from '../core/siteswap';
-import type { Epoch, TimelineParams } from '../core/timeline';
+import { formatPattern, validatePattern, type ValidationResult } from '../core/siteswap';
+import {
+  periodicSchedule,
+  spliceSchedule,
+  type Epoch,
+  type PatternSchedule,
+  type TimelineParams,
+} from '../core/timeline';
+import {
+  advanceState,
+  buildStateGraph,
+  GRAPH_DEFAULT_N,
+  GRAPH_MAX_N,
+  maxThrowOf,
+  patternCycle,
+  planTransition,
+  shortestCycle,
+  stateToBits,
+  type StateBits,
+  type TransitionPlan,
+} from '../core/stategraph';
 import {
   circleHandGeometry,
   cubicBezierCarryPath,
@@ -30,6 +49,7 @@ import {
   buildSimulation,
   defaultKinematicsConfig,
   DEFAULT_TIMELINE_WINDOW,
+  earliestGlitchFreeSpliceBeat,
   extendedIfNeeded,
   firstBeatAtOrAfter,
   INITIAL_BEATS,
@@ -42,6 +62,7 @@ import {
   type KinematicsConfig,
   type KinematicsEpochChange,
   type Simulation,
+  type TransitionInfo,
 } from './simulation';
 
 // --- Defaults & slider ranges (DESIGN.md §7) --------------------------------
@@ -162,6 +183,21 @@ export const DEFAULT_CHARTS_VISIBLE = true;
 /** Charts plot magnitude by default; the per-axis toggle switches to x/y/z. */
 export const DEFAULT_CHART_AXIS_MODE: ChartAxisMode = 'magnitude';
 
+// --- State-graph settings (DESIGN.md §5, §7) ----------------------------------
+// The graph itself is derived in the UI from core/stategraph per (b, N) and
+// memoized; the store owns N, the panel visibility, an in-progress transition
+// (splice metadata) and the last navigation notice (different-b hard reset, graph
+// unavailable). Navigation actions splice the running timeline (bit-identical
+// past; in-flight balls unaffected) — see navigateToPattern / navigateToState.
+
+/** N stepper range for the state graph (DESIGN.md §7: 3–11, warn ≥ 9). */
+export const GRAPH_N_MIN = 3;
+export const GRAPH_N_MAX = GRAPH_MAX_N;
+/** Default N (DESIGN.md §7). */
+export const DEFAULT_GRAPH_MAX_HEIGHT = GRAPH_DEFAULT_N;
+/** Graph panel shown by default (collapsible like the charts, DESIGN.md §6). */
+export const DEFAULT_GRAPH_VISIBLE = true;
+
 /** The t_d slider cap = 0.9·n_h·τ_b (NOTATION.md identity 4; DESIGN.md §7). */
 export function dwellCap(handCount: number, beatPeriod: number): number {
   return DWELL_CAP_FRACTION * handCount * beatPeriod;
@@ -225,6 +261,16 @@ export interface AppStore {
   /** Which scalar the charts plot: magnitude (default) or one axis component. */
   readonly chartAxisMode: ChartAxisMode;
 
+  // state-graph settings & navigation (DESIGN.md §5)
+  /** N, the graph's maximum throw value (3–11; auto-expands to fit patterns). */
+  readonly graphMaxHeight: number;
+  /** Whether the state-graph panel is shown (collapsible, like the charts). */
+  readonly graphVisible: boolean;
+  /** The in-progress transition's splice metadata (null = on the pattern). */
+  readonly transition: TransitionInfo | null;
+  /** The last navigation notice (hard reset / graph unavailable), or null. */
+  readonly graphNotice: string | null;
+
   // clock (DESIGN.md §2)
   readonly simTime: number;
   readonly playing: boolean;
@@ -245,7 +291,33 @@ export interface AppStore {
   readonly sim: Simulation;
 
   // actions
+  /**
+   * Pattern entry (DESIGN.md §5): same-b patterns TRANSITION smoothly through the
+   * state graph (the running timeline is spliced — past bit-identical, in-flight
+   * balls unaffected); different-b or beyond-the-graph patterns hard-rebuild with
+   * a visible notice. Invalid text only surfaces the error (sim keeps running).
+   * `setPattern` is the same action (typed entry routes through navigation).
+   */
+  navigateToPattern(text: string): void;
   setPattern(text: string): void;
+  /**
+   * Click-to-navigate (DESIGN.md §5): BFS from the current state to `stateBits`.
+   * A state on the current pattern's cycle re-enters the pattern at that node;
+   * a bare state holds the shortest cycle through it (which becomes the running
+   * pattern, shown in the input). Ignored for states outside the current graph.
+   */
+  navigateToState(stateBits: StateBits): void;
+  /**
+   * Hard reset (DESIGN.md §5): restart clean at t = 0 with the running pattern —
+   * periodic schedule (any transition cleared), epochs cleared, current slider
+   * values folded into the base params.
+   */
+  hardReset(): void;
+  /** N stepper (3–11); never drops below the running pattern's max throw. */
+  setGraphMaxHeight(n: number): void;
+  /** Show/hide the state-graph panel (hidden ⇒ nothing derived or drawn). */
+  setGraphVisible(graphVisible: boolean): void;
+  toggleGraph(): void;
   setBeatPeriod(beatPeriod: number): void;
   setDwellTime(dwellTime: number): void;
   setPlaybackSpeed(playbackSpeed: number): void;
@@ -353,6 +425,7 @@ export const useAppStore = create<AppStore>((set, get) => {
       epochs,
       state.sim.beatCount,
       kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+      state.sim.schedule,
     );
     return { baseParams, epochs, sim: nextSim };
   }
@@ -383,8 +456,112 @@ export const useAppStore = create<AppStore>((set, get) => {
       state.epochs,
       state.sim.beatCount,
       kinematicsConfigOf(baseKinematics, kinematicsEpochs),
+      state.sim.schedule,
     );
     return { baseKinematics, kinematicsEpochs, sim: nextSim };
+  }
+
+  /**
+   * Hard rebuild for a new pattern (no transition possible: different b, or a
+   * pattern beyond the graph cap): periodic schedule, any transition cleared. The
+   * clock and the timing/kinematics history carry over — this is exactly the
+   * pre-Phase-8 setPattern behavior, now with a visible notice (DESIGN.md §5).
+   */
+  function hardRebuildPatch(
+    values: number[],
+    text: string,
+    validation: ValidationResult,
+    notice: string | null,
+  ): Partial<AppStore> {
+    const state = get();
+    const nextSim = buildSimulation(
+      values,
+      text,
+      state.baseParams,
+      state.epochs,
+      state.sim.beatCount,
+      kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+    );
+    // Auto-expand N so the new pattern's cycle fits the graph (DESIGN.md §5);
+    // a beyond-cap pattern leaves N alone (the panel shows "unavailable").
+    const newMax = maxThrowOf(values);
+    const graphMaxHeight =
+      newMax <= GRAPH_MAX_N ? Math.max(state.graphMaxHeight, newMax) : state.graphMaxHeight;
+    return {
+      pattern: text,
+      validation,
+      sim: nextSim,
+      transition: null,
+      graphNotice: notice,
+      graphMaxHeight,
+    };
+  }
+
+  /**
+   * Defensive splice validation (the prompt's "validate anyway"): the bridge must
+   * be a legal beat-by-beat advance from the state at the splice beat. BFS
+   * guarantees this; a violation indicates a bug and throws loudly rather than
+   * splicing a colliding schedule into the running sim.
+   */
+  function assertBridgeLegal(source: StateBits, plan: TransitionPlan, maxHeight: number): void {
+    let current = source;
+    for (const throwValue of plan.throws) {
+      const next = advanceState(current, throwValue, maxHeight);
+      if (next === null) {
+        throw new Error(
+          `state-graph splice bug: throw ${throwValue} is illegal from state ${current} (N=${maxHeight})`,
+        );
+      }
+      current = next;
+    }
+    if (current !== plan.to) {
+      throw new Error(
+        `state-graph splice bug: bridge lands on state ${current}, expected ${plan.to}`,
+      );
+    }
+  }
+
+  /** Bits needed to hold a state (index of the highest set bit + 1). */
+  function bitsNeeded(bits: StateBits): number {
+    return 32 - Math.clz32(bits >>> 0);
+  }
+
+  /**
+   * The shared navigation core (DESIGN.md §5): splice the running timeline at the
+   * next beat boundary with the BFS bridge to `plan.to`, then repeat
+   * `holdValues` phased so beat `spliceBeat + bridge` throws `holdValues[phase]`.
+   * Everything strictly before the splice beat is bit-identical (property-tested
+   * in core/timeline); in-flight balls keep flying — the glitch-free morph.
+   */
+  function spliceIntoSim(
+    state: AppStore,
+    spliceBeat: number,
+    plan: TransitionPlan,
+    holdValues: number[],
+    holdPhase: number,
+    holdText: string,
+  ): { sim: Simulation; transition: TransitionInfo | null } {
+    const schedule: PatternSchedule = spliceSchedule(
+      state.sim.schedule ?? periodicSchedule(state.sim.values),
+      spliceBeat,
+      plan.throws,
+      holdValues,
+      holdPhase,
+    );
+    const sim = buildSimulation(
+      holdValues,
+      holdText,
+      state.baseParams,
+      state.epochs,
+      state.sim.beatCount,
+      kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+      schedule,
+    );
+    const transition: TransitionInfo | null =
+      plan.throws.length > 0
+        ? { targetText: holdText, startBeat: spliceBeat, endBeat: spliceBeat + plan.throws.length }
+        : null;
+    return { sim, transition };
   }
 
   const startKinematics = initialBaseKinematics();
@@ -416,6 +593,11 @@ export const useAppStore = create<AppStore>((set, get) => {
     chartsVisible: DEFAULT_CHARTS_VISIBLE,
     chartAxisMode: DEFAULT_CHART_AXIS_MODE,
 
+    graphMaxHeight: DEFAULT_GRAPH_MAX_HEIGHT,
+    graphVisible: DEFAULT_GRAPH_VISIBLE,
+    transition: null,
+    graphNotice: null,
+
     simTime: 0,
     playing: true,
 
@@ -428,7 +610,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     validation,
     sim,
 
-    setPattern: (text) => {
+    navigateToPattern: (text) => {
       const nextValidation = validatePattern(text);
       if (!nextValidation.ok) {
         // Invalid input: surface the error but keep the last valid sim running.
@@ -436,19 +618,195 @@ export const useAppStore = create<AppStore>((set, get) => {
         return;
       }
       const state = get();
-      // Pattern change is a hard rebuild (soft state-graph transitions are Phase
-      // 8). The timing + kinematics history (base + epochs) and the clock carry
-      // over.
-      const nextSim = buildSimulation(
-        nextValidation.values,
-        text,
-        state.baseParams,
-        state.epochs,
-        state.sim.beatCount,
-        kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+      const values = nextValidation.values;
+      const canonicalText = formatPattern(values);
+      const targetMax = maxThrowOf(values);
+      const currentMax = maxThrowOf(state.sim.values);
+
+      // Patterns whose max throw exceeds the graph cap cannot live in the graph
+      // (DESIGN.md §5): the sim still runs via a hard rebuild; the panel shows
+      // the unavailable notice. Same when the RUNNING pattern is off-graph (its
+      // state needs more than N bits, so no transition can start from it).
+      if (targetMax > GRAPH_MAX_N) {
+        set(
+          hardRebuildPatch(
+            values,
+            text,
+            nextValidation,
+            `State graph unavailable for ${canonicalText} (max throw ${targetMax} > ${GRAPH_MAX_N}). Hard reset — no transition.`,
+          ),
+        );
+        return;
+      }
+      // Different b: unreachable in the graph (DESIGN.md §5) — hard reset + notice.
+      if (nextValidation.ballCount !== state.sim.ballCount) {
+        set(
+          hardRebuildPatch(
+            values,
+            text,
+            nextValidation,
+            `Ball count changed (${state.sim.ballCount} → ${nextValidation.ballCount}): patterns of different b are unreachable — hard reset, no transition.`,
+          ),
+        );
+        return;
+      }
+      if (currentMax > GRAPH_MAX_N) {
+        set(
+          hardRebuildPatch(
+            values,
+            text,
+            nextValidation,
+            `Current pattern is outside the graph (max throw ${currentMax} > ${GRAPH_MAX_N}) — hard reset.`,
+          ),
+        );
+        return;
+      }
+
+      // Same b, both patterns fit the graph: smooth transition (DESIGN.md §5).
+      // Splice at the next beat boundary; N auto-expands (cap 11) to fit the
+      // target, the running pattern, and anything still in flight.
+      const spliceBeat = earliestGlitchFreeSpliceBeat(state.sim, state.simTime);
+      const sourceFull = stateToBits(state.sim.timeline.landingScheduleAt(spliceBeat, GRAPH_MAX_N));
+      const graphMaxHeight = Math.min(
+        GRAPH_MAX_N,
+        Math.max(state.graphMaxHeight, targetMax, currentMax, bitsNeeded(sourceFull), GRAPH_N_MIN),
       );
-      set({ pattern: text, validation: nextValidation, sim: nextSim });
+      const graph = buildStateGraph(state.sim.ballCount, graphMaxHeight);
+      const source = stateToBits(state.sim.timeline.landingScheduleAt(spliceBeat, graphMaxHeight));
+      const cycle = patternCycle(values, graphMaxHeight);
+      const plan = planTransition(graph, source, cycle.nodeSet);
+      assertBridgeLegal(source, plan, graphMaxHeight);
+      const { sim, transition } = spliceIntoSim(
+        state,
+        spliceBeat,
+        plan,
+        values,
+        cycle.phaseOf.get(plan.to) ?? 0,
+        canonicalText,
+      );
+      set({
+        pattern: text,
+        validation: nextValidation,
+        sim,
+        transition,
+        graphMaxHeight,
+        graphNotice: null,
+      });
     },
+
+    // Typed pattern entry routes through the identical navigate machinery
+    // (DESIGN.md §5) — setPattern IS navigateToPattern.
+    setPattern: (text) => get().navigateToPattern(text),
+
+    navigateToState: (stateBits) => {
+      const state = get();
+      const currentMax = maxThrowOf(state.sim.values);
+      if (currentMax > GRAPH_MAX_N) {
+        return; // graph unavailable for the running pattern; nothing to click
+      }
+      const target = stateBits >>> 0;
+      const spliceBeat = earliestGlitchFreeSpliceBeat(state.sim, state.simTime);
+      const sourceFull = stateToBits(state.sim.timeline.landingScheduleAt(spliceBeat, GRAPH_MAX_N));
+      const graphMaxHeight = Math.min(
+        GRAPH_MAX_N,
+        Math.max(
+          state.graphMaxHeight,
+          currentMax,
+          bitsNeeded(sourceFull),
+          bitsNeeded(target),
+          GRAPH_N_MIN,
+        ),
+      );
+      const graph = buildStateGraph(state.sim.ballCount, graphMaxHeight);
+      const source = stateToBits(state.sim.timeline.landingScheduleAt(spliceBeat, graphMaxHeight));
+      if (!graph.has(target) || !graph.has(source)) {
+        return; // not a node of this (b, N) graph — ignore the click
+      }
+      // A state on the current pattern's cycle re-enters the pattern at that
+      // node's phase; a bare state holds the SHORTEST cycle through it, which
+      // becomes the running pattern (DESIGN.md §5).
+      const cycle = patternCycle(state.sim.values, graphMaxHeight);
+      let holdValues: number[];
+      let holdPhase: number;
+      let holdText: string;
+      if (cycle.nodeSet.has(target)) {
+        holdValues = state.sim.values;
+        holdPhase = cycle.phaseOf.get(target) ?? 0;
+        holdText = state.sim.patternText;
+      } else {
+        holdValues = shortestCycle(graph, target);
+        holdPhase = 0;
+        holdText = formatPattern(holdValues);
+      }
+      const plan = planTransition(graph, source, [target]);
+      assertBridgeLegal(source, plan, graphMaxHeight);
+      const { sim, transition } = spliceIntoSim(
+        state,
+        spliceBeat,
+        plan,
+        holdValues,
+        holdPhase,
+        holdText,
+      );
+      set({
+        pattern: holdText,
+        validation: validatePattern(holdText),
+        sim,
+        transition,
+        graphMaxHeight,
+        graphNotice: null,
+      });
+    },
+
+    hardReset: () => {
+      const state = get();
+      // Restart clean at t = 0 (DESIGN.md §5): the running pattern on a periodic
+      // schedule, epochs cleared, the CURRENT slider values folded into the base
+      // params (so the reset keeps what the user hears/sees on the sliders).
+      const baseParams: TimelineParams = {
+        beatPeriod: state.beatPeriod,
+        dwellTime: state.dwellTime,
+        handCount: state.handCount,
+      };
+      const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
+        gravity: state.gravity,
+        holdDepth: state.holdDepth,
+        carryPath: carryPathOf(state.carryPathKind),
+        geometry: makeHandGeometry(state.handThrowPoints, state.handCatchPoints),
+      };
+      const sim = buildSimulation(
+        state.sim.values,
+        state.sim.patternText,
+        baseParams,
+        [],
+        INITIAL_BEATS,
+        kinematicsConfigOf(baseKinematics, []),
+      );
+      set({
+        simTime: 0,
+        pattern: state.sim.patternText,
+        validation: validatePattern(state.sim.patternText),
+        baseParams,
+        epochs: [],
+        baseKinematics,
+        kinematicsEpochs: [],
+        sim,
+        transition: null,
+        graphNotice: null,
+      });
+    },
+
+    setGraphMaxHeight: (raw) => {
+      const state = get();
+      // Never drop N below the running pattern's max throw (its cycle must stay
+      // representable); patterns beyond the cap are off-graph regardless of N.
+      const currentMax = maxThrowOf(state.sim.values);
+      const floor = currentMax <= GRAPH_N_MAX ? Math.max(GRAPH_N_MIN, currentMax) : GRAPH_N_MIN;
+      set({ graphMaxHeight: clamp(Math.round(raw), floor, GRAPH_N_MAX) });
+    },
+
+    setGraphVisible: (graphVisible) => set({ graphVisible }),
+    toggleGraph: () => set((state) => ({ graphVisible: !state.graphVisible })),
 
     setBeatPeriod: (raw) => {
       const state = get();

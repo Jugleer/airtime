@@ -5,19 +5,22 @@ honest timing, manipulate them live (tempo, dwell, gravity, hand geometry), navi
 the siteswap state graph by clicking, and see the kinematics no other tool shows you —
 implied hand velocity/acceleration/jerk and per-hand energy.
 
-> **Status**: Phase 7 (charts & energy panel) done — a collapsible "Charts &
-> energy" section with three hand-rolled canvas charts (hand speed |v|,
-> acceleration |a|, jerk |j|), every hand overlaid with a color legend and a
-> per-axis toggle (magnitude / x / y / z), sharing the timeline bar's window and
-> simTime cursor: the quintic jerk trace is finite everywhere with steps at
-> events, and switching to the cubic carry path shows the acceleration
-> discontinuity. Below it, a per-hand energy table (throw work W⁺, catch
-> absorption |W⁻|, net, average power, with a totals row) aggregated over one
-> spatial period. Prior phases: live physics you can steer via a slew-limited
-> tempo slider, gravity/hold-depth sliders, a quintic/cubic carry-path toggle
-> (future-only kinematics epochs), an n_h stepper (1–8) with line/circle presets,
-> and a numeric + gizmo hand-positions editor. The build is executed
-> phase-by-phase by AI agents — see `PLAN.md` (what) and `BUILD_LOG.md` (progress).
+> **Status**: Phase 8 (state graph) done — a collapsible "State graph" panel
+> renders the (b, N) landing-schedule graph (C(N, b) states in deterministic
+> excitation-level columns), highlights the running pattern's cycle, and hops a
+> marker state-to-state every beat. Click any state — or type a same-b pattern —
+> and the app BFS-plans the shortest (lexicographically smallest) transition
+> throw sequence and SPLICES it into the running timeline: the past stays
+> bit-identical, in-flight balls keep flying, and the 3D pattern morphs without a
+> glitch, with a live "transitioning to 531 (2 beats)" status. Bare states hold
+> the shortest cycle through them (which becomes the running pattern); N
+> auto-expands to fit typed patterns (cap 11, warning at ≥ 9); different-b or
+> beyond-cap patterns hard-reset with a visible notice, and a hard-reset button
+> restarts clean. Prior phases: charts & energy panel, live runtime physics
+> (slew-limited tempo, gravity, hold depth, carry-path toggle, hand geometry
+> editor), timeline bar with trails/ghosts, the 3D scene, and the ladder debug
+> view. The build is executed phase-by-phase by AI agents — see `PLAN.md` (what)
+> and `BUILD_LOG.md` (progress).
 
 ## Planned feature set (v1)
 

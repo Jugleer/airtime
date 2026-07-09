@@ -25,7 +25,13 @@ import {
   type Kinematics,
   type KinematicsEpoch,
 } from '../core/kinematics';
-import { buildTimeline, type Epoch, type Timeline, type TimelineParams } from '../core/timeline';
+import {
+  buildTimeline,
+  type Epoch,
+  type PatternSchedule,
+  type Timeline,
+  type TimelineParams,
+} from '../core/timeline';
 
 /** Epoch-changeable params (n_h is a full rebuild, not an epoch — see Timeline). */
 export type EpochParams = Partial<Omit<TimelineParams, 'handCount'>>;
@@ -97,6 +103,12 @@ export interface Simulation {
   readonly beatCount: number;
   /** Spatial period in beats (DESIGN.md §6), for the "repeats every" readout. */
   readonly spatialPeriodBeats: number;
+  /**
+   * The piecewise throw-value schedule this build used (a state-graph transition,
+   * DESIGN.md §5) — part of the build inputs so horizon extension re-derives the
+   * SAME splice deterministically. Undefined = plain periodic `values`.
+   */
+  readonly schedule?: PatternSchedule;
 }
 
 // --- Ladder / timeline window + horizon geometry (shared by store + views) ----
@@ -184,11 +196,13 @@ export function buildSimulation(
   epochs: readonly Epoch[],
   beatCount: number,
   kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
+  schedule?: PatternSchedule,
 ): Simulation {
   const timeline = buildTimeline(values, {
     beatCount,
     params: baseParams,
     epochs,
+    ...(schedule !== undefined ? { schedule } : null),
   });
   const kinematics = buildKinematics(timeline, {
     values,
@@ -207,6 +221,7 @@ export function buildSimulation(
     kinematics,
     beatCount,
     spatialPeriodBeats: spatialPeriodBeats(values, baseParams.handCount),
+    ...(schedule !== undefined ? { schedule } : null),
   };
 }
 
@@ -233,6 +248,8 @@ export function extendedIfNeeded(
   let current = sim;
   let guard = 0;
   while (horizonTime(current) < target && guard < 1024) {
+    // The schedule is part of the build inputs (Simulation.schedule), so an
+    // extension re-derives exactly the same splice — bit-identical past.
     current = buildSimulation(
       current.values,
       current.patternText,
@@ -240,6 +257,7 @@ export function extendedIfNeeded(
       epochs,
       current.beatCount + HORIZON_CHUNK_BEATS,
       kinematicsConfig,
+      current.schedule,
     );
     guard += 1;
   }
@@ -271,6 +289,86 @@ export function firstBeatAtOrAfter(timeline: Timeline, simTime: number): number 
     }
   }
   return answer;
+}
+
+/**
+ * The beat index the playhead is currently inside: the largest beat whose start
+ * time is at or before `simTime` (0 for simTime ≤ 0). This is the beat the
+ * state-graph marker sits on (DESIGN.md §5: the marker hops each beat).
+ */
+export function currentBeatIndex(timeline: Timeline, simTime: number): number {
+  const next = firstBeatAtOrAfter(timeline, simTime);
+  if (next === 0) {
+    return 0;
+  }
+  const times = timeline.schedule.beatTimes;
+  return (times[next] as number) <= simTime ? next : next - 1;
+}
+
+// --- State-graph transitions (DESIGN.md §5) -----------------------------------
+
+/**
+ * The earliest splice beat that guarantees a GLITCH-FREE morph (Phase 8
+ * acceptance): the first beat at/after `simTime` such that no ball's motion
+ * segment containing `simTime` is affected by the splice.
+ *
+ * - Balls in FLIGHT at `simTime` keep their parabola for any splice beat ≥ the
+ *   next beat (their landing beat/value froze at throw time) — no constraint.
+ * - Balls in a CARRY at `simTime` are being carried toward their rethrow at the
+ *   carry's end beat; changing THAT throw would re-aim the carry mid-dwell (a
+ *   small position pop at the store swap). The splice must land strictly after
+ *   every such carry's end beat, so the throw it feeds is unchanged.
+ *
+ * With this beat, every segment active at the swap instant is bit-identical
+ * between the old and the spliced build — balls do not move at the transition
+ * moment; the change is entirely in the future.
+ */
+export function earliestGlitchFreeSpliceBeat(sim: Simulation, simTime: number): number {
+  let beat = firstBeatAtOrAfter(sim.timeline, simTime);
+  for (const carry of sim.timeline.carries) {
+    if (carry.startTime < simTime && simTime < carry.endTime && carry.endBeat >= beat) {
+      beat = carry.endBeat + 1;
+    }
+  }
+  return beat;
+}
+
+/** An in-progress state-graph transition (stored alongside the sim). */
+export interface TransitionInfo {
+  /** Canonical text of the pattern being transitioned to. */
+  readonly targetText: string;
+  /** The splice beat (first bridge beat). */
+  readonly startBeat: number;
+  /** First beat of the target pattern (= startBeat + bridge length). */
+  readonly endBeat: number;
+}
+
+/** What the transition-status line shows (null = no transition in progress). */
+export interface TransitionStatus {
+  readonly targetText: string;
+  /** Whole bridge beats still ahead of the playhead (≥ 1 while transitioning). */
+  readonly beatsRemaining: number;
+}
+
+/**
+ * The live transition status for the UI ("transitioning to 531 (2 beats)"):
+ * beats remaining = the transition's end beat minus the playhead's current beat.
+ * Null once the playhead has entered the target pattern (or with no transition).
+ */
+export function transitionStatusOf(
+  sim: Simulation,
+  transition: TransitionInfo | null,
+  simTime: number,
+): TransitionStatus | null {
+  if (transition === null) {
+    return null;
+  }
+  const beat = currentBeatIndex(sim.timeline, simTime);
+  const beatsRemaining = transition.endBeat - beat;
+  if (beatsRemaining <= 0) {
+    return null;
+  }
+  return { targetText: transition.targetText, beatsRemaining };
 }
 
 /**

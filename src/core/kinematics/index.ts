@@ -756,10 +756,24 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
   };
 
   // Held-forever balls: a hand whose every beat (over lcm(L, n_h)) is a held 2.
+  // The abstract `values` alone is not enough: a hand that is all-2 in the target
+  // pattern can still receive a DYNAMIC ball via a state-graph transition INTO it
+  // (e.g. 3 -> 42, 31 -> 2). That ball's last flight settles it into the hand, and
+  // its held-2 tail has no closing flight — so it already renders as a dynamic ball
+  // resting at its catch point (DESIGN.md §5). Synthesizing a StaticHold there too
+  // would double-count it. So a hand qualifies for a hold only when the ACTUAL
+  // timeline never delivers a flight into it — i.e. it eternally holds a ball with
+  // no dynamic delivery. This decision is stable under horizon extension: the
+  // prehistory (genStart) is fixed, and a genuinely all-2 hand never gains a
+  // landing flight as the future window grows, so it never flips.
   const staticHoldList: StaticHold[] = [];
   const length = options.values.length;
   const holdRestByHand = new Map<number, Vec3>();
   if (length > 0 && handCount > 0) {
+    const handsReceivingFlight = new Set<number>();
+    for (const flight of timeline.flights) {
+      handsReceivingFlight.add(flight.landingHand);
+    }
     const span = lcmOf(length, handCount);
     for (let hand = 0; hand < handCount; hand++) {
       let anyBeat = false;
@@ -774,7 +788,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
           break;
         }
       }
-      if (anyBeat && allHeld) {
+      if (anyBeat && allHeld && !handsReceivingFlight.has(hand)) {
         // Rest at the hold position (the dip point) so the ball sits sensibly.
         // Held-forever balls are a degenerate all-2 case (only meaningful at
         // n_h = 2); resolve them with the base geometry/hold depth (t = 0 params).

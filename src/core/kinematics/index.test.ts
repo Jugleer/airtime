@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { validatePattern } from '../siteswap';
-import { buildTimeline, type TimelineParams } from '../timeline';
+import {
+  buildTimeline,
+  periodicSchedule,
+  spliceSchedule,
+  type TimelineParams,
+} from '../timeline';
+import { buildStateGraph, patternCycle, planTransition, stateAtBits } from '../stategraph';
 import {
   add,
   apexHeight,
@@ -57,6 +63,48 @@ function kinematicsFor(
 /** Max per-axis absolute difference of two vectors. */
 function vecDiff(a: Vec3, b: Vec3): number {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.z - b.z));
+}
+
+/** Rendered ball set consumed by Balls.tsx: dynamic ids ∪ static-hold ids. */
+function renderedBallIds(k: Kinematics): number[] {
+  return [...k.ballIds(), ...k.staticHolds().map((h) => h.ballId)];
+}
+
+/**
+ * Build kinematics for a legal state-graph transition from a valid prefix pattern
+ * to a valid target (both ball count b, fitting N) — the same splice the store
+ * performs (DESIGN.md §5), assembled directly so the kinematics fix is tested at
+ * the core seam. `options.values` is the TARGET, exactly as buildSimulation passes.
+ */
+function transitionKinematics(
+  prefixText: string,
+  targetText: string,
+  maxHeight: number,
+  spliceBeat: number,
+  extraBeats = 24,
+): { kinematics: Kinematics; b: number; bridgeEndBeat: number; beatTime: (beat: number) => number } {
+  const prefix = parse(prefixText);
+  const target = parse(targetText);
+  const result = validatePattern(prefix);
+  const b = result.ok ? result.ballCount : 0;
+  const graph = buildStateGraph(b, maxHeight);
+  const source = stateAtBits(prefix, spliceBeat, maxHeight);
+  const cycle = patternCycle(target, maxHeight);
+  const plan = planTransition(graph, source, cycle.nodeSet);
+  const targetPhase = cycle.phaseOf.get(plan.to) ?? 0;
+  const schedule = spliceSchedule(periodicSchedule(prefix), spliceBeat, plan.throws, target, targetPhase);
+  const bridgeEndBeat = spliceBeat + plan.throws.length;
+  const timeline = buildTimeline(target, {
+    beatCount: bridgeEndBeat + extraBeats,
+    params: DEFAULT_PARAMS,
+    schedule,
+  });
+  return {
+    kinematics: buildKinematics(timeline, { values: target, handCount: 2 }),
+    b,
+    bridgeEndBeat,
+    beatTime: (beat) => timeline.beatTime(beat),
+  };
 }
 
 // --- Placeholder-era API (kept) ---------------------------------------------
@@ -443,6 +491,76 @@ describe('idle and held-forever hands', () => {
     const { kinematics } = kinematicsFor('22', 12);
     expect(kinematics.staticHolds()).toHaveLength(2);
     expect(() => kinematics.handState(0, 5)).not.toThrow();
+  });
+
+  // --- Rendered-ball-count invariant: dynamic ids ∪ static holds == b ----------
+  // A synthetic StaticHold is needed ONLY when a hand eternally holds a ball with
+  // no dynamic delivery. Plain-periodic all-2 hands keep their holds (that is how
+  // those balls render at all); a hand reached by a transition already renders its
+  // ball dynamically and must NOT also get a hold (else it double-counts forever).
+
+  it('plain periodic 2 / 42 / 24: rendered count == b with static holds present', () => {
+    // 2: both hands held (no flights) → 2 holds, 0 dynamic, b = 2.
+    const two = kinematicsFor('2', 12).kinematics;
+    expect(two.staticHolds()).toHaveLength(2);
+    expect(renderedBallIds(two)).toHaveLength(2);
+    // 42: hand 1 held, the 4-orbit dynamic → 1 hold + 2 dynamic, b = 3.
+    const fourTwo = kinematicsFor('42', 24).kinematics;
+    expect(fourTwo.staticHolds().map((h) => h.hand)).toEqual([1]);
+    expect(fourTwo.ballIds()).toHaveLength(2);
+    expect(renderedBallIds(fourTwo)).toHaveLength(3);
+    // 24: hand 0 held (the mirror) → 1 hold + 2 dynamic, b = 3.
+    const twoFour = kinematicsFor('24', 24).kinematics;
+    expect(twoFour.staticHolds().map((h) => h.hand)).toEqual([0]);
+    expect(renderedBallIds(twoFour)).toHaveLength(3);
+  });
+
+  it('transition 3 -> 42 renders exactly b balls (settled ball is dynamic, no hold)', () => {
+    const { kinematics, b, bridgeEndBeat, beatTime } = transitionKinematics('3', '42', 5, 12, 24);
+    expect(b).toBe(3);
+    // No synthetic hold: the ball that settled into hand 1 renders dynamically.
+    expect(kinematics.staticHolds()).toEqual([]);
+    const rendered = renderedBallIds(kinematics);
+    expect(rendered).toHaveLength(b);
+
+    // A few periods after the bridge completes (steady-state 42), sample several
+    // instants: the rendered count stays b and no two balls share a position.
+    for (let beat = bridgeEndBeat + 6; beat < bridgeEndBeat + 18; beat++) {
+      const t = (beatTime(beat) + beatTime(beat + 1)) / 2;
+      const positions = rendered.map((id) => kinematics.ballState(id, t).position);
+      expect(positions).toHaveLength(b);
+      for (let i = 0; i < positions.length; i++) {
+        for (let j = i + 1; j < positions.length; j++) {
+          expect(vecDiff(positions[i] as Vec3, positions[j] as Vec3)).toBeGreaterThan(1e-6);
+        }
+      }
+      // Exactly one rendered ball is truly at rest (the settled held ball); it
+      // sits in hand 1 at its catch point (the reviewer's endorsed seam — the
+      // dynamic ball renders resting where it caught, no separate hold ghost).
+      const atRest = rendered.filter((id) => magnitude(kinematics.ballState(id, t).velocity) < 1e-9);
+      expect(atRest).toHaveLength(1);
+      const restPos = kinematics.ballState(atRest[0] as number, t).position;
+      expect(vecDiff(restPos, kinematics.geometry.catchPoint(1))).toBeLessThan(1e-9);
+    }
+  });
+
+  it('transition 31 -> 2 (b = 2) renders exactly b balls (both hands settle dynamically)', () => {
+    const { kinematics, b, bridgeEndBeat, beatTime } = transitionKinematics('31', '2', 4, 10, 24);
+    expect(b).toBe(2);
+    // Target 2 makes BOTH hands all-2; both receive a settling flight, so both
+    // synthetic holds are suppressed and the two dynamic balls stand in.
+    expect(kinematics.staticHolds()).toEqual([]);
+    for (let beat = bridgeEndBeat + 6; beat < bridgeEndBeat + 16; beat++) {
+      const t = (beatTime(beat) + beatTime(beat + 1)) / 2;
+      const rendered = renderedBallIds(kinematics);
+      expect(rendered).toHaveLength(b);
+      const atRest = rendered.filter((id) => magnitude(kinematics.ballState(id, t).velocity) < 1e-9);
+      // Both balls are settled into their hands at steady state, at distinct spots.
+      expect(atRest).toHaveLength(2);
+      const p0 = kinematics.ballState(atRest[0] as number, t).position;
+      const p1 = kinematics.ballState(atRest[1] as number, t).position;
+      expect(vecDiff(p0, p1)).toBeGreaterThan(1e-6);
+    }
   });
 
   it('returns a rest state for an unknown ball id', () => {

@@ -139,6 +139,89 @@ export interface Timeline {
   landingScheduleAt(beat: number, maxHeight: number): boolean[];
 }
 
+// --- Pattern schedule (state-graph transitions, DESIGN.md §5) ----------------
+//
+// A plain timeline repeats one pattern forever. A state-graph TRANSITION instead
+// plays a piecewise throw-value schedule: the pattern already running up to a
+// splice beat, then a bridge of transition throws, then the target pattern. The
+// schedule is a list of segments partitioning the beat line; each segment repeats
+// its own values with a phase, and the FIRST segment also covers all earlier beats
+// (the prehistory the generation window needs). Because a segment change only ever
+// happens at a future splice beat, every beat strictly before it keeps its value —
+// so the past is bit-identical (an epoch-immutability-style property test). A
+// bridge is simply a segment whose span equals its length. This is purely additive
+// (no schedule ⇒ exactly the old periodic behavior).
+
+/** One piecewise segment of a {@link PatternSchedule}. */
+export interface ScheduleSegment {
+  /** First beat this segment governs (until the next segment's `startBeat`). */
+  readonly startBeat: number;
+  /** The repeating throw values (length ≥ 1). */
+  readonly values: readonly number[];
+  /** Phase: `valueAt(startBeat) = values[phase mod L]`, advancing by beat. */
+  readonly phase: number;
+}
+
+/** A piecewise throw-value schedule (segments sorted ascending by `startBeat`). */
+export interface PatternSchedule {
+  readonly segments: readonly ScheduleSegment[];
+}
+
+/** The plain "repeat one pattern forever" schedule (segment 0 covers all beats). */
+export function periodicSchedule(values: readonly number[]): PatternSchedule {
+  return { segments: [{ startBeat: 0, values: [...values], phase: 0 }] };
+}
+
+/** The throw value a schedule assigns to `beat`. */
+export function valueFromSchedule(schedule: PatternSchedule, beat: number): number {
+  const segments = schedule.segments;
+  // The governing segment is the last one starting at or before `beat`; beats
+  // before the first segment fall back to it (prehistory).
+  let chosen = segments[0] as ScheduleSegment;
+  for (const segment of segments) {
+    if (segment.startBeat <= beat) {
+      chosen = segment;
+    } else {
+      break;
+    }
+  }
+  const length = chosen.values.length;
+  if (length === 0) {
+    return 0;
+  }
+  const index = floorMod(chosen.phase + (beat - chosen.startBeat), length);
+  return chosen.values[index] as number;
+}
+
+/**
+ * Splice a transition into a schedule at `spliceBeat`: keep every segment that
+ * governs an earlier beat (the immutable past), then a bridge segment (omitted
+ * when the bridge is empty) and the target pattern phased so beat
+ * `spliceBeat + bridge.length` throws `targetValues[targetPhase]`. Everything
+ * strictly before `spliceBeat` is unchanged — the bit-identical-past guarantee.
+ */
+export function spliceSchedule(
+  current: PatternSchedule,
+  spliceBeat: number,
+  bridge: readonly number[],
+  targetValues: readonly number[],
+  targetPhase: number,
+): PatternSchedule {
+  const prefix = current.segments.filter((segment) => segment.startBeat < spliceBeat);
+  const segments: ScheduleSegment[] =
+    prefix.length > 0 ? [...prefix] : [{ ...(current.segments[0] as ScheduleSegment) }];
+  if (bridge.length > 0) {
+    segments.push({ startBeat: spliceBeat, values: [...bridge], phase: 0 });
+  }
+  const targetLength = targetValues.length;
+  segments.push({
+    startBeat: spliceBeat + bridge.length,
+    values: [...targetValues],
+    phase: targetLength > 0 ? floorMod(targetPhase, targetLength) : 0,
+  });
+  return { segments };
+}
+
 /** Options for {@link buildTimeline}. */
 export interface BuildTimelineOptions {
   /** Emit events for beats [0, beatCount). */
@@ -147,6 +230,13 @@ export interface BuildTimelineOptions {
   readonly params: TimelineParams;
   /** Future parameter changes; each affects only its own beat onward. */
   readonly epochs?: readonly Epoch[];
+  /**
+   * Optional piecewise throw-value schedule (a state-graph transition, DESIGN.md
+   * §5). When present it overrides the periodic `values` for choosing each beat's
+   * throw; `values` is still used for the empty-pattern guard. Omit for the plain
+   * "repeat `values` forever" behavior (bit-identical to before this option).
+   */
+  readonly schedule?: PatternSchedule;
 }
 
 function floorMod(value: number, modulus: number): number {
@@ -201,8 +291,7 @@ export function buildTimeline(
   values: readonly number[],
   options: BuildTimelineOptions,
 ): Timeline {
-  const { beatCount, params, epochs = [] } = options;
-  const length = values.length;
+  const { beatCount, params, epochs = [], schedule } = options;
 
   const empty: Timeline = {
     events: [],
@@ -212,22 +301,51 @@ export function buildTimeline(
     beatTime: () => 0,
     landingScheduleAt: (_beat, maxHeight) => new Array<boolean>(maxHeight).fill(false),
   };
-  if (length === 0 || beatCount <= 0) {
-    return empty;
-  }
 
+  // Choose each beat's throw value from the piecewise schedule (a state-graph
+  // transition, DESIGN.md §5) or from the periodic pattern. `maxValue` and the
+  // carry pad below cover EVERY segment, so flights and merged held carries resolve
+  // regardless of where the prefix→bridge→target seams fall. With no schedule this
+  // is bit-identical to the old `values[beat mod L]` path.
+  let valueAt: (beat: number) => number;
   let maxValue = 0;
-  for (const value of values) {
-    if (value > maxValue) {
-      maxValue = value;
+  let maxRepeatLength: number;
+  let noValues: boolean;
+  if (schedule !== undefined) {
+    const segments = schedule.segments;
+    noValues = segments.length === 0 || segments.every((segment) => segment.values.length === 0);
+    maxRepeatLength = 1;
+    for (const segment of segments) {
+      if (segment.values.length > maxRepeatLength) {
+        maxRepeatLength = segment.values.length;
+      }
+      for (const value of segment.values) {
+        if (value > maxValue) {
+          maxValue = value;
+        }
+      }
     }
+    valueAt = (beat) => valueFromSchedule(schedule, beat);
+  } else {
+    const length = values.length;
+    noValues = length === 0;
+    maxRepeatLength = Math.max(length, 1);
+    for (const value of values) {
+      if (value > maxValue) {
+        maxValue = value;
+      }
+    }
+    valueAt = (beat) => values[floorMod(beat, length)] as number;
+  }
+  if (noValues || beatCount <= 0) {
+    return empty;
   }
 
   // Generation range: pad the window generously on both sides so every in-window
   // catch has its throw, every carry (including merged multi-beat held carries)
   // reaches its delivering and departing flights, and landing schedules see all
   // landings. A held run spans at most ~2L beats; the pad comfortably covers it.
-  const pad = 2 * (maxValue + length) + 4;
+  const pad = 2 * (maxValue + maxRepeatLength) + 4;
   const genStart = -pad;
   const genEnd = beatCount + pad;
 
@@ -251,8 +369,6 @@ export function buildTimeline(
     }
     return current;
   }
-
-  const valueAt = (beat: number): number => values[floorMod(beat, length)] as number;
 
   // --- Beat schedule (slew-limited, arrival-guarded) for beats [0, genEnd) ----
   // Prehistory beats (< 0) use the initial period on a uniform backward grid;
@@ -324,7 +440,7 @@ export function buildTimeline(
     beatTimes[beat + 1] = (beatTimes[beat] as number) + guarded;
     previousPeriod = guarded;
   }
-  const schedule: BeatSchedule = { beatTimes, beatPeriods };
+  const beatSchedule: BeatSchedule = { beatTimes, beatPeriods };
 
   // --- Abstract handlings, landing map, ball threading ------------------------
   // For a valid pattern each beat is the landing of at most one throw (the map
@@ -347,8 +463,15 @@ export function buildTimeline(
     }
   }
 
-  // Assign ball ids: one per union-find component, ordered by the component's
-  // smallest beat for determinism.
+  // Assign ball ids: one per union-find component (physical ball). Ordered by the
+  // component's FIRST handling beat ≥ 0 — i.e. by where each of the b balls next
+  // lands from beat 0 (the state-vector offsets at beat 0, NOTATION.md "state").
+  // That anchor depends only on prehistory throws (all before beat 0, always the
+  // first schedule segment), NOT on the generation window or on any future splice
+  // — so ball ids are bit-identical between a plain build and a spliced build
+  // (DESIGN.md §5 transitions) and stable under horizon extension. Components with
+  // no beat ≥ 0 cannot occur (every chain extends forward); the fallback ordering
+  // by earliest beat keeps the sort total anyway.
   const rootToBeats = new Map<number, number[]>();
   for (const beat of handlingBeats) {
     const root = unionFind.find(beat);
@@ -359,11 +482,21 @@ export function buildTimeline(
       bucket.push(beat);
     }
   }
-  const roots = [...rootToBeats.keys()].sort((a, b) => a - b);
+  const componentBeats = [...rootToBeats.values()].map((beats) =>
+    beats.slice().sort((a, b) => a - b),
+  );
+  const anchorOf = (beats: readonly number[]): number => {
+    for (const beat of beats) {
+      if (beat >= 0) {
+        return beat;
+      }
+    }
+    return beats[0] as number;
+  };
+  componentBeats.sort((a, b) => anchorOf(a) - anchorOf(b) || (a[0] as number) - (b[0] as number));
   const ballIdOfBeat = new Map<number, number>();
   const ballBeats = new Map<number, number[]>();
-  roots.forEach((root, ballId) => {
-    const beats = (rootToBeats.get(root) as number[]).slice().sort((a, b) => a - b);
+  componentBeats.forEach((beats, ballId) => {
     ballBeats.set(ballId, beats);
     for (const beat of beats) {
       ballIdOfBeat.set(beat, ballId);
@@ -493,7 +626,7 @@ export function buildTimeline(
     events,
     flights,
     carries,
-    schedule,
+    schedule: beatSchedule,
     beatTime: beatTimeOf,
     landingScheduleAt: (beat, maxHeight) => {
       // Canonical state (NOTATION.md): bit i = a ball lands at beat+i from a

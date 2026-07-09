@@ -1,13 +1,14 @@
 // src/ui/App — the app shell (DESIGN.md §6): pattern input + controls, the 3D
-// scene (the main view, Phase 4), and the ladder diagram (the engine's debug
-// view, kept below), all rendered from the one global clock (DESIGN.md §2). The
-// timeline bar, charts, and state graph arrive in later phases.
+// scene (the main view, Phase 4), the ladder diagram (the engine's debug view),
+// the charts + energy panel, the state graph, and the timeline bar — all rendered
+// from the one global clock (DESIGN.md §2).
 
 import type { ReactElement } from 'react';
 import { Scene } from '../render3d';
 import { Charts } from './Charts';
 import { Controls } from './Controls';
 import { Ladder } from './Ladder';
+import { StateGraph } from './StateGraph';
 import { TimelineBar } from './TimelineBar';
 import { useClock } from './useClock';
 
@@ -66,6 +67,12 @@ export function App(): ReactElement {
           window as the timeline bar, plus the per-hand energy table. Collapsible;
           hidden ⇒ no per-frame sampling. */}
       <Charts />
+
+      {/* State graph (DESIGN.md §5): the (b, N) landing-schedule graph with the
+          current pattern's cycle highlighted and the beat-hopping marker. Click a
+          node (or type a same-b pattern above) to transition via BFS — the
+          running timeline is spliced, so the past stays bit-identical. */}
+      <StateGraph />
 
       {/* Timeline bar: DESIGN.md §6 "bottom, full width" — here, the full width of
           the app's content column. Scrubbing it moves the one clock, so the 3D
