@@ -451,6 +451,31 @@ function buildReturn(
 
 // --- Assembled kinematics ---------------------------------------------------
 
+/**
+ * A runtime kinematics-parameter change (DESIGN.md §4.6): from sim time `time`
+ * onward the given fields apply. Gravity / hold depth / hand geometry / carry
+ * path edits affect FUTURE segments only — an in-flight ball keeps the parabola
+ * it was aimed with, a carry in progress keeps its path. Fields are optional and
+ * merged cumulatively over the base params (like the timeline's `Epoch`). Unlike
+ * the timeline's beat-indexed epoch, this is keyed by *time* because kinematics
+ * segments resolve their params by their own start time (a flight at its throw
+ * time, a carry at its catch time, a return at its start). Gravity is here — not
+ * in {@link TimelineParams} — because it does not affect timing (air time is
+ * `h·τ_b − t_d_eff`, g-independent, NOTATION identity 1).
+ */
+export interface KinematicsEpoch {
+  /** Sim time (s) from which these params take effect (future segments only). */
+  readonly time: number;
+  /** g (m/s²) from `time` onward. */
+  readonly gravity?: number;
+  /** Hold-dip depth (m) from `time` onward. */
+  readonly holdDepth?: number;
+  /** Per-hand catch/throw points from `time` onward. */
+  readonly geometry?: HandGeometry;
+  /** Carry path from `time` onward. */
+  readonly carryPath?: CarryPath;
+}
+
 /** Options for {@link buildKinematics}. */
 export interface KinematicsOptions {
   /** The pattern's throw values (for spatial period + held-forever detection). */
@@ -465,6 +490,21 @@ export interface KinematicsOptions {
   readonly holdDepth?: number;
   /** Carry path; default {@link quinticViaCarryPath}. */
   readonly carryPath?: CarryPath;
+  /**
+   * Optional ordered runtime parameter epochs (DESIGN.md §4.6). Each segment
+   * resolves its gravity / hold depth / geometry / carry path by its own start
+   * time; omit (or leave empty) for a single set of params over the whole build
+   * (backward compatible — identical output to no epochs).
+   */
+  readonly epochs?: readonly KinematicsEpoch[];
+}
+
+/** Resolved kinematics params in force at a given sim time (base + epochs ≤ time). */
+interface ResolvedKinematicsParams {
+  readonly gravity: number;
+  readonly holdDepth: number;
+  readonly geometry: HandGeometry;
+  readonly carryPath: CarryPath;
 }
 
 /** The motion of one carry: its segments and boundary data (for energy + tests). */
@@ -480,6 +520,8 @@ export interface CarryMotion {
   readonly throwPoint: Vec3;
   readonly startVelocity: Vec3;
   readonly endVelocity: Vec3;
+  /** g (m/s²) in effect for this carry (resolved at its catch time). */
+  readonly gravity: number;
   readonly held: boolean;
 }
 
@@ -529,57 +571,104 @@ function flightKey(ballId: number, beat: number): string {
  * is continuous at every event); returns fill the empty-hand gaps.
  */
 export function buildKinematics(timeline: Timeline, options: KinematicsOptions): Kinematics {
-  const gravity = options.gravity ?? DEFAULT_GRAVITY;
-  const holdDepth = options.holdDepth ?? DEFAULT_HOLD_DEPTH;
+  // Base params (in force before any epoch). Each defaults to today's behavior so
+  // existing call sites and tests are unchanged (backward compatible).
+  const baseGravity = options.gravity ?? DEFAULT_GRAVITY;
+  const baseHoldDepth = options.holdDepth ?? DEFAULT_HOLD_DEPTH;
   const handCount = options.handCount;
-  const geometry = options.geometry ?? defaultHandGeometry(handCount);
-  const carryPath = options.carryPath ?? quinticViaCarryPath;
+  const baseGeometry = options.geometry ?? defaultHandGeometry(handCount);
+  const baseCarryPath = options.carryPath ?? quinticViaCarryPath;
 
-  // Solve every flight once; index by (ballId, throwBeat) and (ballId, landingBeat)
-  // so a carry can look up its delivering/departing flight for boundary velocity.
-  const flightSolution = new Map<Flight, FlightSolution>();
+  // Kinematics epochs (DESIGN.md §4.6): runtime gravity / hold depth / geometry /
+  // carry-path edits apply to FUTURE segments only. Each segment resolves its
+  // params by its own start time — a flight at its throw time, a carry at its
+  // catch time, a return at its start (the preceding throw). Fields merge
+  // cumulatively; sorted once, ascending in time. With no epochs this is exactly
+  // the base params, so the output is bit-identical to the pre-epoch code.
+  const sortedEpochs = [...(options.epochs ?? [])].sort((a, b) => a.time - b.time);
+  const paramsAt = (time: number): ResolvedKinematicsParams => {
+    let gravity = baseGravity;
+    let holdDepth = baseHoldDepth;
+    let geometry = baseGeometry;
+    let carryPath = baseCarryPath;
+    for (const epoch of sortedEpochs) {
+      if (epoch.time > time) {
+        break;
+      }
+      if (epoch.gravity !== undefined) {
+        gravity = epoch.gravity;
+      }
+      if (epoch.holdDepth !== undefined) {
+        holdDepth = epoch.holdDepth;
+      }
+      if (epoch.geometry !== undefined) {
+        geometry = epoch.geometry;
+      }
+      if (epoch.carryPath !== undefined) {
+        carryPath = epoch.carryPath;
+      }
+    }
+    return { gravity, holdDepth, geometry, carryPath };
+  };
+
+  // Solve every flight at its THROW-time params: the parabola it was aimed with,
+  // using the geometry (both throw and catch points) and gravity known at the
+  // throw. An in-flight ball keeps this even if a later epoch changes gravity or
+  // geometry (DESIGN.md §4.6). Index by (ballId, throwBeat)/(ballId, landingBeat)
+  // so a carry can look up its delivering/departing flight for boundary state.
+  interface SolvedFlight {
+    readonly solution: FlightSolution;
+    readonly throwPoint: Vec3;
+    readonly catchPoint: Vec3;
+    readonly gravity: number;
+  }
+  const flightData = new Map<Flight, SolvedFlight>();
   const byThrow = new Map<string, Flight>();
   const byLanding = new Map<string, Flight>();
   for (const flight of timeline.flights) {
-    flightSolution.set(
-      flight,
-      solveFlight(
-        geometry.throwPoint(flight.throwHand),
-        geometry.catchPoint(flight.landingHand),
-        flight.throwTime,
-        flight.arrivalTime,
-        gravity,
-      ),
-    );
+    const p = paramsAt(flight.throwTime);
+    const throwPoint = p.geometry.throwPoint(flight.throwHand);
+    const catchPoint = p.geometry.catchPoint(flight.landingHand);
+    const solution = solveFlight(throwPoint, catchPoint, flight.throwTime, flight.arrivalTime, p.gravity);
+    flightData.set(flight, { solution, throwPoint, catchPoint, gravity: p.gravity });
     byThrow.set(flightKey(flight.ballId, flight.throwBeat), flight);
     byLanding.set(flightKey(flight.ballId, flight.landingBeat), flight);
   }
 
-  // Solve every carry: boundary velocities come from the flights it connects.
+  // Solve every carry at its CATCH-time params (its internal gravity / hold depth
+  // / carry path). Its endpoint POSITIONS and VELOCITIES are threaded from the
+  // flights it connects — the delivering flight's arrival state (start) and the
+  // departing flight's release state (end) — NOT re-resolved from geometry. This
+  // is what keeps the BALL path position- AND velocity-continuous at every
+  // catch/throw even ACROSS a parameter epoch: the flight thrown before an epoch
+  // keeps its aim, and the carry that receives it starts exactly from that arrival
+  // state (chaining through the boundary). Only the carry's *acceleration* endpoint
+  // (0, −g, 0) uses the catch-time gravity, so at a param boundary the ball may
+  // show a small, expected acceleration step at the catch (documented, §4.6).
   const carryMotions: CarryMotion[] = [];
   for (const carry of timeline.carries) {
+    const p = paramsAt(carry.startTime);
     const delivering = byLanding.get(flightKey(carry.ballId, carry.startBeat));
     const departing = byThrow.get(flightKey(carry.ballId, carry.endBeat));
-    const catchPoint = geometry.catchPoint(carry.hand);
-    const throwPoint = geometry.throwPoint(carry.hand);
-    // Chord velocity is the defensive fallback if a boundary flight is missing
-    // (does not occur for in-range carries — every carry connects two flights).
+    const deliveringData = delivering ? flightData.get(delivering) : undefined;
+    const departingData = departing ? flightData.get(departing) : undefined;
+    // Endpoints from the connecting flights; geometry fallback only if a boundary
+    // flight is missing (does not occur for in-range carries — every carry
+    // connects two flights).
+    const catchPoint = deliveringData ? deliveringData.catchPoint : p.geometry.catchPoint(carry.hand);
+    const throwPoint = departingData ? departingData.throwPoint : p.geometry.throwPoint(carry.hand);
     const chord = scale(subtract(throwPoint, catchPoint), 1 / (carry.endTime - carry.startTime));
-    const startVelocity = delivering
-      ? (flightSolution.get(delivering) as FlightSolution).arrivalVelocity
-      : chord;
-    const endVelocity = departing
-      ? (flightSolution.get(departing) as FlightSolution).releaseVelocity
-      : chord;
-    const segments = carryPath.build({
+    const startVelocity = deliveringData ? deliveringData.solution.arrivalVelocity : chord;
+    const endVelocity = departingData ? departingData.solution.releaseVelocity : chord;
+    const segments = p.carryPath.build({
       startTime: carry.startTime,
       endTime: carry.endTime,
       catchPoint,
       throwPoint,
       startVelocity,
       endVelocity,
-      gravity,
-      holdDepth,
+      gravity: p.gravity,
+      holdDepth: p.holdDepth,
     });
     carryMotions.push({
       ballId: carry.ballId,
@@ -593,6 +682,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
       throwPoint,
       startVelocity,
       endVelocity,
+      gravity: p.gravity,
       held: carry.held,
     });
   }
@@ -608,7 +698,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
     }
   };
   for (const flight of timeline.flights) {
-    addBallSegments(flight.ballId, [(flightSolution.get(flight) as FlightSolution).segment]);
+    addBallSegments(flight.ballId, [(flightData.get(flight) as SolvedFlight).solution.segment]);
   }
   for (const carry of carryMotions) {
     addBallSegments(carry.ballId, carry.segments);
@@ -642,7 +732,12 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
       const next = carries[i + 1];
       if (next && next.startTime > carry.endTime) {
         // Empty-hand return: throw point (release velocity) → next catch point
-        // (arrival velocity), C² with both carries.
+        // (arrival velocity), C² with both carries. Its endpoint acceleration
+        // (0, −g, 0) uses the return's start-time gravity (the preceding throw);
+        // across a param boundary the empty HAND path may show a small, expected
+        // acceleration step here — the ball is not in the hand, so this is fine
+        // (DESIGN.md §4.6). Endpoint positions/velocities are threaded from the
+        // adjoining carries, so the hand path stays position-continuous.
         segments.push(
           buildReturn(
             carry.endTime,
@@ -651,7 +746,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
             carry.endVelocity,
             next.catchPoint,
             next.startVelocity,
-            gravity,
+            paramsAt(carry.endTime).gravity,
           ),
         );
       }
@@ -681,9 +776,11 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
       }
       if (anyBeat && allHeld) {
         // Rest at the hold position (the dip point) so the ball sits sensibly.
+        // Held-forever balls are a degenerate all-2 case (only meaningful at
+        // n_h = 2); resolve them with the base geometry/hold depth (t = 0 params).
         const rest = subtract(
-          midpoint(geometry.catchPoint(hand), geometry.throwPoint(hand)),
-          vec3(0, holdDepth, 0),
+          midpoint(baseGeometry.catchPoint(hand), baseGeometry.throwPoint(hand)),
+          vec3(0, baseHoldDepth, 0),
         );
         holdRestByHand.set(hand, rest);
         staticHoldList.push({ hand, ballId: -1 - hand, position: rest });
@@ -698,11 +795,14 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
   const dynamicBallIds = [...ballSegmentMap.keys()].sort((a, b) => a - b);
 
   return {
-    gravity,
-    holdDepth,
+    // The `gravity`/`holdDepth`/`geometry`/`carryPath` fields report the BASE
+    // (t = 0) params; per-segment params (under epochs) live on each CarryMotion
+    // and are resolved internally. With no epochs these are the only params.
+    gravity: baseGravity,
+    holdDepth: baseHoldDepth,
     handCount,
-    geometry,
-    carryPath,
+    geometry: baseGeometry,
+    carryPath: baseCarryPath,
     spatialPeriodBeats: spatialPeriodBeats(options.values, handCount),
     ballIds: () => [...dynamicBallIds],
     ballSegments: (ballId) => [...(ballSegmentMap.get(ballId) ?? [])],
@@ -717,7 +817,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
     handState: (hand, t) => {
       // Fallback rest: a held-forever hand rests at its hold point; any other
       // hand with no segments eases to and rests at its catch point (§4.3 idle).
-      const fallback = holdRestByHand.get(hand) ?? geometry.catchPoint(hand);
+      const fallback = holdRestByHand.get(hand) ?? baseGeometry.catchPoint(hand);
       return evaluateSegments(buildHandSegments(hand), t, fallback);
     },
     carriesForHand: (hand) => [...(carriesByHand.get(hand) ?? [])],

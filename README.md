@@ -5,12 +5,14 @@ honest timing, manipulate them live (tempo, dwell, gravity, hand geometry), navi
 the siteswap state graph by clicking, and see the kinematics no other tool shows you —
 implied hand velocity/acceleration/jerk and per-hand energy.
 
-> **Status**: Phase 5 (timeline bar, tracers, ghosts) done — a full-width timeline
-> bar with a mini-ladder tick background, a scrub playhead (drag sets the one clock,
-> paused or playing), and a detachable trail-length handle that pins to the left
-> edge with a readout when the trail outgrows the window; 3D ball trails and dashed
-> future ghosts as closed-form `position(t)` polylines; a configurable window (1–15 s)
-> shared with the ladder, plus a "pattern repeats every X s" readout. The build is
+> **Status**: Phase 6 (runtime parameters & hand geometry) done — live physics you
+> can steer: a slew-limited tempo slider (grouped as "Tempo & physics", distinct
+> from the "Playback speed & view" section), gravity and hold-depth sliders, and a
+> quintic/cubic carry-path toggle — each applied as a future-only kinematics epoch
+> (an in-flight ball keeps the parabola it was aimed with). An n_h stepper (1–8)
+> with line/circle presets (a full rebuild), a numeric hand-positions editor plus
+> draggable catch/throw gizmos in the 3D scene (future throws only), an amber
+> dwell-clamp readout, and a non-blocking held-2 note at n_h ≠ 2. The build is
 > executed phase-by-phase by AI agents — see `PLAN.md` (what) and `BUILD_LOG.md`
 > (progress).
 

@@ -14,7 +14,21 @@ import { DWELL_CAP_FRACTION, effectiveDwell } from '../core/timing';
 import { validatePattern, type ValidationResult } from '../core/siteswap';
 import type { Epoch, TimelineParams } from '../core/timeline';
 import {
+  circleHandGeometry,
+  cubicBezierCarryPath,
+  DEFAULT_GRAVITY,
+  DEFAULT_HOLD_DEPTH,
+  lineHandGeometry,
+  makeHandGeometry,
+  quinticViaCarryPath,
+  vec3,
+  type CarryPath,
+  type HandGeometry,
+  type Vec3,
+} from '../core/kinematics';
+import {
   buildSimulation,
+  defaultKinematicsConfig,
   DEFAULT_TIMELINE_WINDOW,
   extendedIfNeeded,
   firstBeatAtOrAfter,
@@ -22,8 +36,11 @@ import {
   TIMELINE_WINDOW_MAX,
   TIMELINE_WINDOW_MIN,
   upsertEpoch,
+  upsertKinematicsEpoch,
   windowSpans,
   type EpochParams,
+  type KinematicsConfig,
+  type KinematicsEpochChange,
   type Simulation,
 } from './simulation';
 
@@ -43,6 +60,59 @@ export const DWELL_MIN = 0.02;
 /** Playback-speed slider range (0.05×–2×). */
 export const PLAYBACK_MIN = 0.05;
 export const PLAYBACK_MAX = 2;
+/** β, the per-throw dwell clamp factor (NOTATION.md; used for the amber readout). */
+export const DWELL_CLAMP_BETA = 0.75;
+
+// --- Runtime physics params (DESIGN.md §4.6, §6, §7) — applied via kinematics ---
+// These affect FUTURE events only (an in-flight ball keeps its parabola), so a
+// change creates a kinematics epoch at the current playhead rather than a silent
+// rebuild. n_h and the geometry preset are the exception: an n_h change cannot be
+// an epoch (BUILD_LOG Phase 1 decision), so it is a full rebuild through the store.
+
+/** g slider range (DESIGN.md §7: 0.5–30, default 9.81). */
+export const GRAVITY_MIN = 0.5;
+export const GRAVITY_MAX = 30;
+export const DEFAULT_GRAVITY_VALUE = DEFAULT_GRAVITY;
+/** holdDepth slider range (DESIGN.md §7: 0–0.4 m, default 0.10). */
+export const HOLD_DEPTH_MIN = 0;
+export const HOLD_DEPTH_MAX = 0.4;
+export const DEFAULT_HOLD_DEPTH_VALUE = DEFAULT_HOLD_DEPTH;
+/** n_h stepper range (DESIGN.md §7: 1–8). */
+export const HAND_COUNT_MIN = 1;
+export const HAND_COUNT_MAX = 8;
+/** Hand y-height (DESIGN.md §7: hands live at y ≈ 1.00 m); the editor keeps y fixed. */
+export const HAND_Y = 1.0;
+
+/** Which carry path is active: the default quintic (hold dip) or the cubic comparison. */
+export type CarryPathKind = 'quintic' | 'cubic';
+/** Hand-geometry preset kind (DESIGN.md §6, §7). */
+export type HandPreset = 'line' | 'circle';
+/** Which of a hand's two editable points a UI edit targets. */
+export type HandPointKind = 'catch' | 'throw';
+
+/** The {@link CarryPath} object for a kind (quintic default; cubic comparison). */
+export function carryPathOf(kind: CarryPathKind): CarryPath {
+  return kind === 'cubic' ? cubicBezierCarryPath : quinticViaCarryPath;
+}
+
+/** The preset {@link HandGeometry} for a preset kind and hand count (DESIGN.md §7). */
+export function presetGeometry(preset: HandPreset, handCount: number): HandGeometry {
+  return preset === 'circle' ? circleHandGeometry(handCount) : lineHandGeometry(handCount);
+}
+
+/** Sample a geometry's per-hand throw/catch points for hands [0, handCount). */
+export function sampleHandPoints(
+  geometry: HandGeometry,
+  handCount: number,
+): { throwPoints: Vec3[]; catchPoints: Vec3[] } {
+  const throwPoints: Vec3[] = [];
+  const catchPoints: Vec3[] = [];
+  for (let hand = 0; hand < handCount; hand++) {
+    throwPoints.push(geometry.throwPoint(hand));
+    catchPoints.push(geometry.catchPoint(hand));
+  }
+  return { throwPoints, catchPoints };
+}
 
 // --- 3D scene view settings (DESIGN.md §6, §7) ------------------------------
 // These are presentation-only: they never rebuild the simulation (a pure
@@ -99,8 +169,25 @@ export interface AppStore {
   readonly dwellTime: number;
   /** Playback speed (wall->sim rescale only; no physical effect). */
   readonly playbackSpeed: number;
-  /** n_h, the hand count (fixed at 2 this phase; stepper is Phase 6). */
+  /** n_h, the hand count (1–8). A change is a full rebuild, not an epoch. */
   readonly handCount: number;
+
+  // runtime physics (DESIGN.md §4.6, §6, §7) — applied via kinematics epochs
+  // (future events only), except n_h/preset which are full rebuilds.
+  /** g target (m/s²); a change applies to future throws only. */
+  readonly gravity: number;
+  /** holdDepth target (m); a change applies to future carries only. */
+  readonly holdDepth: number;
+  /** Active carry path: quintic (hold dip, default) or cubic (comparison). */
+  readonly carryPathKind: CarryPathKind;
+  /** Current per-hand throw points (x/z editable; y stays {@link HAND_Y}). */
+  readonly handThrowPoints: Vec3[];
+  /** Current per-hand catch points (x/z editable; y stays {@link HAND_Y}). */
+  readonly handCatchPoints: Vec3[];
+  /** The last hand-geometry preset chosen (line/circle); an n_h change re-applies it. */
+  readonly handPreset: HandPreset;
+  /** Whether the hand-positions editor is open (gizmos show only when open, §6). */
+  readonly positionsEditorOpen: boolean;
 
   // 3D scene view settings (DESIGN.md §6, §7) — presentation only, no rebuild.
   /** Ball sphere radius in meters. */
@@ -126,6 +213,11 @@ export interface AppStore {
   readonly baseParams: TimelineParams;
   readonly epochs: Epoch[];
 
+  // kinematics construction inputs: base gravity/holdDepth/carryPath/geometry at
+  // t = 0 (`baseKinematics`) + later runtime epochs (`kinematicsEpochs`).
+  readonly baseKinematics: Omit<KinematicsConfig, 'epochs'>;
+  readonly kinematicsEpochs: KinematicsConfig['epochs'];
+
   // derived
   /** Validation of the current `pattern` text (drives the error line). */
   readonly validation: ValidationResult;
@@ -137,6 +229,21 @@ export interface AppStore {
   setBeatPeriod(beatPeriod: number): void;
   setDwellTime(dwellTime: number): void;
   setPlaybackSpeed(playbackSpeed: number): void;
+  /** g slider (0.5–30). Applies to future throws only (kinematics epoch). */
+  setGravity(gravity: number): void;
+  /** holdDepth slider (0–0.4 m). Applies to future carries only (kinematics epoch). */
+  setHoldDepth(holdDepth: number): void;
+  /** Toggle the carry path (quintic ↔ cubic). Applies to future carries only. */
+  setCarryPathKind(kind: CarryPathKind): void;
+  /** n_h stepper (1–8). FULL rebuild: geometry resets to the current preset for n. */
+  setHandCount(handCount: number): void;
+  /** Hand-geometry preset (line/circle). FULL rebuild at the current n_h. */
+  setHandPreset(preset: HandPreset): void;
+  /** Move one hand's catch/throw point (x, z; y fixed). Future throws only (epoch). */
+  setHandPoint(hand: number, kind: HandPointKind, x: number, z: number): void;
+  /** Open/close the hand-positions editor (gizmos show only when open, §6). */
+  setPositionsEditorOpen(open: boolean): void;
+  togglePositionsEditor(): void;
   setBallRadius(ballRadius: number): void;
   setOrbitColoring(orbitColoring: boolean): void;
   toggleOrbitColoring(): void;
@@ -166,11 +273,32 @@ function initialBaseParams(): TimelineParams {
   };
 }
 
+/** Base kinematics (t = 0) at startup: DESIGN §7 defaults, line preset for n_h. */
+function initialBaseKinematics(): Omit<KinematicsConfig, 'epochs'> {
+  const { gravity, holdDepth, carryPath, geometry } = defaultKinematicsConfig(DEFAULT_HAND_COUNT);
+  return { gravity, holdDepth, carryPath, geometry };
+}
+
+/** The full kinematics config from base params + the current epoch list. */
+function kinematicsConfigOf(
+  base: Omit<KinematicsConfig, 'epochs'>,
+  epochs: KinematicsConfig['epochs'],
+): KinematicsConfig {
+  return { ...base, epochs };
+}
+
 function initialSimulation(): { validation: ValidationResult; sim: Simulation } {
   const validation = validatePattern(DEFAULT_PATTERN);
   // The default pattern is valid by construction; the fallback keeps types total.
   const values = validation.ok ? validation.values : [3];
-  const sim = buildSimulation(values, DEFAULT_PATTERN, initialBaseParams(), [], INITIAL_BEATS);
+  const sim = buildSimulation(
+    values,
+    DEFAULT_PATTERN,
+    initialBaseParams(),
+    [],
+    INITIAL_BEATS,
+    kinematicsConfigOf(initialBaseKinematics(), []),
+  );
   return { validation, sim };
 }
 
@@ -180,7 +308,8 @@ export const useAppStore = create<AppStore>((set, get) => {
   /**
    * Apply a runtime τ_b / t_d change as an epoch at the current playhead beat so
    * the past stays immutable (DESIGN.md §2). A change at beat 0 folds into the
-   * base params (equivalent, and keeps the epoch list empty at startup).
+   * base params (equivalent, and keeps the epoch list empty at startup). The
+   * current kinematics config carries over unchanged.
    */
   function applyParamChange(partial: EpochParams): Partial<AppStore> {
     const state = get();
@@ -198,9 +327,43 @@ export const useAppStore = create<AppStore>((set, get) => {
       baseParams,
       epochs,
       state.sim.beatCount,
+      kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
     );
     return { baseParams, epochs, sim: nextSim };
   }
+
+  /**
+   * Apply a runtime gravity / holdDepth / geometry / carry-path change as a
+   * KINEMATICS epoch at the current playhead beat boundary (DESIGN.md §4.6):
+   * future events only — an in-flight ball keeps its parabola, a carry in progress
+   * keeps its path. The epoch time is snapped to the next beat's start time so
+   * successive drags within a beat coalesce (mirrors the timeline side). A change
+   * at beat 0 folds into the base kinematics (keeps the epoch list empty at start).
+   */
+  function applyKinematicsChange(change: KinematicsEpochChange): Partial<AppStore> {
+    const state = get();
+    const beat = firstBeatAtOrAfter(state.sim.timeline, state.simTime);
+    let baseKinematics = state.baseKinematics;
+    let kinematicsEpochs = state.kinematicsEpochs;
+    if (beat <= 0) {
+      baseKinematics = { ...baseKinematics, ...change };
+    } else {
+      const time = state.sim.timeline.beatTime(beat);
+      kinematicsEpochs = upsertKinematicsEpoch(state.kinematicsEpochs, time, change);
+    }
+    const nextSim = buildSimulation(
+      state.sim.values,
+      state.sim.patternText,
+      state.baseParams,
+      state.epochs,
+      state.sim.beatCount,
+      kinematicsConfigOf(baseKinematics, kinematicsEpochs),
+    );
+    return { baseKinematics, kinematicsEpochs, sim: nextSim };
+  }
+
+  const startKinematics = initialBaseKinematics();
+  const startPoints = sampleHandPoints(startKinematics.geometry, DEFAULT_HAND_COUNT);
 
   return {
     pattern: DEFAULT_PATTERN,
@@ -208,6 +371,14 @@ export const useAppStore = create<AppStore>((set, get) => {
     dwellTime: DEFAULT_DWELL_TIME,
     playbackSpeed: DEFAULT_PLAYBACK_SPEED,
     handCount: DEFAULT_HAND_COUNT,
+
+    gravity: DEFAULT_GRAVITY_VALUE,
+    holdDepth: DEFAULT_HOLD_DEPTH_VALUE,
+    carryPathKind: 'quintic',
+    handThrowPoints: startPoints.throwPoints,
+    handCatchPoints: startPoints.catchPoints,
+    handPreset: 'line',
+    positionsEditorOpen: false,
 
     ballRadius: DEFAULT_BALL_RADIUS,
     orbitColoring: DEFAULT_ORBIT_COLORING,
@@ -223,6 +394,9 @@ export const useAppStore = create<AppStore>((set, get) => {
     baseParams: initialBaseParams(),
     epochs: [],
 
+    baseKinematics: startKinematics,
+    kinematicsEpochs: [],
+
     validation,
     sim,
 
@@ -235,13 +409,15 @@ export const useAppStore = create<AppStore>((set, get) => {
       }
       const state = get();
       // Pattern change is a hard rebuild (soft state-graph transitions are Phase
-      // 8). The parameter history (base + epochs) and the clock carry over.
+      // 8). The timing + kinematics history (base + epochs) and the clock carry
+      // over.
       const nextSim = buildSimulation(
         nextValidation.values,
         text,
         state.baseParams,
         state.epochs,
         state.sim.beatCount,
+        kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       );
       set({ pattern: text, validation: nextValidation, sim: nextSim });
     },
@@ -264,6 +440,115 @@ export const useAppStore = create<AppStore>((set, get) => {
     setPlaybackSpeed: (raw) => {
       set({ playbackSpeed: clamp(raw, PLAYBACK_MIN, PLAYBACK_MAX) });
     },
+
+    // Runtime physics: gravity / holdDepth / carry path apply to FUTURE events
+    // only (kinematics epoch), never a silent rebuild of the past (DESIGN.md §4.6).
+    setGravity: (raw) => {
+      const gravity = clamp(raw, GRAVITY_MIN, GRAVITY_MAX);
+      set({ gravity, ...applyKinematicsChange({ gravity }) });
+    },
+    setHoldDepth: (raw) => {
+      const holdDepth = clamp(raw, HOLD_DEPTH_MIN, HOLD_DEPTH_MAX);
+      set({ holdDepth, ...applyKinematicsChange({ holdDepth }) });
+    },
+    setCarryPathKind: (kind) => {
+      set({ carryPathKind: kind, ...applyKinematicsChange({ carryPath: carryPathOf(kind) }) });
+    },
+
+    // Hand geometry edit: move one hand's catch/throw point (x, z; y fixed at
+    // HAND_Y). A future-only geometry epoch — the acceptance scenario "moving a
+    // catch point mid-flight affects only later throws" (DESIGN.md §4.6).
+    setHandPoint: (hand, kind, x, z) => {
+      const state = get();
+      if (hand < 0 || hand >= state.handCount) {
+        return;
+      }
+      const throwPoints = state.handThrowPoints.slice();
+      const catchPoints = state.handCatchPoints.slice();
+      const target = kind === 'throw' ? throwPoints : catchPoints;
+      const previous = target[hand];
+      target[hand] = vec3(x, previous ? previous.y : HAND_Y, z);
+      const geometry = makeHandGeometry(throwPoints, catchPoints);
+      set({
+        handThrowPoints: throwPoints,
+        handCatchPoints: catchPoints,
+        ...applyKinematicsChange({ geometry }),
+      });
+    },
+
+    // n_h and the preset are the exception: they cannot be epochs (an in-flight
+    // ball's frozen landing hand and the new beat→hand map cannot both hold —
+    // BUILD_LOG Phase 1). A FULL rebuild through the store: the clock and pattern
+    // carry over; geometry resets to the current preset for the new n_h; the
+    // current gravity/holdDepth/carryPath fold into the fresh base (kinematics
+    // epochs are cleared, since geometry epochs are tied to the old hand indices).
+    setHandCount: (raw) => {
+      const state = get();
+      const handCount = clamp(Math.round(raw), HAND_COUNT_MIN, HAND_COUNT_MAX);
+      if (handCount === state.handCount) {
+        return;
+      }
+      const geometry = presetGeometry(state.handPreset, handCount);
+      const { throwPoints, catchPoints } = sampleHandPoints(geometry, handCount);
+      const baseParams: TimelineParams = { ...state.baseParams, handCount };
+      const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
+        gravity: state.gravity,
+        holdDepth: state.holdDepth,
+        carryPath: carryPathOf(state.carryPathKind),
+        geometry,
+      };
+      // Re-clamp the dwell readout to the new cap (0.9·n_h·τ_b); core also clamps.
+      const dwellTime = clamp(state.dwellTime, DWELL_MIN, dwellCap(handCount, state.beatPeriod));
+      const nextSim = buildSimulation(
+        state.sim.values,
+        state.sim.patternText,
+        baseParams,
+        state.epochs,
+        state.sim.beatCount,
+        kinematicsConfigOf(baseKinematics, []),
+      );
+      set({
+        handCount,
+        dwellTime,
+        baseParams,
+        baseKinematics,
+        kinematicsEpochs: [],
+        handThrowPoints: throwPoints,
+        handCatchPoints: catchPoints,
+        sim: nextSim,
+      });
+    },
+    setHandPreset: (preset) => {
+      const state = get();
+      const geometry = presetGeometry(preset, state.handCount);
+      const { throwPoints, catchPoints } = sampleHandPoints(geometry, state.handCount);
+      const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
+        gravity: state.gravity,
+        holdDepth: state.holdDepth,
+        carryPath: carryPathOf(state.carryPathKind),
+        geometry,
+      };
+      const nextSim = buildSimulation(
+        state.sim.values,
+        state.sim.patternText,
+        state.baseParams,
+        state.epochs,
+        state.sim.beatCount,
+        kinematicsConfigOf(baseKinematics, []),
+      );
+      set({
+        handPreset: preset,
+        baseKinematics,
+        kinematicsEpochs: [],
+        handThrowPoints: throwPoints,
+        handCatchPoints: catchPoints,
+        sim: nextSim,
+      });
+    },
+
+    setPositionsEditorOpen: (open) => set({ positionsEditorOpen: open }),
+    togglePositionsEditor: () =>
+      set((state) => ({ positionsEditorOpen: !state.positionsEditorOpen })),
 
     // View settings never touch the sim (DESIGN.md §2): plain, clamped setters.
     setBallRadius: (raw) => {
@@ -288,6 +573,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         state.epochs,
         state.simTime,
         futureSpan,
+        kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       );
       set(nextSim === state.sim ? { timelineWindow } : { timelineWindow, sim: nextSim });
     },
@@ -309,6 +595,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         state.epochs,
         simTime,
         futureSpan,
+        kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       );
       set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
     },
@@ -326,6 +613,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         state.epochs,
         simTime,
         futureSpan,
+        kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       );
       set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
     },

@@ -3,13 +3,16 @@ import { validatePattern } from '../core/siteswap';
 import type { TimelineParams } from '../core/timeline';
 import {
   buildSimulation,
+  defaultKinematicsConfig,
   extendedIfNeeded,
   firstBeatAtOrAfter,
   HORIZON_CHUNK_BEATS,
   INITIAL_BEATS,
   neededHorizonTime,
   upsertEpoch,
+  upsertKinematicsEpoch,
 } from './simulation';
+import { circleHandGeometry } from '../core/kinematics';
 
 const BASE: TimelineParams = { beatPeriod: 0.25, dwellTime: 0.3, handCount: 2 };
 
@@ -81,5 +84,33 @@ describe('upsertEpoch', () => {
     const b = upsertEpoch(a, 6, { dwellTime: 0.2 });
     expect(b).toHaveLength(1);
     expect(b[0]?.params).toEqual({ beatPeriod: 0.5, dwellTime: 0.2 });
+  });
+});
+
+describe('upsertKinematicsEpoch', () => {
+  it('inserts kinematics epochs sorted by time', () => {
+    const a = upsertKinematicsEpoch([], 1.5, { gravity: 4 });
+    const b = upsertKinematicsEpoch(a, 0.5, { holdDepth: 0.2 });
+    expect(b.map((epoch) => epoch.time)).toEqual([0.5, 1.5]);
+  });
+
+  it('coalesces (merges) edits at the same time', () => {
+    const a = upsertKinematicsEpoch([], 1.0, { gravity: 4 });
+    const b = upsertKinematicsEpoch(a, 1.0, { holdDepth: 0.2 });
+    expect(b).toHaveLength(1);
+    expect(b[0]).toMatchObject({ time: 1.0, gravity: 4, holdDepth: 0.2 });
+  });
+});
+
+describe('buildSimulation with a kinematics config', () => {
+  it('threads gravity / geometry into the kinematics (default omits to today behavior)', () => {
+    const values = valuesOf('531');
+    const config = { ...defaultKinematicsConfig(3), gravity: 4.2, geometry: circleHandGeometry(3) };
+    const sim = buildSimulation(values, '531', { ...BASE, handCount: 3 }, [], 24, config);
+    expect(sim.kinematics.gravity).toBeCloseTo(4.2, 12);
+    expect(sim.kinematics.handCount).toBe(3);
+    // A default build (no config arg) keeps the DESIGN §7 default gravity.
+    const plain = buildSimulation(values, '531', BASE, [], 24);
+    expect(plain.kinematics.gravity).toBeCloseTo(9.81, 12);
   });
 });

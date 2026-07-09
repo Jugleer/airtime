@@ -24,6 +24,7 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { Grid, OrbitControls } from '@react-three/drei';
 import { Balls } from './Balls';
 import { Tracers } from './Tracers';
+import { HandGizmos } from './HandGizmos';
 import {
   CAMERA_PRESETS,
   CAMERA_PRESET_LABELS,
@@ -144,6 +145,7 @@ export function Scene(): ReactElement {
         <CameraRig preset={preset} />
         <Tracers />
         <Balls />
+        <HandGizmos />
       </Canvas>
 
       <div style={presetBarStyle}>

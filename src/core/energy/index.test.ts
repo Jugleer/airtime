@@ -265,3 +265,42 @@ describe('energyReport — panel data (§4.5, §6)', () => {
     expect(second.net).toBeCloseTo(first.net, 8);
   });
 });
+
+// --- Per-carry gravity under a runtime gravity epoch (§4.6) ------------------
+
+describe('per-carry gravity threading (§4.6)', () => {
+  it('evaluates each carry with the gravity in effect for that carry', () => {
+    const result = validatePattern('3');
+    if (!result.ok) throw new Error('bad fixture');
+    const values = result.values;
+    const timeline = buildTimeline(values, { beatCount: 24, params: DEFAULT_PARAMS });
+    const epochTime = timeline.beatTime(8);
+    const gravityAfter = 3;
+    const kinematics = buildKinematics(timeline, {
+      values,
+      handCount: 2,
+      gravity: G,
+      epochs: [{ time: epochTime, gravity: gravityAfter }],
+    });
+    let sawBefore = false;
+    let sawAfter = false;
+    for (const carry of kinematics.allCarries()) {
+      if (carry.startBeat < 2 || carry.startBeat > 18) continue;
+      // A carry resolves its gravity at its catch time (its own start).
+      const expected = carry.startTime < epochTime ? G : gravityAfter;
+      expect(carry.gravity).toBeCloseTo(expected, 12);
+      sawBefore ||= expected === G;
+      sawAfter ||= expected === gravityAfter;
+      // Work–energy theorem holds with the carry's OWN gravity (net = ΔKE + g·Δy).
+      const deltaKE =
+        0.5 *
+        (magnitudeSquared(carry.endVelocity) - magnitudeSquared(carry.startVelocity));
+      const deltaY = carry.throwPoint.y - carry.catchPoint.y;
+      expect(carryEnergy(carry.segments, carry.gravity).net).toBeCloseTo(
+        deltaKE + carry.gravity * deltaY,
+        8,
+      );
+    }
+    expect(sawBefore && sawAfter).toBe(true);
+  });
+});

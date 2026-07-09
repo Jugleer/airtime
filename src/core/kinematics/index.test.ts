@@ -20,6 +20,7 @@ import {
   vec3,
   type CarrySpec,
   type Kinematics,
+  type KinematicsEpoch,
   type MotionState,
   type PolySegment,
   type Vec3,
@@ -482,6 +483,223 @@ describe('held carries and multi-hand patterns', () => {
       for (const { left, right } of jointStates(kinematics.ballSegments(ballId))) {
         expect(vecDiff(left.position, right.position)).toBeLessThan(1e-7);
         expect(vecDiff(left.velocity, right.velocity)).toBeLessThan(1e-6);
+      }
+    }
+  });
+});
+
+// --- Kinematics epochs: future-only edits (§4.6) — property + unit tests -------
+
+describe('property: kinematics epoch immutability (future-only, §4.6)', () => {
+  it('segments fully before an epoch are bit-identical; the ball path stays position-continuous across it', () => {
+    // Mirror of the timeline's epoch-immutability property, on the geometric
+    // layer: a gravity + hold-depth + geometry change at time T must leave every
+    // segment that ends before T bit-identical, and must NOT break the BALL path's
+    // position continuity anywhere (the carry after the epoch chains from the
+    // arrival state of the flight before it). Held 2s stay continuous only at
+    // n_h = 2, so exclude value-2 throws elsewhere (the same pending held-2 case).
+    const caseArb = fc
+      .record({
+        handCount: fc.integer({ min: 1, max: 4 }),
+        epochBeat: fc.integer({ min: 3, max: 12 }),
+        gravityAfter: fc.double({ min: 0.5, max: 30, noNaN: true }),
+        holdDepthAfter: fc.double({ min: 0, max: 0.4, noNaN: true }),
+      })
+      .chain((config) =>
+        (config.handCount === 2 ? validPatternArb : validPatternArbNoTwos).map((values) => ({
+          ...config,
+          values,
+        })),
+      );
+    fc.assert(
+      fc.property(caseArb, ({ handCount, epochBeat, gravityAfter, holdDepthAfter, values }) => {
+        const beatCount = 24;
+        const timeline = buildTimeline(values, {
+          beatCount,
+          params: { ...DEFAULT_PARAMS, handCount },
+        });
+        const epochTime = timeline.beatTime(epochBeat);
+        const baseGeometry = lineHandGeometry(handCount);
+        // A visibly different geometry after the epoch (wider throws/catches).
+        const geometryAfter = lineHandGeometry(handCount, { throwHalf: 0.18, catchHalf: 0.42 });
+
+        const base = buildKinematics(timeline, {
+          values,
+          handCount,
+          gravity: G,
+          holdDepth: 0.1,
+          geometry: baseGeometry,
+        });
+        const changed = buildKinematics(timeline, {
+          values,
+          handCount,
+          gravity: G,
+          holdDepth: 0.1,
+          geometry: baseGeometry,
+          epochs: [
+            { time: epochTime, gravity: gravityAfter, holdDepth: holdDepthAfter, geometry: geometryAfter },
+          ],
+        });
+
+        const eps = 1e-9;
+        // 1a. Every flight thrown before the epoch is IMMUTABLE — an in-flight ball
+        //     keeps the parabola it was aimed with, even if it lands after the
+        //     epoch (a flight straddling the boundary is still bit-identical).
+        for (const flight of timeline.flights) {
+          if (flight.throwTime >= epochTime - eps || flight.value < 1) {
+            continue;
+          }
+          const midTime = 0.5 * (flight.throwTime + flight.arrivalTime);
+          expect(
+            vecDiff(base.ballState(flight.ballId, midTime).position, changed.ballState(flight.ballId, midTime).position),
+          ).toBe(0);
+          expect(
+            vecDiff(base.ballState(flight.ballId, midTime).velocity, changed.ballState(flight.ballId, midTime).velocity),
+          ).toBe(0);
+        }
+        // 1b. Every carry that fully ENDS before the epoch is bit-identical. (A
+        //     carry straddling the epoch legitimately adjusts its departing end —
+        //     the next throw is a future event — so it is NOT asserted here.)
+        for (const carry of timeline.carries) {
+          if (carry.endTime > epochTime - eps || carry.endTime <= carry.startTime) {
+            continue;
+          }
+          for (const f of [0.25, 0.5, 0.75]) {
+            const t = carry.startTime + f * (carry.endTime - carry.startTime);
+            expect(
+              vecDiff(base.ballState(carry.ballId, t).position, changed.ballState(carry.ballId, t).position),
+            ).toBe(0);
+          }
+        }
+
+        // 2. The changed BALL path is position-continuous at every join, INCLUDING
+        //    the parameter boundary (chaining through the flight→carry seam).
+        for (const ballId of changed.ballIds()) {
+          for (const { left, right } of jointStates(changed.ballSegments(ballId))) {
+            expect(vecDiff(left.position, right.position)).toBeLessThan(1e-9);
+          }
+        }
+
+        // 3. The epoch is not vacuous: a flight thrown strictly after it uses the
+        //    new gravity (flight acceleration ≡ (0, −g_after, 0)).
+        const postFlight = timeline.flights.find(
+          (flight) =>
+            flight.throwTime > epochTime + 1e-6 &&
+            flight.throwBeat >= 0 &&
+            flight.throwBeat < beatCount &&
+            flight.value >= 3,
+        );
+        if (postFlight) {
+          const midTime = 0.5 * (postFlight.throwTime + postFlight.arrivalTime);
+          expect(changed.ballState(postFlight.ballId, midTime).acceleration.y).toBeCloseTo(
+            -gravityAfter,
+            6,
+          );
+        }
+      }),
+      { numRuns: 30 },
+    );
+  });
+});
+
+describe('kinematics epoch — in-flight ball keeps its parabola (§4.6)', () => {
+  it('a gravity change mid-flight leaves the airborne ball unchanged and chains the next carry', () => {
+    const values = parse('3');
+    const beatCount = 20;
+    const timeline = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS });
+    const flight = timeline.flights.find((f) => f.throwBeat >= 4 && f.throwBeat < 8 && f.value === 3);
+    expect(flight).toBeDefined();
+    if (!flight) return;
+    // Epoch placed mid-flight (between this throw and its catch).
+    const epochTime = 0.5 * (flight.throwTime + flight.arrivalTime);
+    const changed = buildKinematics(timeline, {
+      values,
+      handCount: 2,
+      gravity: G,
+      epochs: [{ time: epochTime, gravity: 2 }],
+    });
+    const baseline = buildKinematics(timeline, { values, handCount: 2, gravity: G });
+
+    // The in-flight ball (thrown before the epoch) is bit-identical and still under
+    // the OLD gravity — it keeps the parabola it was aimed with.
+    for (const f of [0.1, 0.5, 0.9]) {
+      const t = flight.throwTime + f * (flight.arrivalTime - flight.throwTime);
+      expect(vecDiff(changed.ballState(flight.ballId, t).position, baseline.ballState(flight.ballId, t).position)).toBe(0);
+      expect(changed.ballState(flight.ballId, t).acceleration).toEqual(vec3(0, -G, 0));
+    }
+    // The carry that receives it starts exactly at the flight's arrival position:
+    // the ball path is position-continuous across the boundary.
+    const beforeCatch = changed.ballState(flight.ballId, flight.arrivalTime - 1e-9).position;
+    const afterCatch = changed.ballState(flight.ballId, flight.arrivalTime + 1e-9).position;
+    expect(vecDiff(beforeCatch, afterCatch)).toBeLessThan(1e-6);
+
+    // A throw made AFTER the epoch uses the new gravity.
+    const later = timeline.flights.find(
+      (f) => f.throwTime > epochTime && f.throwBeat < beatCount && f.value === 3,
+    );
+    expect(later).toBeDefined();
+    if (!later) return;
+    const midTime = 0.5 * (later.throwTime + later.arrivalTime);
+    expect(changed.ballState(later.ballId, midTime).acceleration.y).toBeCloseTo(-2, 6);
+  });
+});
+
+describe('kinematics epoch — moving a catch point affects only later throws (§4.6)', () => {
+  it('flights thrown before the geometry epoch land at the OLD catch point, after at the NEW', () => {
+    const values = parse('3');
+    const beatCount = 20;
+    const timeline = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS });
+    const baseGeometry = lineHandGeometry(2); // hand 0 catch at (−0.3, 1, 0)
+    const oldCatch = baseGeometry.catchPoint(0);
+    const newCatch = vec3(-0.5, 1, 0.2); // move hand 0's catch point
+    const movedGeometry = makeHandGeometry(
+      [baseGeometry.throwPoint(0), baseGeometry.throwPoint(1)],
+      [newCatch, baseGeometry.catchPoint(1)],
+    );
+    const epochTime = timeline.beatTime(8);
+    const kinematics = buildKinematics(timeline, {
+      values,
+      handCount: 2,
+      gravity: G,
+      geometry: baseGeometry,
+      epochs: [{ time: epochTime, geometry: movedGeometry }],
+    });
+
+    // Balls landing in hand 0 (landingHand === 0). Thrown before vs after the epoch.
+    const before = timeline.flights.find(
+      (f) => f.landingHand === 0 && f.throwBeat >= 2 && f.throwTime < epochTime,
+    );
+    const after = timeline.flights.find(
+      (f) => f.landingHand === 0 && f.throwTime > epochTime && f.throwBeat < 18,
+    );
+    expect(before).toBeDefined();
+    expect(after).toBeDefined();
+    if (!before || !after) return;
+
+    const posBefore = kinematics.ballState(before.ballId, before.arrivalTime - 1e-9).position;
+    const posAfter = kinematics.ballState(after.ballId, after.arrivalTime - 1e-9).position;
+    expect(vecDiff(posBefore, oldCatch)).toBeLessThan(1e-6); // aimed with old geometry
+    expect(vecDiff(posAfter, newCatch)).toBeLessThan(1e-6); // aimed with new geometry
+  });
+});
+
+describe('kinematics epochs — no epochs is bit-identical to base params', () => {
+  it('an empty epoch list produces the same ball states as passing no epochs', () => {
+    const values = parse('531');
+    const timeline = buildTimeline(values, { beatCount: 20, params: DEFAULT_PARAMS });
+    const withoutEpochs = buildKinematics(timeline, { values, handCount: 2, gravity: G });
+    const emptyEpochs: KinematicsEpoch[] = [];
+    const withEmpty = buildKinematics(timeline, {
+      values,
+      handCount: 2,
+      gravity: G,
+      epochs: emptyEpochs,
+    });
+    for (const ballId of withoutEpochs.ballIds()) {
+      for (const t of [0.3, 1.1, 2.4, 3.7]) {
+        expect(
+          vecDiff(withoutEpochs.ballState(ballId, t).position, withEmpty.ballState(ballId, t).position),
+        ).toBe(0);
       }
     }
   });

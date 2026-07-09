@@ -100,6 +100,12 @@ export interface HandEnergy {
  * Aggregate one hand's carry energy over the beats [periodStartBeat,
  * periodStartBeat + periodBeats). Carries are selected by their catch beat, so
  * each period counts one carry per active throw-beat of the hand.
+ *
+ * Each carry is evaluated with the gravity IN EFFECT for that carry (DESIGN.md
+ * §4.6): a runtime gravity epoch changes the contact work of future carries only.
+ * The `gravity` argument is the fallback used when a carry carries no per-carry
+ * gravity of its own (kept for signature stability); `CarryMotion.gravity` from
+ * `buildKinematics` always resolves the segment's own g.
  */
 export function aggregateHandEnergy(
   hand: number,
@@ -117,7 +123,7 @@ export function aggregateHandEnergy(
     if (carry.startBeat < periodStartBeat || carry.startBeat >= endBeat) {
       continue;
     }
-    const energy = carryEnergy(carry.segments, gravity);
+    const energy = carryEnergy(carry.segments, carry.gravity ?? gravity);
     workPositive += energy.workPositive;
     workNegative += energy.workNegative;
     carryCount += 1;

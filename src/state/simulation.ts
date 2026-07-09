@@ -19,12 +19,67 @@ import {
   DEFAULT_GRAVITY,
   DEFAULT_HOLD_DEPTH,
   defaultHandGeometry,
+  quinticViaCarryPath,
+  type CarryPath,
+  type HandGeometry,
   type Kinematics,
+  type KinematicsEpoch,
 } from '../core/kinematics';
 import { buildTimeline, type Epoch, type Timeline, type TimelineParams } from '../core/timeline';
 
 /** Epoch-changeable params (n_h is a full rebuild, not an epoch — see Timeline). */
 export type EpochParams = Partial<Omit<TimelineParams, 'handCount'>>;
+
+/**
+ * The kinematics-side build config (DESIGN.md §4.6, §6): base gravity / hold depth
+ * / carry path / hand geometry (in force at t = 0) plus an ordered list of runtime
+ * {@link KinematicsEpoch}s (future-only edits). Unlike timing params (beat period /
+ * dwell / hand count) these do NOT affect the beat schedule — gravity is
+ * g-independent of air time (NOTATION identity 1) — so they thread into
+ * `buildKinematics` only, never the timeline.
+ */
+export interface KinematicsConfig {
+  readonly gravity: number;
+  readonly holdDepth: number;
+  readonly carryPath: CarryPath;
+  readonly geometry: HandGeometry;
+  readonly epochs: readonly KinematicsEpoch[];
+}
+
+/** The DESIGN.md §7 default kinematics config for a hand count (line preset, no epochs). */
+export function defaultKinematicsConfig(handCount: number): KinematicsConfig {
+  return {
+    gravity: DEFAULT_GRAVITY,
+    holdDepth: DEFAULT_HOLD_DEPTH,
+    carryPath: quinticViaCarryPath,
+    geometry: defaultHandGeometry(handCount),
+    epochs: [],
+  };
+}
+
+/** A runtime kinematics change (the epoch fields without the `time`). */
+export type KinematicsEpochChange = Omit<KinematicsEpoch, 'time'>;
+
+/**
+ * Insert or merge a kinematics epoch at sim time `time`. Successive edits snapped
+ * to the same time (a beat boundary) coalesce (merge fields) instead of piling up,
+ * mirroring the timeline's {@link upsertEpoch}. Returns a new list sorted by time.
+ */
+export function upsertKinematicsEpoch(
+  epochs: readonly KinematicsEpoch[],
+  time: number,
+  change: KinematicsEpochChange,
+): KinematicsEpoch[] {
+  const index = epochs.findIndex((epoch) => epoch.time === time);
+  const next = epochs.map((epoch) => ({ ...epoch }));
+  if (index >= 0) {
+    next[index] = { ...(next[index] as KinematicsEpoch), ...change, time };
+    return next;
+  }
+  next.push({ ...change, time });
+  next.sort((a, b) => a.time - b.time);
+  return next;
+}
 
 /** The derived simulation artifacts for one valid pattern + params (§2). */
 export interface Simulation {
@@ -116,8 +171,11 @@ function meanOf(values: readonly number[]): number {
 
 /**
  * Build the derived simulation for a valid pattern over `beatCount` beats.
- * `baseParams` are the params at beat 0; `epochs` are later runtime changes
- * (past events stay immutable, DESIGN.md §2).
+ * `baseParams` are the timing params at beat 0; `epochs` are later runtime timing
+ * changes (past events stay immutable, DESIGN.md §2). `kinematicsConfig` is the
+ * gravity / hold depth / geometry / carry-path config plus its own runtime epochs
+ * (DESIGN.md §4.6); it defaults to the DESIGN §7 defaults so existing callers
+ * (and tests) that omit it get exactly today's behavior.
  */
 export function buildSimulation(
   values: number[],
@@ -125,6 +183,7 @@ export function buildSimulation(
   baseParams: TimelineParams,
   epochs: readonly Epoch[],
   beatCount: number,
+  kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
 ): Simulation {
   const timeline = buildTimeline(values, {
     beatCount,
@@ -134,9 +193,11 @@ export function buildSimulation(
   const kinematics = buildKinematics(timeline, {
     values,
     handCount: baseParams.handCount,
-    geometry: defaultHandGeometry(baseParams.handCount),
-    gravity: DEFAULT_GRAVITY,
-    holdDepth: DEFAULT_HOLD_DEPTH,
+    geometry: kinematicsConfig.geometry,
+    gravity: kinematicsConfig.gravity,
+    holdDepth: kinematicsConfig.holdDepth,
+    carryPath: kinematicsConfig.carryPath,
+    epochs: kinematicsConfig.epochs,
   });
   return {
     values,
@@ -163,6 +224,7 @@ export function extendedIfNeeded(
   epochs: readonly Epoch[],
   simTime: number,
   futureSpan: number = FUTURE_SPAN,
+  kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
 ): Simulation {
   const target = neededHorizonTime(simTime, futureSpan);
   if (horizonTime(sim) >= target) {
@@ -177,6 +239,7 @@ export function extendedIfNeeded(
       baseParams,
       epochs,
       current.beatCount + HORIZON_CHUNK_BEATS,
+      kinematicsConfig,
     );
     guard += 1;
   }

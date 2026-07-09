@@ -7,12 +7,21 @@ import {
   DEFAULT_BEAT_PERIOD,
   DEFAULT_DWELL_TIME,
   DEFAULT_GHOSTS_ENABLED,
+  DEFAULT_GRAVITY_VALUE,
   DEFAULT_HAND_COUNT,
+  DEFAULT_HOLD_DEPTH_VALUE,
   DEFAULT_ORBIT_COLORING,
   DEFAULT_TRAIL_LENGTH,
+  GRAVITY_MAX,
+  GRAVITY_MIN,
+  HOLD_DEPTH_MAX,
+  HOLD_DEPTH_MIN,
   TRAIL_LENGTH_MAX,
   TRAIL_LENGTH_MIN,
+  carryPathOf,
   dwellCap,
+  presetGeometry,
+  sampleHandPoints,
   useAppStore,
 } from './index';
 import {
@@ -57,6 +66,24 @@ beforeEach(() => {
     timelineWindow: DEFAULT_TIMELINE_WINDOW,
     trailLength: DEFAULT_TRAIL_LENGTH,
     ghostsEnabled: DEFAULT_GHOSTS_ENABLED,
+  });
+  const geometry = presetGeometry('line', DEFAULT_HAND_COUNT);
+  const points = sampleHandPoints(geometry, DEFAULT_HAND_COUNT);
+  useAppStore.setState({
+    gravity: DEFAULT_GRAVITY_VALUE,
+    holdDepth: DEFAULT_HOLD_DEPTH_VALUE,
+    carryPathKind: 'quintic',
+    handThrowPoints: points.throwPoints,
+    handCatchPoints: points.catchPoints,
+    handPreset: 'line',
+    positionsEditorOpen: false,
+    baseKinematics: {
+      gravity: DEFAULT_GRAVITY_VALUE,
+      holdDepth: DEFAULT_HOLD_DEPTH_VALUE,
+      carryPath: carryPathOf('quintic'),
+      geometry,
+    },
+    kinematicsEpochs: [],
   });
   useAppStore.getState().setPattern('3'); // rebuild a clean sim from defaults
 });
@@ -182,6 +209,130 @@ describe('runtime parameter epochs (past immutable)', () => {
     const state = useAppStore.getState();
     expect(state.epochs).toHaveLength(0);
     expect(state.baseParams.beatPeriod).toBe(0.5);
+  });
+});
+
+describe('runtime physics params (kinematics epochs, DESIGN.md §4.6)', () => {
+  it('gravity slider clamps to [0.5, 30] and folds into base at beat 0', () => {
+    useAppStore.setState({ simTime: 0 });
+    useAppStore.getState().setGravity(100);
+    expect(useAppStore.getState().gravity).toBe(GRAVITY_MAX);
+    useAppStore.getState().setGravity(0);
+    expect(useAppStore.getState().gravity).toBe(GRAVITY_MIN);
+    useAppStore.getState().setGravity(4.2);
+    const state = useAppStore.getState();
+    expect(state.gravity).toBeCloseTo(4.2, 9);
+    // At beat 0 the change folds into base (no epoch) and the sim reflects it.
+    expect(state.kinematicsEpochs).toHaveLength(0);
+    expect(state.baseKinematics.gravity).toBeCloseTo(4.2, 9);
+    expect(state.sim.kinematics.gravity).toBeCloseTo(4.2, 9);
+  });
+
+  it('gravity change while running creates a future-only kinematics epoch (past base intact)', () => {
+    const before = useAppStore.getState().sim;
+    useAppStore.setState({ simTime: 1.26 }); // between beat 5 (1.25) and beat 6 (1.50)
+    useAppStore.getState().setGravity(2);
+    const state = useAppStore.getState();
+    expect(state.gravity).toBe(2);
+    expect(state.kinematicsEpochs).toHaveLength(1);
+    // Base gravity (t = 0) stays 9.81 — the change is future-only.
+    expect(state.baseKinematics.gravity).toBeCloseTo(DEFAULT_GRAVITY_VALUE, 9);
+    expect(state.sim.kinematics.gravity).toBeCloseTo(DEFAULT_GRAVITY_VALUE, 9);
+    expect(state.sim).not.toBe(before); // the sim was rebuilt with the epoch
+  });
+
+  it('hold-depth slider clamps to [0, 0.4] m', () => {
+    useAppStore.setState({ simTime: 0 });
+    useAppStore.getState().setHoldDepth(5);
+    expect(useAppStore.getState().holdDepth).toBe(HOLD_DEPTH_MAX);
+    useAppStore.getState().setHoldDepth(-1);
+    expect(useAppStore.getState().holdDepth).toBe(HOLD_DEPTH_MIN);
+    useAppStore.getState().setHoldDepth(0.2);
+    expect(useAppStore.getState().sim.kinematics.holdDepth).toBeCloseTo(0.2, 9);
+  });
+
+  it('carry-path toggle switches the kinematics carry path (quintic ↔ cubic)', () => {
+    useAppStore.setState({ simTime: 0 });
+    expect(useAppStore.getState().sim.kinematics.carryPath.name).toBe('quintic-via');
+    useAppStore.getState().setCarryPathKind('cubic');
+    const state = useAppStore.getState();
+    expect(state.carryPathKind).toBe('cubic');
+    expect(state.sim.kinematics.carryPath.name).toBe('cubic-bezier');
+  });
+});
+
+describe('hand count + geometry (full rebuild, DESIGN.md §6)', () => {
+  it('n_h stepper rebuilds with the new hand count and resets geometry to the preset', () => {
+    useAppStore.getState().setHandCount(3);
+    const state = useAppStore.getState();
+    expect(state.handCount).toBe(3);
+    expect(state.baseParams.handCount).toBe(3);
+    expect(state.sim.kinematics.handCount).toBe(3);
+    // Geometry reset to a 3-hand line preset; kinematics epochs cleared.
+    expect(state.handThrowPoints).toHaveLength(3);
+    expect(state.handCatchPoints).toHaveLength(3);
+    expect(state.kinematicsEpochs).toHaveLength(0);
+    // '3' at n_h = 3 still has 3 balls but a different spatial period (period
+    // changes hands — the acceptance note).
+    expect(state.sim.ballCount).toBe(3);
+    expect(state.sim.spatialPeriodBeats).toBe(3);
+  });
+
+  it('clamps the hand count to [1, 8]', () => {
+    useAppStore.getState().setHandCount(99);
+    expect(useAppStore.getState().handCount).toBe(8);
+    useAppStore.getState().setHandCount(0);
+    expect(useAppStore.getState().handCount).toBe(1);
+  });
+
+  it('preset picker rebuilds geometry (line ↔ circle) at the current n_h', () => {
+    useAppStore.getState().setHandPreset('circle');
+    const state = useAppStore.getState();
+    expect(state.handPreset).toBe('circle');
+    // Circle preset puts catch points on the r = 0.45 m circle (hypot 0.45),
+    // unlike the line preset (catch x = ±0.30, on the x axis).
+    const point = state.handCatchPoints[0];
+    expect(point).toBeDefined();
+    if (point) {
+      expect(Math.hypot(point.x, point.z)).toBeCloseTo(0.45, 9);
+    }
+    expect(state.kinematicsEpochs).toHaveLength(0);
+  });
+
+  it('setHandPoint at beat 0 folds the moved point into the base geometry', () => {
+    useAppStore.setState({ simTime: 0 });
+    useAppStore.getState().setHandPoint(0, 'catch', -0.5, 0.2);
+    const state = useAppStore.getState();
+    expect(state.handCatchPoints[0]?.x).toBeCloseTo(-0.5, 9);
+    expect(state.handCatchPoints[0]?.z).toBeCloseTo(0.2, 9);
+    expect(state.handCatchPoints[0]?.y).toBeCloseTo(1.0, 9); // y stays fixed
+    expect(state.kinematicsEpochs).toHaveLength(0);
+    // The base geometry now reflects the moved catch point.
+    expect(state.sim.kinematics.geometry.catchPoint(0).x).toBeCloseTo(-0.5, 9);
+  });
+
+  it('setHandPoint while running creates a future-only geometry epoch (base intact)', () => {
+    useAppStore.setState({ simTime: 1.26 });
+    useAppStore.getState().setHandPoint(1, 'throw', 0.4, 0);
+    const state = useAppStore.getState();
+    expect(state.handThrowPoints[1]?.x).toBeCloseTo(0.4, 9);
+    expect(state.kinematicsEpochs).toHaveLength(1);
+    // Base geometry (t = 0) is unchanged — the edit is future-only.
+    expect(state.sim.kinematics.geometry.throwPoint(1).x).toBeCloseTo(0.1, 9);
+  });
+
+  it('ignores a hand-point edit for an out-of-range hand', () => {
+    const before = useAppStore.getState().sim;
+    useAppStore.getState().setHandPoint(9, 'catch', 1, 1);
+    expect(useAppStore.getState().sim).toBe(before);
+  });
+
+  it('toggles the positions editor (gizmo visibility, presentation only)', () => {
+    const before = useAppStore.getState().sim;
+    expect(useAppStore.getState().positionsEditorOpen).toBe(false);
+    useAppStore.getState().togglePositionsEditor();
+    expect(useAppStore.getState().positionsEditorOpen).toBe(true);
+    expect(useAppStore.getState().sim).toBe(before); // opening the editor never rebuilds
   });
 });
 

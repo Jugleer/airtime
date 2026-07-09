@@ -9,6 +9,7 @@ import { apexHeight } from '../core/kinematics';
 export { Scene } from './Scene';
 export { Balls } from './Balls';
 export { Tracers } from './Tracers';
+export { HandGizmos } from './HandGizmos';
 export { useBallColorResolver } from './useBallColors';
 export {
   GHOST_SPAN_SECONDS,
