@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 5**
+**Next phase: 6**
 
 ---
 
@@ -122,3 +122,25 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - [ ] No stutter at defaults on a desktop browser (60 fps target); report GPU/browser if it stutters.
   - [ ] Orbit-coloring toggle on `531` shows two colors (two orbits); single-color picker works; ball-radius slider scales spheres live.
   - [ ] Pattern `2`: two balls rest in hands (static holds), nothing crashes.
+
+## Phase 5 — Timeline bar, tracers, ghosts            DONE
+- Date: 2026-07-09
+- Commit: e44fc25
+- Gate: (2026-07-09, "npm run gate", green — 19 test files / 197 tests, typecheck + lint clean, build ok 1.13 MB / 313 kB gzip; run independently by orchestrator)
+- Note: 30-minute pre-phase pause waived by explicit user permission for this phase only.
+- Builder deviations from plan:
+  - Scrub gesture pauses the clock (setPlaying false) and restores on release rather than a dedicated store flag — brief Pause/Play label flicker during drags is the only cost.
+  - Trail handle drag range is 0–pastSpan (window × 0.3); longer trails come from the Trail length slider, at which point the handle pins with the readout. Default trail 0.8 s.
+- Decisions made (reversible forks):
+  - Playhead anchored at 0.3 of the window while playing; windowStart frozen during an active scrub so content doesn't slide under the pointer.
+  - Ghost span fixed at 1.5 s (inside the 6 s horizon margin); dashed material with manually maintained line distances (no per-frame computeLineDistances allocation).
+  - Trails: uniform 12 ms resampling of exact analytic position(t) into per-ball Float32Arrays sized once for the 8 s max (667 pts), drawRange updates, frustumCulled off; zero per-frame geometry allocation.
+  - Ladder now shares timelineWindow with the bar (views rhyme, one control).
+  - Period readout uses the current target beat period under slew (documented in-code).
+- Deferred items: none new (three.js bundle-size warning stays with the Phase 9 performance pass).
+- Operator visual checks pending (npm run dev -- --host, LAN URL from desktop):
+  - [ ] Scrub while paused: balls, ladder, and trails all move smoothly and stay consistent; release while playing resumes from the scrubbed time.
+  - [ ] Trails match the flight paths exactly (parabolas overlay the balls' actual arcs; carry segments dip through the hold).
+  - [ ] Ghosts extend the trails forward as dashed paths; checkbox hides them.
+  - [ ] Trail handle: drag it left to lengthen the trail; push trail length past the window via the slider — handle pins to the left edge with a numeric readout.
+  - [ ] Period readout matches expectation (e.g. pattern 3 at defaults: repeats every 0.50 s).
