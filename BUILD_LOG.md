@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 4**
+**Next phase: 5**
 
 ---
 
@@ -100,3 +100,25 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - [ ] Sanity patterns `3`, `40`, `522`: arcs land on the correct hand lane; `522`'s held 2 spans multiple beats as one carry; `40`'s 0 shows an idle gap.
   - [ ] Pattern input: typing an invalid pattern (e.g. `543`) shows the beat-accurate collision message and the last valid pattern keeps animating.
   - [ ] Play/pause freezes/resumes the cursor without jumps; playback-speed slider changes apparent speed only (pattern shape identical).
+
+## Phase 4 — 3D scene            DONE
+- Date: 2026-07-09
+- Commit: 960079e
+- Gate: (2026-07-09, "npm run gate", green — 16 test files / 164 tests, typecheck + lint clean, build ok 1.12 MB / 310 kB gzip [three.js weight; informational chunk-size warning only]; run independently by orchestrator)
+- Builder deviations from plan:
+  - Ladder keeps its per-ball debug coloring rather than following the orbit toggle — deferred consistency item (DESIGN §6 says the ladder follows the toggle); revisit alongside Phase 5/7 view work.
+  - Camera preset switching snaps (no tween) — acceptable, polish later if desired.
+- Decisions made (reversible forks):
+  - Clock: useClock stays the sole wall-clock driver; r3f useFrame is a pure reader of simTime (rejected useFrame-driven ticking — would couple the sim clock to Canvas presence, violating "no per-view time").
+  - ballId→orbit mapping derived in render3d from existing core exports (throw beat mod L walks one σ-cycle; static holds via hand mod L) — no additive core export needed.
+  - WebGL-capability guard renders a placeholder in jsdom/no-WebGL environments (also graceful in real browsers without WebGL).
+- Deferred items:
+  - Bundle >500 kB chunk warning (three.js) — code-splitting consideration in the Phase 9 performance pass.
+  - Per-frame MotionState/Vec3 allocations inside core ballState acceptable at b ≤ 9; per-segment derivative cache remains the noted optimization if profiling ever shows GC pressure.
+  - Ladder orbit-coloring consistency (above).
+- Operator visual checks pending (npm run dev -- --host, LAN URL from desktop):
+  - [ ] Cascade `3` looks like a cascade (figure-eight-ish arcs, no teleports); `441` and `531` look right.
+  - [ ] Camera: orbit/pan/zoom navigable; four preset buttons (front/side/top/juggler POV) frame the pattern sensibly.
+  - [ ] No stutter at defaults on a desktop browser (60 fps target); report GPU/browser if it stutters.
+  - [ ] Orbit-coloring toggle on `531` shows two colors (two orbits); single-color picker works; ball-radius slider scales spheres live.
+  - [ ] Pattern `2`: two balls rest in hands (static holds), nothing crashes.
