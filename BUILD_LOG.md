@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 6**
+**Next phase: 7**
 
 ---
 
@@ -144,3 +144,30 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - [ ] Ghosts extend the trails forward as dashed paths; checkbox hides them.
   - [ ] Trail handle: drag it left to lengthen the trail; push trail length past the window via the slider — handle pins to the left edge with a numeric readout.
   - [ ] Period readout matches expectation (e.g. pattern 3 at defaults: repeats every 0.50 s).
+
+## Phase 6 — Runtime parameters & hand geometry            DONE
+- Date: 2026-07-09
+- Commit: 30bb0b7
+- Gate: (2026-07-09, "npm run gate", green — 19 test files / 221 tests, typecheck + lint clean, build ok 1.14 MB / 316 kB gzip; run independently by orchestrator)
+- Core reopened (authorized additive extension): kinematics epochs (gravity/holdDepth/geometry/carryPath per segment-start time, in-flight parabolas frozen, endpoints threaded through connecting flights) + per-carry gravity in energy. Scoped fresh-Opus core re-review verdict: SOUND, no gate-worthy issues (probes confirmed velocity continuity across combined geometry+gravity seams and straddling-carry endpoint threading).
+- Review LOWs recorded (polish, not fixed):
+  - Held-forever static holds (all-2 hands) ignore later geometry/holdDepth epochs (rest at base position; internally consistent, no teleport).
+  - KinematicsEpoch.geometry is not guarded against a mismatched hand count (same as the base option; degrades by index-wrapping).
+  - Equal-time epoch tie-break = input order via stable sort (matches timeline convention; undocumented).
+  - Test-strength nits: post-epoch-new-g assertion conditional on a value≥3 flight existing; seam check asserts position (velocity verified by review probe at < 1e-6).
+- Builder deviations from plan:
+  - Kinematics epochs snap to the next beat boundary (drag coalescing; aligns with throw times).
+  - Incidental side effect: the held-2 n_h≠2 carry now renders position-continuous (cross-hand carry) because endpoints thread through flights — the velocity mismatch and the design ruling remain open; hold semantics unchanged.
+- Decisions made (reversible forks):
+  - Gravity lives in kinematics epochs only (air time is g-independent; timing untouched) — not in TimelineParams.
+  - n_h/preset changes: full rebuild carrying pattern+clock, kinematics epochs cleared, geometry reset to preset.
+  - Gizmos: plane-constrained pointer drag at y = 1.0 with pointer capture; OrbitControls disabled during drag only.
+- Deferred items: none new (bundle-size warning stays with Phase 9).
+- PENDING DESIGN DECISION (still open, owner ruling requested): held 2s at n_h ≠ 2 — see Phase 2 entry. UI now shows a non-blocking note when a 2-containing pattern runs at n_h ≠ 2.
+- Operator visual checks pending (npm run dev -- --host, LAN URL from desktop):
+  - [ ] Drag tempo slowly 0.25 → 0.5 s: cascade slows AND rises smoothly, no teleports/discontinuities (slew + guard).
+  - [ ] Open hand-positions editor, drag a catch gizmo mid-flight: in-flight balls land where originally aimed; only later throws go to the new point.
+  - [ ] n_h=3 + circle preset with pattern 3: juggles correctly, pattern cycles hands (period changes hands).
+  - [ ] Gravity slider low (moon) and high: arcs flatten/heighten from the change onward only; dwell readout turns amber when clamping (try pattern 1 or 51 with long dwell).
+  - [ ] Carry-path toggle quintic → cubic: hold dip disappears (cubic has no via-point) — the acceleration-jump character shows in Phase 7 charts.
+  - [ ] Held-2 note appears for e.g. pattern 522 at n_h=3.
