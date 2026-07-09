@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: 9**
+**Next phase: none — v1 build complete (Phases 0–9 all DONE). Open items: operator visual sweep (checklists under each phase), held-2 design ruling (Phase 2 entry).**
 
 ---
 
@@ -218,3 +218,27 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - [ ] N stepper: raise to 9+ → warning appears; graph stays readable at N=7 defaults; type a pattern with max throw > 11 (e.g. `c11` invalid… use letters: `b1` at b=6? any max-throw-12+ same-b pattern) → graph unavailable notice, sim still runs.
   - [ ] Hard-reset button restarts the pattern clean at t=0.
   - [ ] Transition 3 → 42: exactly 3 balls after the morph (one settles into a held 2 on one hand).
+
+## Phase 9 — Save/share, audio, library, polish, deploy            DONE
+- Date: 2026-07-09
+- Commit: 2e8cd4d
+- Gate: (2026-07-09, "npm run gate", green — 30 test files / 363 tests, typecheck + lint clean, build ok 1.19 MB / 331 kB gzip; run independently by orchestrator, incl. once more after the orchestrator's one-line EnergyPanel key fixup)
+- Note: pre-phase pause waived by explicit user permission.
+- Builder deviations from plan:
+  - Library: `51` is 3-ball (not a 2-ball shower) — `31` added so the library honestly spans 2–5 balls; labels use "N-ball".
+  - Audio default OFF (browser autoplay policy); AudioContext created on the enabling gesture.
+  - Camera/canvas handles live in a non-reactive sceneBridge (state layer) so share buttons read them without per-frame re-renders and without state importing render3d.
+- Decisions made (reversible forks):
+  - URL sync is button-only (Copy share link copies + replaceState once); boot order URL > defaults, read once before first render.
+  - Screenshots captured for real via headless Playwright chromium + swiftshader on this arm64 box (docs/*.png) — no operator fallback needed.
+  - Orchestrator enabled GitHub Pages (build_type=workflow): https://jugleer.github.io/airtime/
+- Deferred items:
+  - Single 1.19 MB JS chunk (three.js) — code-splitting if it ever matters; advisory only.
+  - Schedule-segment growth per navigation and the held-2 items carry over from Phase 8/2 entries.
+- Operator visual checks pending (the shipped app — use the Pages URL once deployed, or npm run dev -- --host):
+  - [ ] Copy share link in one browser, open in another: identical scene (pattern, sliders, hand positions, colors, camera).
+  - [ ] Presets: save, reload the page, load — settings survive; JSON export/import round-trips; import of a garbage file errors cleanly.
+  - [ ] Audio on: throw ticks align with throws at 1× and at 0.3× playback; catch ticks toggle separately; pause/scrub kills pending ticks.
+  - [ ] Library dropdown: picking 441 while juggling 3 transitions smoothly; entries show ball counts.
+  - [ ] Help overlay opens/closes; PNG capture downloads a correct frame.
+  - [ ] Pages deploy: https://jugleer.github.io/airtime/ serves the app with working assets (relative base).
