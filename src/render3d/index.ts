@@ -4,8 +4,9 @@ import type * as Drei from '@react-three/drei';
 import { apexHeight } from '../core/kinematics';
 
 // Public render3d surface (DESIGN.md §6). <Scene> is the main 3D view; the
-// camera-preset and coloring helpers are pure and unit-tested (the jsdom/WebGL
-// caution keeps the Canvas itself out of tests).
+// camera-preset helpers are pure and unit-tested (the jsdom/WebGL caution keeps
+// the Canvas itself out of tests). Ball colors come from state/ballColors via
+// useBallColorResolver — the same rule the ladder uses.
 export { Scene } from './Scene';
 export { Balls } from './Balls';
 export { Tracers } from './Tracers';
@@ -26,13 +27,6 @@ export {
   type CameraPreset,
   type CameraView,
 } from './camera';
-export {
-  ORBIT_PALETTE,
-  orbitColor,
-  buildBallOrbits,
-  type FlightLike,
-  type StaticHoldLike,
-} from './coloring';
 export {
   GIZMO_HIT_RADIUS,
   GIZMO_HOVER_SCALE,

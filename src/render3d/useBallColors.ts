@@ -1,40 +1,27 @@
-// src/render3d/useBallColors — the shared ball-color resolver (DESIGN.md §6, §7).
+// src/render3d/useBallColors — the 3D-side ball-color resolver.
 //
 // Both the spheres (<Balls>) and their tracers (<Tracers>) color balls the same
-// way: a single configurable color by default, or a per-orbit palette color when
-// orbit coloring is on. Factored here so the two views never drift. Pure below
-// the React seam — the mapping comes from core's `orbits()` via `buildBallOrbits`
-// (see ./coloring), which needs no core change (DESIGN.md §2 dependency direction).
+// way: each physical ball keeps its own palette color (keyed by its stable
+// ballId) when the coloring toggle is on, or the single configurable color when
+// it is off. The color rule itself is `resolveBallColor` in state/ballColors —
+// the SAME function the ladder uses — so a ball's 3D color always matches its
+// ladder arcs (owner decision superseding DESIGN.md §6 per-orbit coloring).
 
 import { useMemo } from 'react';
 import { useAppStore } from '../state';
-import type { Simulation } from '../state/simulation';
-import { buildBallOrbits, orbitColor } from './coloring';
+import { resolveBallColor } from '../state/ballColors';
 
 /**
- * Returns `(ballId) => cssColor` for the given simulation, reactive to the orbit-
- * coloring toggle and single-color setting. The returned function is stable until
- * those inputs change, so callers may memoize material updates against it.
+ * Returns `(ballId) => cssColor`, reactive to the per-ball-coloring toggle and
+ * the single-color setting. The returned function is stable until those inputs
+ * change, so callers may memoize material updates against it.
  */
-export function useBallColorResolver(sim: Simulation): (ballId: number) => string {
+export function useBallColorResolver(): (ballId: number) => string {
   const orbitColoring = useAppStore((state) => state.orbitColoring);
   const ballColor = useAppStore((state) => state.ballColor);
-  const kinematics = sim.kinematics;
-
-  const orbitOfBall = useMemo(
-    () =>
-      buildBallOrbits(
-        sim.values,
-        sim.timeline.flights,
-        kinematics.staticHolds(),
-        kinematics.handCount,
-      ),
-    [sim, kinematics],
-  );
 
   return useMemo(
-    () => (ballId: number) =>
-      orbitColoring ? orbitColor(orbitOfBall.get(ballId) ?? 0) : ballColor,
-    [orbitColoring, ballColor, orbitOfBall],
+    () => (ballId: number) => resolveBallColor(orbitColoring, ballColor, ballId),
+    [orbitColoring, ballColor],
   );
 }

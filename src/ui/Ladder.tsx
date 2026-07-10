@@ -10,6 +10,7 @@
 
 import type { ReactElement } from 'react';
 import { useAppStore } from '../state';
+import { resolveBallColor } from '../state/ballColors';
 import { firstBeatAtOrAfter, windowSpans, type Simulation } from '../state/simulation';
 
 // Logical SVG coordinate space (scaled to the container width via viewBox).
@@ -21,24 +22,11 @@ const PLOT_TOP = 58;
 const PLOT_W = PLOT_RIGHT - PLOT_LEFT;
 const AXIS_ROW = 40;
 
-// Per-ball readability palette (a debug aid; the per-orbit coloring toggle that
-// mirrors the 3D scene is Phase 4). Consistent hue per physical ball id.
-const BALL_PALETTE = [
-  '#2f6fed',
-  '#e8710a',
-  '#12a150',
-  '#d4306c',
-  '#8b5cf6',
-  '#0aa5c4',
-  '#b58900',
-  '#dc2626',
-];
-
-function ballColor(ballId: number): string {
-  const n = BALL_PALETTE.length;
-  const index = ((ballId % n) + n) % n;
-  return BALL_PALETTE[index] ?? '#666';
-}
+// Ball colors mirror the 3D scene exactly: the shared resolveBallColor rule
+// (state/ballColors) keyed by the stable ballId, following the same coloring
+// toggle — an arc here and its sphere in 3D always match.
+/** `(ballId) => cssColor`, threaded from the store's coloring settings. */
+type BallColorOf = (ballId: number) => string;
 
 interface Frame {
   readonly windowStart: number;
@@ -105,7 +93,15 @@ function BeatGrid({ sim, frame }: { sim: Simulation; frame: Frame }): ReactEleme
   return <>{marks}</>;
 }
 
-function Carries({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElement {
+function Carries({
+  sim,
+  frame,
+  colorOf,
+}: {
+  sim: Simulation;
+  frame: Frame;
+  colorOf: BallColorOf;
+}): ReactElement {
   const segments: ReactElement[] = [];
   for (const carry of sim.timeline.carries) {
     if (carry.startBeat < 0) {
@@ -118,11 +114,12 @@ function Carries({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElemen
     segments.push(
       <line
         key={`carry-${carry.ballId}-${carry.startBeat}`}
+        data-ball-id={carry.ballId}
         x1={frame.xOf(carry.startTime)}
         y1={y}
         x2={frame.xOf(carry.endTime)}
         y2={y}
-        stroke={ballColor(carry.ballId)}
+        stroke={colorOf(carry.ballId)}
         strokeWidth={carry.held ? 11 : 7}
         strokeLinecap="round"
         opacity={carry.held ? 0.9 : 0.75}
@@ -132,7 +129,15 @@ function Carries({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElemen
   return <>{segments}</>;
 }
 
-function Flights({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElement {
+function Flights({
+  sim,
+  frame,
+  colorOf,
+}: {
+  sim: Simulation;
+  frame: Frame;
+  colorOf: BallColorOf;
+}): ReactElement {
   const arcs: ReactElement[] = [];
   const dots: ReactElement[] = [];
   for (const flight of sim.timeline.flights) {
@@ -142,7 +147,7 @@ function Flights({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElemen
     if (flight.arrivalTime < frame.windowStart || flight.throwTime > frame.windowEnd) {
       continue;
     }
-    const color = ballColor(flight.ballId);
+    const color = colorOf(flight.ballId);
     const x0 = frame.xOf(flight.throwTime);
     const y0 = frame.laneY(flight.throwHand);
     const x1 = frame.xOf(flight.arrivalTime);
@@ -153,6 +158,7 @@ function Flights({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElemen
     arcs.push(
       <path
         key={`arc-${flight.ballId}-${flight.throwBeat}`}
+        data-ball-id={flight.ballId}
         d={`M ${x0} ${y0} Q ${cx} ${controlY} ${x1} ${y1}`}
         fill="none"
         stroke={color}
@@ -248,6 +254,11 @@ export function Ladder(): ReactElement {
   const simTime = useAppStore((state) => state.simTime);
   const handCount = useAppStore((state) => state.handCount);
   const timelineWindow = useAppStore((state) => state.timelineWindow);
+  // The same color rule as the 3D scene (render3d/useBallColors): per-ball
+  // palette when the toggle is on, the single configurable color when off.
+  const orbitColoring = useAppStore((state) => state.orbitColoring);
+  const singleBallColor = useAppStore((state) => state.ballColor);
+  const colorOf: BallColorOf = (ballId) => resolveBallColor(orbitColoring, singleBallColor, ballId);
   const frame = makeFrame(simTime, handCount, timelineWindow);
 
   return (
@@ -280,8 +291,8 @@ export function Ladder(): ReactElement {
       {/* Scrolling content (clipped to the plot band). */}
       <g clipPath="url(#ladder-plot-clip)">
         <BeatGrid sim={sim} frame={frame} />
-        <Carries sim={sim} frame={frame} />
-        <Flights sim={sim} frame={frame} />
+        <Carries sim={sim} frame={frame} colorOf={colorOf} />
+        <Flights sim={sim} frame={frame} colorOf={colorOf} />
         <Idles sim={sim} frame={frame} />
         <Cursor sim={sim} frame={frame} simTime={simTime} />
       </g>

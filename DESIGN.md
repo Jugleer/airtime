@@ -110,8 +110,8 @@ state-graph marker) renders from the same `simTime`. There is no per-view time.
 - `0`: hand idle that beat (no catch, no throw). `2`: held — the ball rides the hand
   through that beat; consecutive 2s merge into one long carry (test patterns: `40`,
   `501`, `522`, `423`, `60`).
-- Orbits: partition of throws into ball-identity cycles; used for orbit coloring and
-  for the spatial period (see §6).
+- Orbits: partition of throws into ball-identity cycles; used for the spatial
+  period (see §6).
 
 ---
 
@@ -224,9 +224,11 @@ land where their parabola was aimed).
 
 three.js via react-three-fiber; OrbitControls; camera presets (front / side / top /
 juggler POV); subtle ground grid; balls as spheres (radius 0.035 m). Ball color:
-single configurable color by default; **orbit-coloring toggle** assigns a palette
-color per orbit. Hand catch/throw positions shown as draggable gizmos when the
-positions editor is open.
+**per-ball palette by default** (each ball a distinct color, identical to that
+ball's color in the ladder diagram — the two views cross-reference); toggle off
+for a single configurable color in both views. *(Owner override 2026-07-10: v1
+originally specified per-orbit coloring here.)* Hand catch/throw positions shown
+as draggable gizmos when the positions editor is open.
 
 ### Timeline bar (bottom, full width)
 
@@ -241,9 +243,10 @@ ghosts = dashed future paths (toggleable).
 ### Ladder diagram view
 
 Time on the horizontal axis (rhymes with the timeline bar), one lane per hand;
-throw/catch event dots joined by flight arcs and carry segments; orbit coloring
-follows the 3D toggle. This view doubles as the **engine debug view** — it is built
-before the 3D scene in the plan for exactly that reason.
+throw/catch event dots joined by flight arcs and carry segments; per-ball coloring
+follows the 3D toggle (same palette, same ballId mapping). This view doubles as the
+**engine debug view** — it is built before the 3D scene in the plan for exactly
+that reason.
 
 ### Charts panel
 

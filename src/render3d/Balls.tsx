@@ -39,8 +39,8 @@ export function Balls(): ReactElement {
     return [...kinematics.ballIds(), ...holds];
   }, [kinematics]);
 
-  // Shared color resolver (orbit palette or single color; DESIGN.md §6).
-  const colorForBall = useBallColorResolver(sim);
+  // Shared color resolver (per-ball palette or single color; matches the ladder).
+  const colorForBall = useBallColorResolver();
 
   const meshes = useRef(new Map<number, Mesh>());
 

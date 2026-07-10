@@ -175,7 +175,7 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
 export function Tracers(): ReactElement {
   const sim = useAppStore((state) => state.sim);
   const ballIds = useMemo(() => sim.kinematics.ballIds(), [sim]);
-  const colorForBall = useBallColorResolver(sim);
+  const colorForBall = useBallColorResolver();
 
   return (
     <>

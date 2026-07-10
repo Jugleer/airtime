@@ -55,7 +55,7 @@ const CONTROL_SECTIONS: readonly Section[] = [
     heading: 'Playback & view',
     items: [
       ['Playback speed', 'Slows or speeds the VIEWING only — it never changes the physics (unlike beat period).'],
-      ['Ball radius / color / orbit coloring', 'Sphere size, single color, or a palette color per ball orbit.'],
+      ['Ball radius / color', 'Sphere size, and each ball keeps its own color (matching the ladder) — untick "Colour balls individually" for a single configurable color.'],
       ['Timeline window / trail / ghosts', 'The visible span of the timeline bar, the length of the trailing streak, and the dashed future path.'],
     ],
   },

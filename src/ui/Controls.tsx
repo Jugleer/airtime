@@ -521,7 +521,7 @@ export function Controls(): ReactElement {
       <div style={rowStyle}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
           <input type="checkbox" checked={orbitColoring} onChange={toggleOrbitColoring} />
-          <span>Orbit coloring</span>
+          <span>Colour balls individually</span>
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600 }}>
           <input type="checkbox" checked={ghostsEnabled} onChange={toggleGhosts} />

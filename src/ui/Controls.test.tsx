@@ -70,13 +70,13 @@ describe('Controls (ui layer)', () => {
     expect(screen.getByText(/3 balls/)).toBeTruthy();
   });
 
-  it('exposes the 3D scene controls and toggles orbit coloring through the store', () => {
+  it('exposes the 3D scene controls and toggles per-ball coloring through the store', () => {
     render(<Controls />);
     expect(screen.getByLabelText('Ball radius')).toBeTruthy();
     expect(screen.getByLabelText('Ball color')).toBeTruthy();
 
-    const toggle = screen.getByLabelText('Orbit coloring');
-    expect(useAppStore.getState().orbitColoring).toBe(false);
+    const toggle = screen.getByLabelText('Colour balls individually');
+    expect(useAppStore.getState().orbitColoring).toBe(false); // fixture baseline
     fireEvent.click(toggle);
     expect(useAppStore.getState().orbitColoring).toBe(true);
   });

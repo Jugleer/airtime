@@ -158,14 +158,15 @@ describe('slider wiring', () => {
 });
 
 describe('3D scene view settings', () => {
-  it('has the DESIGN.md §7 defaults', () => {
+  it('has the DESIGN.md §7 defaults (per-ball coloring ON by owner decision)', () => {
     expect(DEFAULT_BALL_RADIUS).toBeCloseTo(0.035, 9);
     expect(BALL_RADIUS_MIN).toBeCloseTo(0.01, 9);
     expect(BALL_RADIUS_MAX).toBeCloseTo(0.1, 9);
-    expect(DEFAULT_ORBIT_COLORING).toBe(false);
+    // Owner decision 2026-07-10: per-ball coloring is the day-to-day default.
+    expect(DEFAULT_ORBIT_COLORING).toBe(true);
     const state = useAppStore.getState();
     expect(state.ballRadius).toBeCloseTo(DEFAULT_BALL_RADIUS, 9);
-    expect(state.orbitColoring).toBe(false);
+    expect(state.orbitColoring).toBe(true);
     expect(state.ballColor).toBe(DEFAULT_BALL_COLOR);
   });
 
@@ -178,10 +179,11 @@ describe('3D scene view settings', () => {
     expect(useAppStore.getState().ballRadius).toBeCloseTo(0.05, 9);
   });
 
-  it('toggles orbit coloring and sets the ball color, never rebuilding the sim', () => {
+  it('toggles per-ball coloring and sets the ball color, never rebuilding the sim', () => {
     const before = useAppStore.getState().sim;
+    // Default is ON; the first toggle turns per-ball coloring off.
     useAppStore.getState().toggleOrbitColoring();
-    expect(useAppStore.getState().orbitColoring).toBe(true);
+    expect(useAppStore.getState().orbitColoring).toBe(false);
     useAppStore.getState().setBallColor('#ff8800');
     expect(useAppStore.getState().ballColor).toBe('#ff8800');
     // View settings are presentation-only (DESIGN.md §2): the sim is untouched.

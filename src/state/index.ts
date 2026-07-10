@@ -153,10 +153,15 @@ export function sampleHandPoints(
 export const DEFAULT_BALL_RADIUS = 0.035;
 export const BALL_RADIUS_MIN = 0.01;
 export const BALL_RADIUS_MAX = 0.1;
-/** Single ball color used when orbit coloring is off (DESIGN.md §7). */
+/** Single ball color used when per-ball coloring is off (DESIGN.md §7). */
 export const DEFAULT_BALL_COLOR = '#2f6fed';
-/** Orbit coloring off by default (single configurable color, DESIGN.md §6, §7). */
-export const DEFAULT_ORBIT_COLORING = false;
+/**
+ * Per-ball coloring ON by default (owner decision 2026-07-10, superseding the
+ * DESIGN.md §7 default): each ball keeps its own palette color (state/ballColors),
+ * identical in the ladder and the 3D scene. The field keeps its historical name
+ * (`orbitColoring`, codec key `oc`) to avoid store/codec churn.
+ */
+export const DEFAULT_ORBIT_COLORING = true;
 
 // --- Timeline-bar settings (DESIGN.md §6) — presentation only ---------------
 // The window, trail length, and ghost toggle shape the timeline bar + 3D tracers
@@ -274,9 +279,13 @@ export interface AppStore {
   // 3D scene view settings (DESIGN.md §6, §7) — presentation only, no rebuild.
   /** Ball sphere radius in meters. */
   readonly ballRadius: number;
-  /** When true, color balls by orbit; otherwise use the single {@link ballColor}. */
+  /**
+   * When true, each ball keeps its own palette color (state/ballColors, keyed by
+   * the stable ballId — identical in ladder and 3D); otherwise all balls use the
+   * single {@link ballColor}. Historical field name kept (was per-orbit coloring).
+   */
   readonly orbitColoring: boolean;
-  /** The single ball color (CSS string) used when orbit coloring is off. */
+  /** The single ball color (CSS string) used when per-ball coloring is off. */
   readonly ballColor: string;
 
   // timeline-bar settings (DESIGN.md §6) — presentation only, no sim rebuild.
