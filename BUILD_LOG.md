@@ -313,3 +313,24 @@ Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-o
   - [ ] State graph overlay: button top-left; rings with ground centred; cycle reads as a loop; click-to-navigate works from the overlay; N stepper + hard reset present; overlay off by default.
   - [ ] Charts dock: expands/collapses; charts sample only when open; energy figures show the new lower hold work (522 W⁺ ≈ 11.9 J/kg).
   - [ ] Settings drawer: playback speed, ball radius/color, trails/window/ghosts, share link, presets, JSON, PNG, audio all reachable and functional.
+
+---
+
+# Owner feedback round 2 (2026-07-11)
+
+**Held-2 design decision CLOSED**: owner confirmed 423 at n_h=3 "looks exactly as I'd expect" — the cross-hand carry behavior (Phase 6 endpoint threading + scoop construction) is now the sanctioned design for held 2s at n_h ≠ 2. The Phase 2 PENDING DESIGN DECISION is resolved by owner acceptance; property-test exclusions for 2s at n_h ≠ 2 remain as documented domain notes.
+
+17 items in three parallel fenced tracks (core carry / views / controls), one combined gate, three commits:
+
+## Round 2A — Carry aesthetics (sweep + zip wind-up)            DONE
+- Commit: 4c067ed — Gate: (2026-07-11, combined "npm run gate", green — 34 files / 426 tests; orchestrator-run)
+- Normal carries no longer park level at the dip (flat 40.8 % → 0.5 % on the cascade; parabola-with-drift sweep, closed-form); zip (1-throw) wind-ups no longer counter-snap (28.5 mm @ 2.27 m/s → 0.0); held 2s bit-identical (level rest kept). Naive T/2 variant rejected with probe evidence. New pins fail pre-change. 10/10 fresh-seed kinematics runs. DESIGN §4.3 amended.
+
+## Round 2B — Views (vertical ladder, timeline fixes, space-pause)            DONE
+- Commit: 647bc0f — Gate: same combined run.
+- Ladder vertical (time top→bottom — flip is one documented change if owner prefers upward), hand columns labeled; playhead = orange square grip TOP / trail = blue circle grip BOTTOM, coincidence-safe (verified by real pointer drags); lane tags H0/H1 (0-indexed to match ladder+charts — owner wrote "H1, H2", flag if 1-indexed preferred); glyph legend; mini-ladder clipping bug fixed (per-endpoint mark filtering + clipPath; stray marks proven gone by DOM inspection); Space toggles play/pause (input-focus guarded); charts-dock collapse at ≥ ~2340 px viewports root-caused by the views agent (fence-respecting: fix belonged to Charts.tsx) and applied by the orchestrator (energy panel flex basis).
+- 
+## Round 2C — Controls (draft entry, resets, wheel, library)            DONE
+- Commit: fd0eb89 — Gate: same combined run.
+- Draft-based pattern entry (Enter/Go apply, Escape revert, dirty cue, external-change sync); per-control ↺ + section Reset-all (defaults single-sourced); wheel-scroll on all sliders; library grown to 35 validated entries grouped 2–7 balls; Settings no longer darkens the app (transparent capture layer, Esc closes); "Try …" hint removed.
+- Next: Track C (hands toggle, persistent hand paths, state-graph minimap) then Track D (external-tools review agent).
