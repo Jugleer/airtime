@@ -1,98 +1,200 @@
-// src/ui/App — the app shell (DESIGN.md §6): pattern input + controls, the 3D
-// scene (the main view, Phase 4), the ladder diagram (the engine's debug view),
-// the charts + energy panel, the state graph, and the timeline bar — all rendered
-// from the one global clock (DESIGN.md §2).
+// src/ui/App — the redesigned app shell (owner layout override 2026-07-10, recorded
+// in BUILD_LOG; DESIGN.md §6 view CONTENT/behavior specs still hold). A single
+// no-scroll grid sized for a ~2000×1300 landscape window:
+//
+//   ┌─────────────────────────── top bar (title · Settings · Help) ───────────┐
+//   │ left sidebar │        stage (3D scene + docked timeline)      │ ladder   │
+//   │  (Controls)  │  graph overlay & camera presets live in-scene  │ (right)  │
+//   ├──────────────── bottom dock: charts & energy (collapsible) ──────────────┤
+//
+// Everything renders from the one global clock (DESIGN.md §2). The dock starts
+// collapsed and the graph overlay starts off, so the scene + ladder get the height.
 
-import type { ReactElement } from 'react';
-import { Scene } from '../render3d';
+import { useEffect, type CSSProperties, type ReactElement } from 'react';
+import { useAppStore } from '../state';
+import { Scene, type SceneColors } from '../render3d';
 import { Charts } from './Charts';
 import { Controls } from './Controls';
 import { Help } from './Help';
 import { Ladder } from './Ladder';
-import { SharePanel } from './SharePanel';
+import { Settings } from './Settings';
 import { StateGraph } from './StateGraph';
 import { TimelineBar } from './TimelineBar';
+import { THEME_CSS, usePalette, type Palette } from './theme';
 import { useAudio } from './useAudio';
 import { useClock } from './useClock';
 
-export function App(): ReactElement {
-  // Mount the single wall-clock loop that drives simTime (DESIGN.md §2) and the
-  // WebAudio tick scheduler (DESIGN.md §6; a no-op until audio is enabled / where
-  // WebAudio is unavailable).
-  useClock();
-  useAudio();
+/** Map the active palette to the subset of colors the 3D scene needs (ui → render3d). */
+function sceneColorsOf(palette: Palette): SceneColors {
+  return {
+    background: palette.sceneBg,
+    gridCell: palette.gridCell,
+    gridSection: palette.gridSection,
+    overlayPanel: palette.name === 'dark' ? 'rgba(30, 41, 59, 0.82)' : 'rgba(255, 255, 255, 0.9)',
+    overlayBorder: palette.border,
+    overlayText: palette.textPrimary,
+    accent: palette.accent,
+    accentText: palette.accentText,
+  };
+}
 
+/** Inject the global stylesheet once and stamp the active theme on <html>. */
+function useThemeChrome(): void {
+  const theme = useAppStore((state) => state.theme);
+  useEffect(() => {
+    const id = 'airtime-theme-css';
+    if (!document.getElementById(id)) {
+      const style = document.createElement('style');
+      style.id = id;
+      style.textContent = THEME_CSS;
+      document.head.appendChild(style);
+    }
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+}
+
+/** The thin top bar: product title + the Settings and Help entry points. */
+function TopBar(): ReactElement {
+  const palette = usePalette();
   return (
-    <main
+    <header
       style={{
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-        maxWidth: '72rem',
-        margin: '0 auto',
-        padding: '1.5rem',
+        gridColumn: '1 / -1',
+        gridRow: 1,
         display: 'flex',
-        flexDirection: 'column',
-        gap: '1rem',
-        color: '#1f2530',
+        alignItems: 'center',
+        gap: '0.9rem',
       }}
     >
-      <header
-        style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}
+      <h1 style={{ margin: 0, fontSize: '1.15rem', color: palette.textPrimary, letterSpacing: '0.01em' }}>
+        Airtime
+      </h1>
+      <span style={{ fontSize: '0.78rem', color: palette.textMuted }}>
+        Siteswap 3D visualizer &amp; kinematics lab
+      </span>
+      <div style={{ flex: 1 }} />
+      <Settings />
+      <Help />
+    </header>
+  );
+}
+
+/** The center stage: the 3D scene with the timeline docked to its bottom edge. */
+function Stage(): ReactElement {
+  const palette = usePalette();
+  return (
+    <div style={{ gridColumn: 2, gridRow: 2, minWidth: 0, minHeight: 0 }}>
+      <div
+        style={{
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          borderRadius: '0.6rem',
+          border: `1px solid ${palette.border}`,
+          overflow: 'hidden',
+          background: palette.sceneBg,
+        }}
       >
-        <div>
-          <h1 style={{ margin: '0 0 0.15rem' }}>Airtime</h1>
-          <p style={{ margin: 0, color: '#5b6472' }}>
-            Siteswap 3D visualizer. Try <code>3</code>, <code>441</code>, <code>531</code>,{' '}
-            <code>40</code>, <code>522</code>.
+        {/* Scene area: the 3D view + its in-scene overlays (camera presets top-right
+            in Scene; the state-graph toggle top-left + overlay via StateGraph). The
+            translucent graph overlay covers only this area, never the timeline. */}
+        <div style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
+          <Scene sceneColors={sceneColorsOf(palette)} />
+          <StateGraph />
+        </div>
+        <TimelineBar />
+      </div>
+    </div>
+  );
+}
+
+/** The right column: the ladder diagram, filling the height that matches the scene. */
+function LadderColumn(): ReactElement {
+  const palette = usePalette();
+  return (
+    <div style={{ gridColumn: 3, gridRow: 2, minWidth: 0, minHeight: 0 }}>
+      <section
+        style={{
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.4rem',
+          padding: '0.6rem 0.7rem',
+          borderRadius: '0.6rem',
+          border: `1px solid ${palette.border}`,
+          background: palette.panel,
+          overflow: 'hidden',
+        }}
+      >
+        <h2 style={{ margin: 0, fontSize: '0.8rem', color: palette.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+          Ladder diagram
+        </h2>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'stretch', justifyContent: 'flex-start', overflow: 'hidden' }}>
+          <div style={{ background: palette.chartPlotBg, border: `1px solid ${palette.border}`, borderRadius: '0.4rem', padding: '0.3rem' }}>
+            <Ladder />
+          </div>
+          <p style={{ margin: '0.6rem 0 0', color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.45 }}>
+            Time runs left→right, one lane per hand. Arcs are flights (bow grows with the throw),
+            thick segments are carries; each ball keeps the color it has in the 3D scene. The red
+            cursor is the shared playhead — scrub the timeline to move it here too.
           </p>
         </div>
-        <Help />
-      </header>
-
-      <Controls />
-
-      <section
-        style={{
-          padding: '0.75rem',
-          background: '#ffffff',
-          borderRadius: '0.6rem',
-          border: '1px solid #dfe3ea',
-        }}
-      >
-        <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#3b4252' }}>3D scene</h2>
-        <Scene />
       </section>
-
-      <section
-        style={{
-          padding: '0.75rem',
-          background: '#ffffff',
-          borderRadius: '0.6rem',
-          border: '1px solid #dfe3ea',
-        }}
-      >
-        <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem', color: '#3b4252' }}>Ladder diagram</h2>
-        <Ladder />
-      </section>
-
-      {/* Charts + energy panel (DESIGN.md §6): per-hand |v|/|a|/|j| over the same
-          window as the timeline bar, plus the per-hand energy table. Collapsible;
-          hidden ⇒ no per-frame sampling. */}
-      <Charts />
-
-      {/* State graph (DESIGN.md §5): the (b, N) landing-schedule graph with the
-          current pattern's cycle highlighted and the beat-hopping marker. Click a
-          node (or type a same-b pattern above) to transition via BFS — the
-          running timeline is spliced, so the past stays bit-identical. */}
-      <StateGraph />
-
-      {/* Timeline bar: DESIGN.md §6 "bottom, full width" — here, the full width of
-          the app's content column. Scrubbing it moves the one clock, so the 3D
-          scene, ladder, and tracers all follow (DESIGN.md §2). */}
-      <TimelineBar />
-
-      {/* Save / share + audio (DESIGN.md §6): shareable URL, presets, JSON, PNG,
-          and synthesized ticks. */}
-      <SharePanel />
-    </main>
+    </div>
   );
+}
+
+export function App(): ReactElement {
+  // Mount the single wall-clock loop that drives simTime (DESIGN.md §2) and the
+  // WebAudio tick scheduler (a no-op until audio is enabled).
+  useClock();
+  useAudio();
+  useThemeChrome();
+  const palette = usePalette();
+
+  return (
+    <div style={rootGridStyle(palette)}>
+      <TopBar />
+
+      {/* Left sidebar: pattern, library, tempo/physics, hands/geometry. */}
+      <aside
+        style={{
+          gridColumn: 1,
+          gridRow: 2,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          paddingRight: '0.15rem',
+        }}
+      >
+        <Controls />
+      </aside>
+
+      <Stage />
+      <LadderColumn />
+
+      {/* Bottom dock: charts + energy, collapsible (starts collapsed → ~no height). */}
+      <div style={{ gridColumn: '1 / -1', gridRow: 3, minWidth: 0 }}>
+        <Charts />
+      </div>
+    </div>
+  );
+}
+
+function rootGridStyle(palette: Palette): CSSProperties {
+  return {
+    display: 'grid',
+    gridTemplateColumns: '300px minmax(0, 1fr) 440px',
+    gridTemplateRows: 'auto minmax(0, 1fr) auto',
+    gap: '0.6rem',
+    padding: '0.6rem 0.75rem',
+    height: '100vh',
+    width: '100vw',
+    overflow: 'hidden',
+    background: palette.appBg,
+    color: palette.textPrimary,
+    fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+  };
 }

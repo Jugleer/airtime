@@ -7,11 +7,16 @@
 // dots mark the events, and a single vertical cursor marks the shared simTime.
 // The window scrolls with the playhead. SVG (not canvas) for crisp text/vectors
 // and simple declarative React re-render — no chart library (DESIGN.md §6).
+//
+// Redesign 2026-07-10: theme-aware colors (dark-first). Ball-colored arcs/carries
+// keep the exact `resolveBallColor` stroke (the ladder ↔ 3D color-agreement test
+// reads the `stroke` attribute directly); only the frame/lane/grid colors change.
 
 import type { ReactElement } from 'react';
 import { useAppStore } from '../state';
 import { resolveBallColor } from '../state/ballColors';
 import { firstBeatAtOrAfter, windowSpans, type Simulation } from '../state/simulation';
+import { usePalette, type Palette } from './theme';
 
 // Logical SVG coordinate space (scaled to the container width via viewBox).
 const W = 1000;
@@ -22,9 +27,6 @@ const PLOT_TOP = 58;
 const PLOT_W = PLOT_RIGHT - PLOT_LEFT;
 const AXIS_ROW = 40;
 
-// Ball colors mirror the 3D scene exactly: the shared resolveBallColor rule
-// (state/ballColors) keyed by the stable ballId, following the same coloring
-// toggle — an arc here and its sphere in 3D always match.
 /** `(ballId) => cssColor`, threaded from the store's coloring settings. */
 type BallColorOf = (ballId: number) => string;
 
@@ -56,14 +58,14 @@ function makeFrame(simTime: number, handCount: number, timelineWindow: number): 
   };
 }
 
-function LaneBackground({ frame }: { frame: Frame }): ReactElement {
+function LaneBackground({ frame, palette }: { frame: Frame; palette: Palette }): ReactElement {
   const lanes: ReactElement[] = [];
   for (let hand = 0; hand < frame.handCount; hand += 1) {
     const y = frame.laneY(hand);
     lanes.push(
       <g key={hand}>
-        <line x1={PLOT_LEFT} y1={y} x2={PLOT_RIGHT} y2={y} stroke="#c8cdd6" strokeWidth={1} />
-        <text x={PLOT_LEFT - 12} y={y + 4} textAnchor="end" fontSize={15} fill="#3b4252">
+        <line x1={PLOT_LEFT} y1={y} x2={PLOT_RIGHT} y2={y} stroke={palette.laneLine} strokeWidth={1} />
+        <text x={PLOT_LEFT - 12} y={y + 4} textAnchor="end" fontSize={15} fill={palette.textSecondary}>
           Hand {hand}
         </text>
       </g>,
@@ -72,7 +74,7 @@ function LaneBackground({ frame }: { frame: Frame }): ReactElement {
   return <>{lanes}</>;
 }
 
-function BeatGrid({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElement {
+function BeatGrid({ sim, frame, palette }: { sim: Simulation; frame: Frame; palette: Palette }): ReactElement {
   const marks: ReactElement[] = [];
   const startBeat = firstBeatAtOrAfter(sim.timeline, Math.max(frame.windowStart, 0));
   for (let beat = startBeat; beat < sim.beatCount; beat += 1) {
@@ -83,8 +85,8 @@ function BeatGrid({ sim, frame }: { sim: Simulation; frame: Frame }): ReactEleme
     const x = frame.xOf(time);
     marks.push(
       <g key={beat}>
-        <line x1={x} y1={PLOT_TOP} x2={x} y2={frame.plotBottom} stroke="#eceef2" strokeWidth={1} />
-        <text x={x} y={frame.plotBottom + 22} textAnchor="middle" fontSize={13} fill="#8a93a2">
+        <line x1={x} y1={PLOT_TOP} x2={x} y2={frame.plotBottom} stroke={palette.gridLine} strokeWidth={1} />
+        <text x={x} y={frame.plotBottom + 22} textAnchor="middle" fontSize={13} fill={palette.textMuted}>
           {beat}
         </text>
       </g>,
@@ -133,10 +135,12 @@ function Flights({
   sim,
   frame,
   colorOf,
+  palette,
 }: {
   sim: Simulation;
   frame: Frame;
   colorOf: BallColorOf;
+  palette: Palette;
 }): ReactElement {
   const arcs: ReactElement[] = [];
   const dots: ReactElement[] = [];
@@ -153,7 +157,6 @@ function Flights({
     const x1 = frame.xOf(flight.arrivalTime);
     const y1 = frame.laneY(flight.landingHand);
     const cx = frame.xOf((flight.throwTime + flight.arrivalTime) / 2);
-    // Bow height grows with the throw value: a 5 arcs high, a 1 barely clears.
     const controlY = Math.max(4, Math.min(y0, y1) - (12 + flight.value * 8));
     arcs.push(
       <path
@@ -166,7 +169,6 @@ function Flights({
         opacity={0.9}
       />,
     );
-    // Throw = filled dot; catch = open ring (so the direction of travel reads).
     dots.push(
       <circle
         key={`throw-${flight.ballId}-${flight.throwBeat}`}
@@ -180,7 +182,7 @@ function Flights({
         cx={x1}
         cy={y1}
         r={5}
-        fill="#ffffff"
+        fill={palette.chartPlotBg}
         stroke={color}
         strokeWidth={2}
       />,
@@ -194,7 +196,7 @@ function Flights({
   );
 }
 
-function Idles({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElement {
+function Idles({ sim, frame, palette }: { sim: Simulation; frame: Frame; palette: Palette }): ReactElement {
   const marks: ReactElement[] = [];
   for (const event of sim.timeline.events) {
     if (event.kind !== 'idle' || event.beat < 0) {
@@ -206,7 +208,7 @@ function Idles({ sim, frame }: { sim: Simulation; frame: Frame }): ReactElement 
     const x = frame.xOf(event.time);
     const y = frame.laneY(event.hand);
     marks.push(
-      <g key={`idle-${event.beat}`} stroke="#b3b9c4" strokeWidth={1.5}>
+      <g key={`idle-${event.beat}`} stroke={palette.textMuted} strokeWidth={1.5}>
         <line x1={x - 4} y1={y - 4} x2={x + 4} y2={y + 4} />
         <line x1={x - 4} y1={y + 4} x2={x + 4} y2={y - 4} />
       </g>,
@@ -219,13 +221,14 @@ function Cursor({
   sim,
   frame,
   simTime,
+  palette,
 }: {
   sim: Simulation;
   frame: Frame;
   simTime: number;
+  palette: Palette;
 }): ReactElement {
   const x = frame.xOf(simTime);
-  // Current beat = the latest beat whose start is at or before now.
   const atOrAfter = firstBeatAtOrAfter(sim.timeline, simTime);
   const currentBeat =
     atOrAfter < sim.beatCount && sim.timeline.beatTime(atOrAfter) <= simTime + 1e-9
@@ -238,10 +241,10 @@ function Cursor({
         y1={PLOT_TOP - 10}
         x2={x}
         y2={frame.plotBottom + 4}
-        stroke="#e5484d"
+        stroke={palette.playhead}
         strokeWidth={2}
       />
-      <text x={x} y={PLOT_TOP - 16} textAnchor="middle" fontSize={13} fill="#e5484d">
+      <text x={x} y={PLOT_TOP - 16} textAnchor="middle" fontSize={13} fill={palette.playhead}>
         t = {simTime.toFixed(2)} s · beat {currentBeat}
       </text>
     </g>
@@ -250,12 +253,11 @@ function Cursor({
 
 /** The ladder diagram, rendered from the shared simTime and derived simulation. */
 export function Ladder(): ReactElement {
+  const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const simTime = useAppStore((state) => state.simTime);
   const handCount = useAppStore((state) => state.handCount);
   const timelineWindow = useAppStore((state) => state.timelineWindow);
-  // The same color rule as the 3D scene (render3d/useBallColors): per-ball
-  // palette when the toggle is on, the single configurable color when off.
   const orbitColoring = useAppStore((state) => state.orbitColoring);
   const singleBallColor = useAppStore((state) => state.ballColor);
   const colorOf: BallColorOf = (ballId) => resolveBallColor(orbitColoring, singleBallColor, ballId);
@@ -268,7 +270,7 @@ export function Ladder(): ReactElement {
       viewBox={`0 0 ${W} ${frame.height}`}
       width="100%"
       preserveAspectRatio="xMidYMid meet"
-      style={{ display: 'block', maxWidth: '100%', height: 'auto', background: '#ffffff' }}
+      style={{ display: 'block', maxWidth: '100%', width: '100%', height: 'auto', maxHeight: '100%' }}
     >
       <defs>
         <clipPath id="ladder-plot-clip">
@@ -282,23 +284,23 @@ export function Ladder(): ReactElement {
         y={PLOT_TOP}
         width={PLOT_W}
         height={frame.plotBottom - PLOT_TOP}
-        fill="#fbfcfe"
-        stroke="#d5dae2"
+        fill={palette.chartPlotBg}
+        stroke={palette.border}
         strokeWidth={1}
       />
-      <LaneBackground frame={frame} />
+      <LaneBackground frame={frame} palette={palette} />
 
       {/* Scrolling content (clipped to the plot band). */}
       <g clipPath="url(#ladder-plot-clip)">
-        <BeatGrid sim={sim} frame={frame} />
+        <BeatGrid sim={sim} frame={frame} palette={palette} />
         <Carries sim={sim} frame={frame} colorOf={colorOf} />
-        <Flights sim={sim} frame={frame} colorOf={colorOf} />
-        <Idles sim={sim} frame={frame} />
-        <Cursor sim={sim} frame={frame} simTime={simTime} />
+        <Flights sim={sim} frame={frame} colorOf={colorOf} palette={palette} />
+        <Idles sim={sim} frame={frame} palette={palette} />
+        <Cursor sim={sim} frame={frame} simTime={simTime} palette={palette} />
       </g>
 
       {/* Axis caption. */}
-      <text x={PLOT_LEFT} y={frame.height - 8} fontSize={13} fill="#8a93a2">
+      <text x={PLOT_LEFT} y={frame.height - 8} fontSize={13} fill={palette.textMuted}>
         time → (beat index below the axis; window = {frame.timelineWindow.toFixed(1)} s)
       </text>
     </svg>

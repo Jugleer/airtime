@@ -416,18 +416,23 @@ describe('timeline-bar settings (DESIGN.md §6)', () => {
 
 describe('charts & energy panel settings (DESIGN.md §6)', () => {
   it('has the presentation-only defaults', () => {
-    expect(DEFAULT_CHARTS_VISIBLE).toBe(true);
+    // Redesign 2026-07-10: the bottom charts dock starts COLLAPSED (was `true`) so
+    // the scene/ladder get full height and no per-frame sampling runs at boot.
+    expect(DEFAULT_CHARTS_VISIBLE).toBe(false);
     expect(DEFAULT_CHART_AXIS_MODE).toBe('magnitude');
     const state = useAppStore.getState();
-    expect(state.chartsVisible).toBe(true);
+    expect(state.chartsVisible).toBe(false);
     expect(state.chartAxisMode).toBe('magnitude');
   });
 
   it('toggles visibility and sets the axis mode', () => {
-    useAppStore.getState().toggleCharts();
+    // beforeEach resets chartsVisible to DEFAULT_CHARTS_VISIBLE (false, redesign
+    // 2026-07-10: the dock starts collapsed). Toggle flips it, set overrides it.
     expect(useAppStore.getState().chartsVisible).toBe(false);
-    useAppStore.getState().setChartsVisible(true);
+    useAppStore.getState().toggleCharts();
     expect(useAppStore.getState().chartsVisible).toBe(true);
+    useAppStore.getState().setChartsVisible(false);
+    expect(useAppStore.getState().chartsVisible).toBe(false);
     useAppStore.getState().setChartAxisMode('y');
     expect(useAppStore.getState().chartAxisMode).toBe('y');
   });

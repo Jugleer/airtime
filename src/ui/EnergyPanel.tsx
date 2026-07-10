@@ -12,27 +12,31 @@ import { useMemo, type CSSProperties, type ReactElement } from 'react';
 import { energyReport } from '../core/energy';
 import { useAppStore } from '../state';
 import { energyRows, formatEnergy } from './energyPanel';
+import { usePalette, type Palette } from './theme';
 
 /** A table header cell with a full-word label and the NOTATION symbol in a tooltip. */
 function HeaderCell({
   label,
   symbol,
+  palette,
   align = 'right',
 }: {
   readonly label: string;
   readonly symbol: string;
+  readonly palette: Palette;
   readonly align?: 'left' | 'right';
 }): ReactElement {
   return (
-    <th style={{ ...thStyle, textAlign: align }} title={symbol}>
+    <th style={{ ...thStyle(palette), textAlign: align }} title={symbol}>
       {label}
-      <span style={symbolStyle}> {symbol}</span>
+      <span style={symbolStyle(palette)}> {symbol}</span>
     </th>
   );
 }
 
 /** The per-hand energy table with a totals row (DESIGN.md §4.5, §6). */
 export function EnergyPanel(): ReactElement {
+  const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   // Period-aggregated + time-independent: recompute only on a sim rebuild.
   const report = useMemo(() => energyReport(sim.kinematics, sim.timeline), [sim]);
@@ -44,10 +48,12 @@ export function EnergyPanel(): ReactElement {
     values: readonly number[],
     isTotal: boolean,
   ): ReactElement => (
-    <tr key={label} style={isTotal ? totalRowStyle : undefined}>
-      <td style={{ ...tdStyle, textAlign: 'left', fontWeight: isTotal ? 700 : 400 }}>{label}</td>
+    <tr key={label} style={isTotal ? totalRowStyle(palette) : undefined}>
+      <td style={{ ...tdStyle(palette), textAlign: 'left', fontWeight: isTotal ? 700 : 400 }}>
+        {label}
+      </td>
       {values.map((value, index) => (
-        <td key={index} style={tdStyle}>
+        <td key={index} style={tdStyle(palette)}>
           {formatEnergy(value)}
         </td>
       ))}
@@ -57,14 +63,14 @@ export function EnergyPanel(): ReactElement {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
       <div style={{ overflowX: 'auto' }}>
-        <table style={tableStyle}>
+        <table style={tableStyle(palette)}>
           <thead>
             <tr>
-              <th style={{ ...thStyle, textAlign: 'left' }}>Hand</th>
-              <HeaderCell label="Throw work" symbol="W⁺ (J/kg)" />
-              <HeaderCell label="Catch absorption" symbol="|W⁻| (J/kg)" />
-              <HeaderCell label="Net" symbol="W (J/kg)" />
-              <HeaderCell label="Average power" symbol="(W/kg)" />
+              <th style={{ ...thStyle(palette), textAlign: 'left' }}>Hand</th>
+              <HeaderCell label="Throw work" symbol="W⁺ (J/kg)" palette={palette} />
+              <HeaderCell label="Catch absorption" symbol="|W⁻| (J/kg)" palette={palette} />
+              <HeaderCell label="Net" symbol="W (J/kg)" palette={palette} />
+              <HeaderCell label="Average power" symbol="(W/kg)" palette={palette} />
             </tr>
           </thead>
           <tbody>
@@ -88,7 +94,7 @@ export function EnergyPanel(): ReactElement {
           </tbody>
         </table>
       </div>
-      <p style={captionStyle}>
+      <p style={captionStyle(palette)}>
         Per hand over one spatial period (beats 0–{periodEndBeat}; repeats every{' '}
         {report.periodTime.toFixed(3)} s). Net = throw work − catch absorption. Contact force is
         zero at every catch and release, so net = ΔKE + g·Δy over the carry (work–energy theorem).
@@ -99,42 +105,44 @@ export function EnergyPanel(): ReactElement {
   );
 }
 
-// --- Inline styling (matches the light shell of the Phase 3–6 UI) ------------
+// --- Inline styling (theme-aware, dark-first) --------------------------------
 
-const tableStyle: CSSProperties = {
-  borderCollapse: 'collapse',
-  fontSize: '0.85rem',
-  minWidth: '32rem',
-};
+function tableStyle(palette: Palette): CSSProperties {
+  return {
+    borderCollapse: 'collapse',
+    fontSize: '0.82rem',
+    minWidth: '29rem',
+    color: palette.textPrimary,
+  };
+}
 
-const thStyle: CSSProperties = {
-  padding: '0.3rem 0.6rem',
-  color: '#5b6472',
-  fontWeight: 600,
-  borderBottom: '1px solid #dfe3ea',
-  whiteSpace: 'nowrap',
-};
+function thStyle(palette: Palette): CSSProperties {
+  return {
+    padding: '0.3rem 0.6rem',
+    color: palette.textSecondary,
+    fontWeight: 600,
+    borderBottom: `1px solid ${palette.border}`,
+    whiteSpace: 'nowrap',
+  };
+}
 
-const symbolStyle: CSSProperties = {
-  color: '#8a93a2',
-  fontWeight: 400,
-  fontSize: '0.75rem',
-};
+function symbolStyle(palette: Palette): CSSProperties {
+  return { color: palette.textMuted, fontWeight: 400, fontSize: '0.72rem' };
+}
 
-const tdStyle: CSSProperties = {
-  padding: '0.25rem 0.6rem',
-  textAlign: 'right',
-  fontVariantNumeric: 'tabular-nums',
-};
+function tdStyle(palette: Palette): CSSProperties {
+  return {
+    padding: '0.22rem 0.6rem',
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
+    color: palette.textPrimary,
+  };
+}
 
-const totalRowStyle: CSSProperties = {
-  borderTop: '2px solid #d5dae2',
-  background: '#f4f6f9',
-};
+function totalRowStyle(palette: Palette): CSSProperties {
+  return { borderTop: `2px solid ${palette.borderStrong}`, background: palette.panelAlt };
+}
 
-const captionStyle: CSSProperties = {
-  margin: 0,
-  color: '#5b6472',
-  fontSize: '0.78rem',
-  lineHeight: 1.4,
-};
+function captionStyle(palette: Palette): CSSProperties {
+  return { margin: 0, color: palette.textMuted, fontSize: '0.74rem', lineHeight: 1.4 };
+}

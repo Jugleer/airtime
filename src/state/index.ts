@@ -193,8 +193,14 @@ export const DEFAULT_GHOSTS_ENABLED = true;
 
 /** Which scalar the charts plot: the vector magnitude or one axis component. */
 export type ChartAxisMode = 'magnitude' | 'x' | 'y' | 'z';
-/** Charts + energy panel shown by default (collapsible, DESIGN.md §6). */
-export const DEFAULT_CHARTS_VISIBLE = true;
+/**
+ * Charts + energy panel COLLAPSED by default (redesign 2026-07-10, owner override:
+ * the bottom dock starts collapsed so the scene/ladder get full height and no
+ * per-frame chart sampling runs until the operator opens the dock). Was `true`.
+ * `chartsVisible` still round-trips the URL codec, so a shared link carries the
+ * explicit state; only the fresh-boot default changed.
+ */
+export const DEFAULT_CHARTS_VISIBLE = false;
 /** Charts plot magnitude by default; the per-axis toggle switches to x/y/z. */
 export const DEFAULT_CHART_AXIS_MODE: ChartAxisMode = 'magnitude';
 
@@ -210,8 +216,22 @@ export const GRAPH_N_MIN = 3;
 export const GRAPH_N_MAX = GRAPH_MAX_N;
 /** Default N (DESIGN.md §7). */
 export const DEFAULT_GRAPH_MAX_HEIGHT = GRAPH_DEFAULT_N;
-/** Graph panel shown by default (collapsible like the charts, DESIGN.md §6). */
-export const DEFAULT_GRAPH_VISIBLE = true;
+/**
+ * State-graph overlay HIDDEN by default (redesign 2026-07-10, owner override: the
+ * graph is a translucent overlay over the 3D scene, toggled from the scene's
+ * top-left corner, and starts OFF so the scene reads cleanly). Was `true`.
+ * `graphVisible` still round-trips the URL codec; only the fresh-boot default changed.
+ */
+export const DEFAULT_GRAPH_VISIBLE = false;
+
+// --- Theme (redesign 2026-07-10) — a pure VIEW preference, dark by default. It is
+// deliberately NOT part of ShareConfig, so the URL codec is unchanged (a shared
+// link does not carry the viewer's theme). It lives in the store only so the
+// canvas charts + SVG views can read the active palette without prop-drilling.
+/** The color theme names (see ui/theme for the palettes). */
+export type ThemeName = 'dark' | 'light';
+/** Dark is the design default (owner override 2026-07-10). */
+export const DEFAULT_THEME: ThemeName = 'dark';
 
 // --- Audio settings (DESIGN.md §6) — the WebAudio ticks live in ui/useAudio; the
 // store owns the toggles + volume so they persist through the URL codec and
@@ -324,6 +344,10 @@ export interface AppStore {
   /** The camera pose applied on boot / by preset; sampled live for share links. */
   readonly cameraView: CameraPose;
 
+  // theme (redesign 2026-07-10) — a view preference, not shared via the codec.
+  /** Active color theme (dark by default). */
+  readonly theme: ThemeName;
+
   // presets (DESIGN.md §6) — names of the localStorage saves (config lives there).
   /** Sorted names of the saved presets (empty when storage is unavailable). */
   readonly presetNames: string[];
@@ -427,6 +451,10 @@ export interface AppStore {
 
   // --- Camera (DESIGN.md §6) — preset buttons + URL boot set the pose --------
   setCameraView(view: CameraPose): void;
+
+  // --- Theme (redesign 2026-07-10) — view preference, not codec-persisted -----
+  setTheme(theme: ThemeName): void;
+  toggleTheme(): void;
 
   // --- Save / share (DESIGN.md §6) ------------------------------------------
   /**
@@ -694,6 +722,8 @@ export const useAppStore = create<AppStore>((set, get) => {
     audioVolume: DEFAULT_AUDIO_VOLUME,
 
     cameraView: DEFAULT_CAMERA_POSE,
+
+    theme: DEFAULT_THEME,
 
     presetNames: presetNamesOf(readPresetMap(getLocalStorage())),
 
@@ -1119,6 +1149,10 @@ export const useAppStore = create<AppStore>((set, get) => {
     // --- Camera: preset buttons + URL boot store the pose here; the scene applies
     // it (and free-orbit changes are sampled live for share links). No sim touch. ---
     setCameraView: (cameraView) => set({ cameraView }),
+
+    // --- Theme (redesign 2026-07-10) — a view preference, no sim touch ---------
+    setTheme: (theme) => set({ theme }),
+    toggleTheme: () => set((state) => ({ theme: state.theme === 'dark' ? 'light' : 'dark' })),
 
     // --- Save / share (DESIGN.md §6) ------------------------------------------
     currentConfig: () => {

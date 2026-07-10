@@ -1,27 +1,19 @@
-// src/ui/Charts — the per-hand kinematics charts panel (DESIGN.md §6).
+// src/ui/Charts — the per-hand kinematics charts + energy DOCK (DESIGN.md §6;
+// redesign 2026-07-10, owner requirement 6). A collapsible bottom dock: a slim
+// tab bar when collapsed (≈ no height, no per-frame sampling), the three charts
+// (|v|, |a|, |j|) laid out side-by-side across the wide dock plus the per-hand
+// energy table when expanded. Starts COLLAPSED (DEFAULT_CHARTS_VISIBLE = false).
 //
-// Three stacked canvas charts — hand speed |v|, acceleration |a|, jerk |j| — with
-// every hand overlaid (a color per hand + a shared legend), so you can compare
-// hands directly: the dwell-clamp on a 1-throw shows as one hand's tall spike
-// against the others. The per-axis toggle (Magnitude / X / Y / Z) switches all
-// three from vector magnitude to a single component. The x-axis is the SAME window
-// as the timeline bar / ladder and a shared red cursor marks simTime across all
-// three (DESIGN.md §2: one clock).
+// Every hand is overlaid (a color per hand + a shared legend). The per-axis toggle
+// (Magnitude / X / Y / Z) switches all three from vector magnitude to a single
+// component. The x-axis is the SAME window as the timeline bar / ladder and a
+// shared cursor marks simTime across all three (DESIGN.md §2: one clock).
 //
-// Layout choice (overlaid, not per-hand rows): at n_h up to 8, three tall charts
-// with 8 overlaid traces stay readable and compact, and overlaying is what makes
-// the per-hand comparison legible. Rendering is hand-rolled canvas 2D (no chart
-// library, DESIGN.md §6), HiDPI-aware (devicePixelRatio), y-axis auto-scaled with
-// nice ticks (src/ui/charts). Discontinuities are honest: the quintic jerk STEPS
-// at events and the cubic carry's acceleration JUMPS — drawn as the near-vertical
-// segment between the straddling samples, never smoothed; non-finite samples break
-// the polyline so no NaN reaches the path.
-//
-// Hot path: the charts redraw every frame while playing (the window scrolls).
-// handState is sampled per hand over the window into Float32Arrays allocated ONCE
-// (sized for the max hand count × the fixed sample count) and overwritten in place
-// — no per-frame array allocation in the sampling loop beyond core's handState.
-// When the panel is hidden the body unmounts, so nothing is sampled or drawn.
+// Hot path: the charts redraw every frame while playing. handState is sampled per
+// hand over the window into Float32Arrays allocated ONCE and overwritten in place.
+// When the dock is collapsed the body unmounts, so nothing is sampled or drawn.
+// Canvas cannot read CSS variables, so the theme colors are read from the palette
+// and passed into the draw.
 
 import {
   useEffect,
@@ -33,6 +25,8 @@ import {
 import { HAND_COUNT_MAX, useAppStore, type ChartAxisMode } from '../state';
 import { CURSOR_FRACTION } from '../state/simulation';
 import { EnergyPanel } from './EnergyPanel';
+import { usePalette, type Palette } from './theme';
+import { Button } from './widgets';
 import {
   foldSampleRange,
   formatTick,
@@ -47,18 +41,32 @@ import {
 } from './charts';
 
 // Chart canvas CSS geometry (logical px; the backing store scales by dpr).
-const CHART_HEIGHT = 132;
-const MARGIN_LEFT = 48;
+const CHART_HEIGHT = 176;
+const MARGIN_LEFT = 46;
 const MARGIN_RIGHT = 10;
-const MARGIN_TOP = 18;
+const MARGIN_TOP = 20;
 const MARGIN_BOTTOM = 16;
 
-const GRID_COLOR = '#eceef2';
-const ZERO_COLOR = '#b3b9c4';
-const CURSOR_COLOR = '#e5484d';
-const LABEL_COLOR = '#8a93a2';
-const TITLE_COLOR = '#3b4252';
-const PLOT_BG = '#fbfcfe';
+/** The subset of the palette the canvas draw needs. */
+interface ChartColors {
+  readonly grid: string;
+  readonly zero: string;
+  readonly cursor: string;
+  readonly label: string;
+  readonly title: string;
+  readonly plotBg: string;
+}
+
+function chartColorsOf(palette: Palette): ChartColors {
+  return {
+    grid: palette.chartGrid,
+    zero: palette.chartZero,
+    cursor: palette.playhead,
+    label: palette.chartLabel,
+    title: palette.chartTitle,
+    plotBg: palette.chartPlotBg,
+  };
+}
 
 /** A 2D context, or null when the platform lacks canvas 2D (jsdom / no-canvas). */
 function get2dContext(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D | null {
@@ -83,6 +91,7 @@ function drawQuantity(
   timelineWindow: number,
   simTime: number,
   mode: ChartAxisMode,
+  colors: ChartColors,
 ): void {
   const ctx = get2dContext(canvas);
   if (!ctx || !canvas) {
@@ -111,11 +120,9 @@ function drawQuantity(
   const plotHeight = plotBottom - plotTop;
 
   // Plot background.
-  ctx.fillStyle = PLOT_BG;
+  ctx.fillStyle = colors.plotBg;
   ctx.fillRect(plotLeft, plotTop, plotWidth, plotHeight);
 
-  // Y-axis range: fold the finite samples; magnitude sits on a 0 floor, component
-  // mode includes 0 so the sign (and the zero line) reads.
   const acc = { min: Infinity, max: -Infinity };
   for (let hand = 0; hand < hands; hand++) {
     foldSampleRange(buffer, hand * SAMPLE_COUNT, SAMPLE_COUNT, acc);
@@ -139,13 +146,13 @@ function drawQuantity(
       continue;
     }
     const y = yOf(tick);
-    ctx.strokeStyle = tick === 0 ? ZERO_COLOR : GRID_COLOR;
+    ctx.strokeStyle = tick === 0 ? colors.zero : colors.grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(plotLeft, y);
     ctx.lineTo(plotRight, y);
     ctx.stroke();
-    ctx.fillStyle = LABEL_COLOR;
+    ctx.fillStyle = colors.label;
     ctx.fillText(formatTick(tick, scale.step), plotLeft - 5, y);
   }
 
@@ -181,7 +188,7 @@ function drawQuantity(
 
   // Shared simTime cursor (anchored at CURSOR_FRACTION of the window).
   const cursorX = xOf(simTime);
-  ctx.strokeStyle = CURSOR_COLOR;
+  ctx.strokeStyle = colors.cursor;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(cursorX, plotTop);
@@ -190,14 +197,14 @@ function drawQuantity(
 
   // Title (top-left) with unit; window-edge time labels (bottom corners).
   const meta = quantityMeta(quantity, mode);
-  ctx.fillStyle = TITLE_COLOR;
+  ctx.fillStyle = colors.title;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   ctx.font = '600 11px system-ui, -apple-system, sans-serif';
   ctx.fillText(`${meta.title} (${meta.unit})`, plotLeft, plotTop - 6);
 
   ctx.font = '10px system-ui, -apple-system, sans-serif';
-  ctx.fillStyle = LABEL_COLOR;
+  ctx.fillStyle = colors.label;
   ctx.textBaseline = 'top';
   ctx.fillText(`${Math.max(0, windowStart).toFixed(2)} s`, plotLeft + 1, plotBottom + 3);
   ctx.textAlign = 'right';
@@ -206,6 +213,7 @@ function drawQuantity(
 
 /** The three canvases + the per-frame sampling/draw effect (mounted only when shown). */
 function ChartsBody(): ReactElement {
+  const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const simTime = useAppStore((state) => state.simTime);
   const handCount = useAppStore((state) => state.handCount);
@@ -216,7 +224,6 @@ function ChartsBody(): ReactElement {
   const accelerationRef = useRef<HTMLCanvasElement>(null);
   const jerkRef = useRef<HTMLCanvasElement>(null);
 
-  // Buffers allocated ONCE (max hands × fixed sample count), reused every frame.
   const buffers = useMemo(
     () => ({
       time: new Float32Array(SAMPLE_COUNT),
@@ -228,17 +235,14 @@ function ChartsBody(): ReactElement {
   );
 
   useEffect(() => {
-    // Inline the past-span (avoid a per-frame windowSpans object): this effect
-    // runs every frame while playing (Phase 9 hot-path pass).
+    const colors = chartColorsOf(palette);
     const windowStart = simTime - timelineWindow * CURSOR_FRACTION;
     const kinematics = sim.kinematics;
     const hands = Math.min(handCount, HAND_COUNT_MAX);
 
-    // Sample times across the window (shared x-axis).
     for (let i = 0; i < SAMPLE_COUNT; i++) {
       buffers.time[i] = windowSampleTime(i, SAMPLE_COUNT, windowStart, timelineWindow);
     }
-    // One handState evaluation per (hand, sample) fills all three quantity buffers.
     for (let hand = 0; hand < hands; hand++) {
       const base = hand * SAMPLE_COUNT;
       for (let i = 0; i < SAMPLE_COUNT; i++) {
@@ -249,43 +253,14 @@ function ChartsBody(): ReactElement {
       }
     }
 
-    drawQuantity(
-      velocityRef.current,
-      'velocity',
-      buffers.velocity,
-      buffers.time,
-      hands,
-      windowStart,
-      timelineWindow,
-      simTime,
-      chartAxisMode,
-    );
-    drawQuantity(
-      accelerationRef.current,
-      'acceleration',
-      buffers.acceleration,
-      buffers.time,
-      hands,
-      windowStart,
-      timelineWindow,
-      simTime,
-      chartAxisMode,
-    );
-    drawQuantity(
-      jerkRef.current,
-      'jerk',
-      buffers.jerk,
-      buffers.time,
-      hands,
-      windowStart,
-      timelineWindow,
-      simTime,
-      chartAxisMode,
-    );
-  }, [sim, simTime, handCount, timelineWindow, chartAxisMode, buffers]);
+    const args = [hands, windowStart, timelineWindow, simTime, chartAxisMode, colors] as const;
+    drawQuantity(velocityRef.current, 'velocity', buffers.velocity, buffers.time, ...args);
+    drawQuantity(accelerationRef.current, 'acceleration', buffers.acceleration, buffers.time, ...args);
+    drawQuantity(jerkRef.current, 'jerk', buffers.jerk, buffers.time, ...args);
+  }, [sim, simTime, handCount, timelineWindow, chartAxisMode, buffers, palette]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+    <div style={{ display: 'flex', flex: 1, minWidth: 0, gap: '0.5rem' }}>
       <canvas ref={velocityRef} aria-label="Hand speed chart" style={canvasStyle} />
       <canvas ref={accelerationRef} aria-label="Hand acceleration chart" style={canvasStyle} />
       <canvas ref={jerkRef} aria-label="Hand jerk chart" style={canvasStyle} />
@@ -302,6 +277,7 @@ const AXIS_OPTIONS: readonly { readonly value: ChartAxisMode; readonly label: st
 
 /** The color legend: a swatch + label per active hand (shared across charts). */
 function Legend({ handCount }: { readonly handCount: number }): ReactElement {
+  const palette = usePalette();
   const items: ReactElement[] = [];
   for (let hand = 0; hand < handCount; hand++) {
     items.push(
@@ -312,19 +288,23 @@ function Legend({ handCount }: { readonly handCount: number }): ReactElement {
     );
   }
   return (
-    <div role="group" aria-label="Chart legend" style={legendRowStyle}>
+    <div
+      role="group"
+      aria-label="Chart legend"
+      style={{ ...legendRowStyle, color: palette.textSecondary }}
+    >
       {items}
     </div>
   );
 }
 
 /**
- * The collapsible charts + energy panel. The "Charts" toggle hides the whole
- * section; when hidden, {@link ChartsBody} (and the energy panel) unmount, so no
- * per-frame sampling happens. The header (title, toggle, axis mode, legend) does
- * NOT subscribe to simTime, so it never re-renders per frame — only the body does.
+ * The collapsible charts + energy DOCK. The toggle collapses the whole dock to a
+ * slim tab bar; when collapsed the body unmounts, so no per-frame sampling runs.
+ * The header never subscribes to simTime, so it never re-renders per frame.
  */
 export function Charts(): ReactElement {
+  const palette = usePalette();
   const chartsVisible = useAppStore((state) => state.chartsVisible);
   const chartAxisMode = useAppStore((state) => state.chartAxisMode);
   const handCount = useAppStore((state) => state.handCount);
@@ -332,115 +312,93 @@ export function Charts(): ReactElement {
   const setChartAxisMode = useAppStore((state) => state.setChartAxisMode);
 
   return (
-    <section style={sectionStyle} aria-label="Charts and energy panel">
-      <div style={headerRowStyle}>
-        <h2 style={{ margin: 0, fontSize: '1rem', color: TITLE_COLOR }}>Charts &amp; energy</h2>
-        <button
-          type="button"
+    <section
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.5rem',
+        padding: chartsVisible ? '0.5rem 0.7rem 0.6rem' : '0.3rem 0.7rem',
+        background: palette.panel,
+        borderRadius: '0.55rem',
+        border: `1px solid ${palette.border}`,
+        width: '100%',
+      }}
+      aria-label="Charts and energy panel"
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem 1rem', flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0, fontSize: '0.85rem', color: palette.textPrimary, fontWeight: 700 }}>
+          Charts &amp; energy
+        </h2>
+        {chartsVisible ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.78rem', color: palette.textSecondary }}>
+                Component
+              </span>
+              <div style={{ display: 'flex', gap: '0.3rem' }}>
+                {AXIS_OPTIONS.map((option) => {
+                  const active = option.value === chartAxisMode;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      aria-label={`Chart component: ${option.label}`}
+                      aria-pressed={active}
+                      onClick={() => setChartAxisMode(option.value)}
+                      style={axisButtonStyle(palette, active)}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <Legend handCount={handCount} />
+          </>
+        ) : (
+          <span style={{ fontSize: '0.76rem', color: palette.textMuted }}>
+            per-hand |v| · |a| · |j| and the energy table
+          </span>
+        )}
+        <div style={{ flex: 1 }} />
+        <Button
           onClick={toggleCharts}
-          aria-pressed={chartsVisible}
-          aria-label="Toggle charts and energy panel"
-          style={toggleButtonStyle}
+          ariaLabel="Toggle charts and energy panel"
+          ariaPressed={chartsVisible}
+          variant={chartsVisible ? 'default' : 'primary'}
         >
-          {chartsVisible ? 'Hide charts' : 'Show charts'}
-        </button>
+          {chartsVisible ? 'Hide charts ▾' : 'Show charts ▴'}
+        </Button>
       </div>
 
       {chartsVisible ? (
-        <>
-          <div style={controlRowStyle}>
-            <span style={{ fontWeight: 600, fontSize: '0.85rem', color: TITLE_COLOR }}>
-              Component
-            </span>
-            <div style={{ display: 'flex', gap: '0.35rem' }}>
-              {AXIS_OPTIONS.map((option) => {
-                const active = option.value === chartAxisMode;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    aria-label={`Chart component: ${option.label}`}
-                    aria-pressed={active}
-                    onClick={() => setChartAxisMode(option.value)}
-                    style={{ ...axisButtonStyle, ...(active ? axisButtonActiveStyle : null) }}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-            <Legend handCount={handCount} />
-          </div>
-
+        <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'stretch', flexWrap: 'wrap' }}>
           <ChartsBody />
-          <EnergyPanelDivider />
-          <EnergyPanel />
-        </>
+          <div style={{ minWidth: '30rem', flexShrink: 0 }}>
+            <EnergyPanel />
+          </div>
+        </div>
       ) : null}
     </section>
   );
 }
 
-/** A thin labeled divider between the charts and the energy table. */
-function EnergyPanelDivider(): ReactElement {
-  return (
-    <div style={dividerRowStyle}>
-      <span style={{ fontWeight: 600, fontSize: '0.85rem', color: TITLE_COLOR }}>
-        Energy (per hand, one period)
-      </span>
-      <span style={{ flex: 1, height: 1, background: '#e2e6ec' }} />
-    </div>
-  );
-}
-
-// --- Inline styling (matches the light shell of the Phase 3–6 UI) ------------
-
-const sectionStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.6rem',
-  padding: '0.75rem',
-  background: '#ffffff',
-  borderRadius: '0.6rem',
-  border: '1px solid #dfe3ea',
-  width: '100%',
-};
-
-const headerRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '0.5rem',
-};
-
-const controlRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  gap: '0.6rem 1rem',
-};
-
-const dividerRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.6rem',
-  marginTop: '0.2rem',
-};
+// --- Inline styling ----------------------------------------------------------
 
 const canvasStyle: CSSProperties = {
   display: 'block',
+  flex: 1,
+  minWidth: 0,
   width: '100%',
   height: `${CHART_HEIGHT}px`,
-  background: '#ffffff',
 };
 
 const legendRowStyle: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: '0.35rem 0.75rem',
+  gap: '0.3rem 0.7rem',
   alignItems: 'center',
-  fontSize: '0.8rem',
-  color: '#5b6472',
+  fontSize: '0.76rem',
 };
 
 const legendItemStyle: CSSProperties = {
@@ -456,29 +414,15 @@ const legendSwatchStyle: CSSProperties = {
   borderRadius: '0.15rem',
 };
 
-const toggleButtonStyle: CSSProperties = {
-  padding: '0.35rem 0.8rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontWeight: 600,
-  fontSize: '0.85rem',
-  cursor: 'pointer',
-};
-
-const axisButtonStyle: CSSProperties = {
-  padding: '0.3rem 0.6rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontWeight: 600,
-  fontSize: '0.8rem',
-  color: '#3b4252',
-  cursor: 'pointer',
-};
-
-const axisButtonActiveStyle: CSSProperties = {
-  background: '#2f6fed',
-  borderColor: '#2f6fed',
-  color: '#ffffff',
-};
+function axisButtonStyle(palette: Palette, active: boolean): CSSProperties {
+  return {
+    padding: '0.28rem 0.55rem',
+    borderRadius: '0.4rem',
+    border: `1px solid ${active ? palette.accent : palette.border}`,
+    background: active ? palette.accent : palette.panelAlt,
+    fontWeight: 600,
+    fontSize: '0.76rem',
+    color: active ? palette.accentText : palette.textSecondary,
+    cursor: 'pointer',
+  };
+}

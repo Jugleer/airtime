@@ -48,17 +48,39 @@ live charts, deterministic playback, and pixel-identical share links essentially
   WebAudio clock so they stay aligned with the throws; master toggle + volume.
 - **Help overlay** — the `?` button explains siteswap and every control group.
 
+## Layout
+
+Airtime is **dark by default** and lays out in a single no-scroll window (sized for a
+landscape ~2000×1300 display; smaller windows collapse panels or scroll gracefully):
+
+- **Left sidebar** — pattern input (with the live validation / ball-count line), the
+  pattern library, **Tempo & physics**, and **Hands & geometry**.
+- **Center stage** — the large 3D scene with the **timeline bar docked to its bottom
+  edge** (mini-ladder, scrub playhead, detachable trail handle, period readout) and the
+  prominent **play / pause + restart** transport. Camera presets sit in the scene's
+  top-right corner; the **state-graph toggle** sits top-left.
+- **Right column** — the ladder diagram.
+- **Bottom dock** — **Charts & energy**, a collapsible dock (starts collapsed, taking ≈
+  no height; expands to three side-by-side charts + the energy table).
+- **State graph** — a translucent **overlay over the 3D scene** (default off), toggled
+  from the scene's top-left; the ring layout, marker, status line, N stepper and hard
+  reset all live in the overlay.
+- **Settings drawer** (top-bar button) — theme (dark/light), playback speed, ball
+  radius / color, per-ball coloring, timeline window, trail length, ghosts, and
+  Save/Share + Audio. A **Help** (`?`) button sits beside it.
+
 ## Controls at a glance
 
-| Group | Controls |
-|---|---|
-| Pattern | Text input (live validation), library dropdown, play/pause, restart |
-| Tempo & physics | Beat period, dwell time, gravity, hold depth, carry path (quintic/cubic) |
-| Playback & view | Playback speed (viewing only — not physics), ball radius, timeline window, trail length |
-| Hands & geometry | Hand count (1–8), line/circle preset, draggable catch/throw editor |
-| Coloring | Orbit coloring, future ghosts, single ball color |
-| State graph | N stepper (auto-expands, warns ≥ 9), collapsible panel, hard reset |
-| Save/share & audio | Copy share link, Save PNG, Export/Import JSON, named presets, audio toggle + volume |
+| Group | Where | Controls |
+|---|---|---|
+| Pattern | Left sidebar | Text input (live validation), library dropdown |
+| Transport | Timeline strip | Play/pause, restart |
+| Tempo & physics | Left sidebar | Beat period, dwell time, gravity, hold depth, carry path (quintic/cubic) |
+| Hands & geometry | Left sidebar | Hand count (1–8), line/circle preset, draggable catch/throw editor |
+| View | Settings drawer | Playback speed (viewing only — not physics), ball radius, timeline window, trail length, per-ball coloring, future ghosts, single ball color |
+| State graph | Scene overlay | N stepper (auto-expands, warns ≥ 9), hard reset, click-to-transition |
+| Theme | Settings drawer | Dark (default) / Light |
+| Save/share & audio | Settings drawer | Copy share link, Save PNG, Export/Import JSON, named presets, audio toggle + volume |
 
 ## Sharing & persistence
 
@@ -77,19 +99,22 @@ live charts, deterministic playback, and pixel-identical share links essentially
 
 ## Screenshots
 
-Captured headless from the running app (pattern `531`, opened via a share link):
+Captured headless from the running app at 2000×1300 (pattern `531`, opened via a share
+link) in the default dark layout:
 
-**3D scene** — the 531 pattern mid-flight with trails and dashed future ghosts:
+**3D scene** — the 531 pattern mid-flight with trails and dashed future ghosts, the
+timeline docked to the scene's bottom edge, and the ladder diagram in the right column:
 
 ![3D scene](docs/screenshot-scene.png)
 
-**State graph** — the 35 states of (b = 3, N = 7) in excitation-level columns, the
-running 531 cycle highlighted, and the beat-hopping marker:
+**State graph** — the translucent overlay over the scene: the 35 states of (b = 3,
+N = 7) in excitation rings, the running 531 cycle highlighted, and the beat-hopping
+marker:
 
 ![State graph](docs/screenshot-graph.png)
 
-**Charts & energy** — per-hand |v|/|a|/|j| over the timeline window, plus the per-hand
-energy table:
+**Charts & energy** — the bottom dock expanded: per-hand |v|/|a|/|j| over the timeline
+window, plus the per-hand energy table:
 
 ![Charts and energy](docs/screenshot-charts.png)
 

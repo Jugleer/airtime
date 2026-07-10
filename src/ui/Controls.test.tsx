@@ -57,37 +57,24 @@ describe('Controls (ui layer)', () => {
     expect(useAppStore.getState().sim.patternText).toBe('3');
   });
 
-  it('toggles play/pause through the store', () => {
-    render(<Controls />);
-    // Starts playing → button reads "Pause".
-    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
-    expect(useAppStore.getState().playing).toBe(false);
-    expect(screen.getByRole('button', { name: 'Play' })).toBeTruthy();
-  });
+  // Redesign 2026-07-10: play/pause + restart moved to ui/Transport (docked in the
+  // timeline strip). The store-wiring assertion moved to Transport.test — see there.
 
   it('renders the ball-count readout for a valid pattern', () => {
     render(<Controls />);
     expect(screen.getByText(/3 balls/)).toBeTruthy();
   });
 
-  it('exposes the 3D scene controls and toggles per-ball coloring through the store', () => {
-    render(<Controls />);
-    expect(screen.getByLabelText('Ball radius')).toBeTruthy();
-    expect(screen.getByLabelText('Ball color')).toBeTruthy();
+  // Redesign 2026-07-10: the 3D view controls (ball radius, ball color, per-ball
+  // coloring) moved to the Settings drawer. Those assertions moved to Settings.test.
 
-    const toggle = screen.getByLabelText('Colour balls individually');
-    expect(useAppStore.getState().orbitColoring).toBe(false); // fixture baseline
-    fireEvent.click(toggle);
-    expect(useAppStore.getState().orbitColoring).toBe(true);
-  });
-
-  it('exposes the runtime physics sliders (gravity, hold depth) distinct from playback', () => {
+  it('exposes the runtime physics sliders (gravity, hold depth) in the sidebar', () => {
     render(<Controls />);
     expect(screen.getByLabelText('Gravity')).toBeTruthy();
     expect(screen.getByLabelText('Hold depth')).toBeTruthy();
-    // Tempo and playback speed are in separately labeled sections.
+    // Tempo & physics live in the sidebar; playback speed (viewing) lives in
+    // Settings — the two are never on the same panel (see Settings.test).
     expect(screen.getByText('Tempo & physics')).toBeTruthy();
-    expect(screen.getByText('Playback speed & view')).toBeTruthy();
   });
 
   it('steps the hand count through the store (full rebuild)', () => {

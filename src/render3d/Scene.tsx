@@ -142,23 +142,50 @@ function CameraRig(): ReactElement {
   );
 }
 
+/**
+ * Themed colors the scene needs (passed down from the ui layer so render3d stays
+ * ui-import-free; ui → render3d is the allowed direction). Defaults are the dark
+ * palette so <Scene/> also renders standalone (tests, storybook).
+ */
+export interface SceneColors {
+  readonly background: string;
+  readonly gridCell: string;
+  readonly gridSection: string;
+  readonly overlayPanel: string;
+  readonly overlayBorder: string;
+  readonly overlayText: string;
+  readonly accent: string;
+  readonly accentText: string;
+}
+
+const DEFAULT_SCENE_COLORS: SceneColors = {
+  background: '#0b1120',
+  gridCell: '#24314a',
+  gridSection: '#33415a',
+  overlayPanel: 'rgba(30, 41, 59, 0.82)',
+  overlayBorder: '#334155',
+  overlayText: '#f1f5f9',
+  accent: '#3b82f6',
+  accentText: '#ffffff',
+};
+
 /** Lights + ground grid — analytic, asset-free (DESIGN.md §6). */
-function Environment(): ReactElement {
+function Environment({ colors }: { colors: SceneColors }): ReactElement {
   return (
     <>
-      <hemisphereLight args={['#ffffff', '#9aa4b2', 0.8]} />
-      <ambientLight intensity={0.35} />
-      <directionalLight position={[3, 6, 4]} intensity={1.1} />
+      <hemisphereLight args={['#ffffff', '#334155', 0.7]} />
+      <ambientLight intensity={0.45} />
+      <directionalLight position={[3, 6, 4]} intensity={1.15} />
       <Grid
         position={[0, 0, 0]}
         args={[20, 20]}
         infiniteGrid
         cellSize={0.2}
         cellThickness={0.6}
-        cellColor="#c8cdd6"
+        cellColor={colors.gridCell}
         sectionSize={1}
         sectionThickness={1}
-        sectionColor="#a2acbd"
+        sectionColor={colors.gridSection}
         fadeDistance={18}
         fadeStrength={1.5}
       />
@@ -166,8 +193,9 @@ function Environment(): ReactElement {
   );
 }
 
-/** The 3D scene view. */
-export function Scene(): ReactElement {
+/** The 3D scene view. Fills its stage cell; the timeline docks beneath it in App. */
+export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = {}): ReactElement {
+  const colors = sceneColors ?? DEFAULT_SCENE_COLORS;
   const [preset, setPreset] = useState<CameraPreset>('front');
   const setCameraView = useAppStore((state) => state.setCameraView);
   // Decide once; capability does not change during a session.
@@ -178,7 +206,7 @@ export function Scene(): ReactElement {
 
   if (!supported) {
     return (
-      <div style={placeholderStyle} role="img" aria-label="3D scene (WebGL unavailable)">
+      <div style={placeholderStyle(colors)} role="img" aria-label="3D scene (WebGL unavailable)">
         3D scene requires a WebGL-capable browser.
       </div>
     );
@@ -186,7 +214,7 @@ export function Scene(): ReactElement {
 
   const initial = presetView('front');
   return (
-    <div style={sceneContainerStyle}>
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' }}>
       <Canvas
         style={{ width: '100%', height: '100%', display: 'block' }}
         dpr={[1, 2]}
@@ -203,14 +231,15 @@ export function Scene(): ReactElement {
           far: 100,
         }}
       >
-        <color attach="background" args={['#eef1f5']} />
-        <Environment />
+        <color attach="background" args={[colors.background]} />
+        <Environment colors={colors} />
         <CameraRig />
         <Tracers />
         <Balls />
         <HandGizmos />
       </Canvas>
 
+      {/* Camera presets: top-right (DESIGN.md §6; graph toggle sits top-left, in App). */}
       <div style={presetBarStyle}>
         {CAMERA_PRESETS.map((option) => (
           <button
@@ -221,10 +250,7 @@ export function Scene(): ReactElement {
               setCameraView(presetView(option));
             }}
             aria-pressed={preset === option}
-            style={{
-              ...presetButtonStyle,
-              ...(preset === option ? presetButtonActiveStyle : null),
-            }}
+            style={presetButtonStyle(colors, preset === option)}
           >
             {CAMERA_PRESET_LABELS[option]}
           </button>
@@ -234,56 +260,43 @@ export function Scene(): ReactElement {
   );
 }
 
-// --- Inline styling (matches the light shell of the Phase 3 UI) --------------
-
-const sceneContainerStyle: CSSProperties = {
-  position: 'relative',
-  width: '100%',
-  height: 'min(60vh, 34rem)',
-  minHeight: '20rem',
-  borderRadius: '0.5rem',
-  overflow: 'hidden',
-  border: '1px solid #d5dae2',
-  background: '#eef1f5',
-};
+// --- Inline styling (dark-first overlays over the 3D scene) -------------------
 
 const presetBarStyle: CSSProperties = {
   position: 'absolute',
-  top: '0.6rem',
-  right: '0.6rem',
+  top: '0.55rem',
+  right: '0.55rem',
   display: 'flex',
-  gap: '0.35rem',
+  gap: '0.3rem',
   flexWrap: 'wrap',
   justifyContent: 'flex-end',
+  zIndex: 3,
 };
 
-const presetButtonStyle: CSSProperties = {
-  padding: '0.3rem 0.6rem',
-  borderRadius: '0.35rem',
-  border: '1px solid #c8cdd6',
-  background: 'rgba(255, 255, 255, 0.9)',
-  fontSize: '0.8rem',
-  fontWeight: 600,
-  color: '#3b4252',
-  cursor: 'pointer',
-};
+function presetButtonStyle(colors: SceneColors, active: boolean): CSSProperties {
+  return {
+    padding: '0.28rem 0.55rem',
+    borderRadius: '0.35rem',
+    border: `1px solid ${active ? colors.accent : colors.overlayBorder}`,
+    background: active ? colors.accent : colors.overlayPanel,
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    color: active ? colors.accentText : colors.overlayText,
+    cursor: 'pointer',
+    backdropFilter: 'blur(4px)',
+  };
+}
 
-const presetButtonActiveStyle: CSSProperties = {
-  background: '#2f6fed',
-  borderColor: '#2f6fed',
-  color: '#ffffff',
-};
-
-const placeholderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '100%',
-  height: 'min(60vh, 34rem)',
-  minHeight: '20rem',
-  borderRadius: '0.5rem',
-  border: '1px dashed #c8cdd6',
-  background: '#f4f6f9',
-  color: '#5b6472',
-  fontSize: '0.95rem',
-};
+function placeholderStyle(colors: SceneColors): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+    minHeight: '12rem',
+    width: '100%',
+    background: colors.background,
+    color: colors.overlayText,
+    fontSize: '0.95rem',
+  };
+}

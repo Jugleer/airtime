@@ -3,6 +3,7 @@
 // only (no images); self-contained so the SPA stays asset-free (CLAUDE.md).
 
 import { useState, type CSSProperties, type ReactElement } from 'react';
+import { usePalette, type Palette } from './theme';
 
 interface Section {
   readonly heading: string;
@@ -69,17 +70,23 @@ const CONTROL_SECTIONS: readonly Section[] = [
   },
 ];
 
-function SectionList({ sections }: { readonly sections: readonly Section[] }): ReactElement {
+function SectionList({
+  sections,
+  palette,
+}: {
+  readonly sections: readonly Section[];
+  readonly palette: Palette;
+}): ReactElement {
   return (
     <>
       {sections.map((section) => (
         <div key={section.heading} style={{ marginBottom: '0.75rem' }}>
-          <h4 style={subHeadingStyle}>{section.heading}</h4>
+          <h4 style={subHeadingStyle(palette)}>{section.heading}</h4>
           <dl style={{ margin: 0 }}>
             {section.items.map(([term, description]) => (
               <div key={term} style={{ marginBottom: '0.35rem' }}>
-                <dt style={{ fontWeight: 600, color: '#3b4252' }}>{term}</dt>
-                <dd style={{ margin: '0 0 0 0', color: '#5b6472', fontSize: '0.9rem' }}>
+                <dt style={{ fontWeight: 600, color: palette.textPrimary }}>{term}</dt>
+                <dd style={{ margin: 0, color: palette.textSecondary, fontSize: '0.9rem', lineHeight: 1.45 }}>
                   {description}
                 </dd>
               </div>
@@ -93,6 +100,7 @@ function SectionList({ sections }: { readonly sections: readonly Section[] }): R
 
 /** The "?" help button + its modal overlay. Self-contained (owns its open state). */
 export function Help(): ReactElement {
+  const palette = usePalette();
   const [open, setOpen] = useState(false);
 
   return (
@@ -102,7 +110,7 @@ export function Help(): ReactElement {
         onClick={() => setOpen(true)}
         aria-label="Help"
         title="Help — siteswap and controls"
-        style={helpButtonStyle}
+        style={helpButtonStyle(palette)}
       >
         ?
       </button>
@@ -112,26 +120,28 @@ export function Help(): ReactElement {
           role="dialog"
           aria-modal="true"
           aria-label="Help"
-          style={backdropStyle}
+          style={backdropStyle(palette)}
           onClick={() => setOpen(false)}
         >
-          <div style={modalStyle} onClick={(event) => event.stopPropagation()}>
-            <div style={modalHeaderStyle}>
-              <h3 style={{ margin: 0 }}>How Airtime works</h3>
+          <div style={modalStyle(palette)} onClick={(event) => event.stopPropagation()}>
+            <div style={modalHeaderStyle(palette)}>
+              <h3 style={{ margin: 0, color: palette.textPrimary }}>How Airtime works</h3>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close help"
-                style={closeButtonStyle}
+                style={closeButtonStyle(palette)}
               >
                 ×
               </button>
             </div>
-            <div style={modalBodyStyle}>
-              <h4 style={{ ...subHeadingStyle, marginTop: 0, fontSize: '0.95rem' }}>Siteswap</h4>
-              <SectionList sections={SITESWAP_SECTIONS} />
-              <h4 style={{ ...subHeadingStyle, fontSize: '0.95rem' }}>Controls</h4>
-              <SectionList sections={CONTROL_SECTIONS} />
+            <div style={{ padding: '1rem 1.25rem', overflowY: 'auto' }}>
+              <h4 style={{ ...subHeadingStyle(palette), marginTop: 0, fontSize: '0.95rem' }}>
+                Siteswap
+              </h4>
+              <SectionList sections={SITESWAP_SECTIONS} palette={palette} />
+              <h4 style={{ ...subHeadingStyle(palette), fontSize: '0.95rem' }}>Controls</h4>
+              <SectionList sections={CONTROL_SECTIONS} palette={palette} />
             </div>
           </div>
         </div>
@@ -140,74 +150,82 @@ export function Help(): ReactElement {
   );
 }
 
-// --- Inline styling ----------------------------------------------------------
+// --- Inline styling (theme-aware, dark-first) --------------------------------
 
-const helpButtonStyle: CSSProperties = {
-  width: '1.9rem',
-  height: '1.9rem',
-  borderRadius: '50%',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontWeight: 700,
-  fontSize: '1rem',
-  color: '#3b4252',
-  cursor: 'pointer',
-  lineHeight: 1,
-};
+function helpButtonStyle(palette: Palette): CSSProperties {
+  return {
+    width: '2.1rem',
+    height: '2.1rem',
+    borderRadius: '50%',
+    border: `1px solid ${palette.border}`,
+    background: palette.panelAlt,
+    fontWeight: 700,
+    fontSize: '1rem',
+    color: palette.textPrimary,
+    cursor: 'pointer',
+    lineHeight: 1,
+    flexShrink: 0,
+  };
+}
 
-const backdropStyle: CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(20, 24, 31, 0.45)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '1.5rem',
-  zIndex: 100,
-};
+function backdropStyle(palette: Palette): CSSProperties {
+  return {
+    position: 'fixed',
+    inset: 0,
+    background: palette.overlayBackdrop,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '1.5rem',
+    zIndex: 300,
+  };
+}
 
-const modalStyle: CSSProperties = {
-  background: '#ffffff',
-  borderRadius: '0.7rem',
-  border: '1px solid #dfe3ea',
-  maxWidth: '40rem',
-  width: '100%',
-  maxHeight: '85vh',
-  display: 'flex',
-  flexDirection: 'column',
-  boxShadow: '0 10px 40px rgba(20, 24, 31, 0.3)',
-};
+function modalStyle(palette: Palette): CSSProperties {
+  return {
+    background: palette.panel,
+    borderRadius: '0.7rem',
+    border: `1px solid ${palette.border}`,
+    maxWidth: '40rem',
+    width: '100%',
+    maxHeight: '85vh',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: palette.shadow,
+  };
+}
 
-const modalHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  padding: '1rem 1.25rem',
-  borderBottom: '1px solid #eceef2',
-};
+function modalHeaderStyle(palette: Palette): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '1rem 1.25rem',
+    borderBottom: `1px solid ${palette.border}`,
+  };
+}
 
-const modalBodyStyle: CSSProperties = {
-  padding: '1rem 1.25rem',
-  overflowY: 'auto',
-};
+function subHeadingStyle(palette: Palette): CSSProperties {
+  return {
+    margin: '0.5rem 0 0.4rem',
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    letterSpacing: '0.03em',
+    textTransform: 'uppercase',
+    color: palette.textMuted,
+  };
+}
 
-const subHeadingStyle: CSSProperties = {
-  margin: '0.5rem 0 0.4rem',
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  letterSpacing: '0.03em',
-  textTransform: 'uppercase',
-  color: '#6b7280',
-};
-
-const closeButtonStyle: CSSProperties = {
-  width: '1.9rem',
-  height: '1.9rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontSize: '1.3rem',
-  lineHeight: 1,
-  cursor: 'pointer',
-  color: '#5b6472',
-};
+function closeButtonStyle(palette: Palette): CSSProperties {
+  return {
+    width: '1.9rem',
+    height: '1.9rem',
+    borderRadius: '0.4rem',
+    border: `1px solid ${palette.border}`,
+    background: palette.panelAlt,
+    fontSize: '1.3rem',
+    lineHeight: 1,
+    cursor: 'pointer',
+    color: palette.textSecondary,
+  };
+}

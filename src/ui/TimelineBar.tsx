@@ -23,6 +23,8 @@ import {
 } from 'react';
 import { useAppStore } from '../state';
 import { firstBeatAtOrAfter, windowSpans } from '../state/simulation';
+import { Transport } from './Transport';
+import { usePalette } from './theme';
 import {
   clampSimTime,
   timeFromPointer,
@@ -43,9 +45,6 @@ const BAND_H = BAND_BOTTOM - BAND_TOP;
 const PLAYHEAD_TOP = 8;
 const PLAYHEAD_BOTTOM = BAND_BOTTOM + 8;
 
-const TICK_COLOR = '#8a93a2';
-const LANE_COLOR = '#e2e6ec';
-
 interface DragSession {
   readonly mode: 'playhead' | 'trail';
   readonly wasPlaying: boolean;
@@ -58,12 +57,16 @@ function makeGeometry(windowStart: number, timelineWindow: number): BarGeometry 
 }
 
 export function TimelineBar(): ReactElement {
+  const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const simTime = useAppStore((state) => state.simTime);
   const handCount = useAppStore((state) => state.handCount);
   const beatPeriod = useAppStore((state) => state.beatPeriod);
   const timelineWindow = useAppStore((state) => state.timelineWindow);
   const trailLength = useAppStore((state) => state.trailLength);
+
+  const TICK_COLOR = palette.textMuted;
+  const LANE_COLOR = palette.laneLine;
 
   const svgRef = useRef<SVGSVGElement>(null);
   const handleRef = useRef<SVGGElement>(null);
@@ -167,7 +170,7 @@ export function TimelineBar(): ReactElement {
     }
     const x = xOfTime(time, geometry);
     beatMarks.push(
-      <line key={`beat-${beat}`} x1={x} y1={BAND_TOP} x2={x} y2={BAND_BOTTOM} stroke="#f0f2f5" strokeWidth={1} />,
+      <line key={`beat-${beat}`} x1={x} y1={BAND_TOP} x2={x} y2={BAND_BOTTOM} stroke={palette.gridLine} strokeWidth={1} />,
     );
   }
 
@@ -216,16 +219,41 @@ export function TimelineBar(): ReactElement {
     );
   }
 
+  const readoutStyle: CSSProperties = { color: palette.textMuted, fontVariantNumeric: 'tabular-nums' };
+
   return (
-    <section style={sectionStyle} aria-label="Timeline bar">
-      <div style={readoutRowStyle}>
-        <span style={{ fontWeight: 600 }}>Timeline</span>
+    <section
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.4rem',
+        padding: '0.5rem 0.65rem 0.55rem',
+        background: palette.panelAlt,
+        borderTop: `1px solid ${palette.border}`,
+        width: '100%',
+      }}
+      aria-label="Timeline bar"
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0.5rem 1rem',
+          alignItems: 'center',
+          fontSize: '0.78rem',
+          color: palette.textSecondary,
+        }}
+      >
+        <Transport />
         <span style={readoutStyle}>pattern repeats every {repeatSeconds.toFixed(2)} s</span>
         <span style={readoutStyle}>window {timelineWindow.toFixed(1)} s</span>
         <span style={readoutStyle}>
-          trail {trailLength.toFixed(2)} s{handle.pinned ? ' (pinned to edge)' : ''}
+          trail {trailLength.toFixed(2)} s{handle.pinned ? ' (pinned)' : ''}
         </span>
-        <span style={{ ...readoutStyle, color: '#e5484d' }}>t = {simTime.toFixed(2)} s</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ ...readoutStyle, color: palette.playhead, fontWeight: 700 }}>
+          t = {simTime.toFixed(2)} s
+        </span>
       </div>
 
       <svg
@@ -248,8 +276,8 @@ export function TimelineBar(): ReactElement {
           y={BAND_TOP - 6}
           width={PLOT_W}
           height={BAND_BOTTOM - BAND_TOP + 12}
-          fill="#fbfcfe"
-          stroke="#d5dae2"
+          fill={palette.inset}
+          stroke={palette.border}
           strokeWidth={1}
         />
 
@@ -263,57 +291,30 @@ export function TimelineBar(): ReactElement {
           y={BAND_TOP}
           width={Math.max(0, playheadX - handle.x)}
           height={BAND_H}
-          fill="#2f6fed"
-          opacity={0.1}
+          fill={palette.accent}
+          opacity={0.18}
         />
 
         {/* Trail handle (draggable; pins to the left edge when the trail is long). */}
         <g ref={handleRef} style={{ cursor: 'ew-resize' }}>
           {/* Wide invisible hit area for easy grabbing. */}
           <rect x={handle.x - 8} y={PLAYHEAD_TOP} width={16} height={PLAYHEAD_BOTTOM - PLAYHEAD_TOP} fill="transparent" />
-          <rect x={handle.x - 2} y={BAND_TOP - 4} width={4} height={BAND_H + 8} rx={2} fill="#2f6fed" opacity={0.85} />
-          <circle cx={handle.x} cy={BAND_TOP - 8} r={4} fill="#2f6fed" />
+          <rect x={handle.x - 2} y={BAND_TOP - 4} width={4} height={BAND_H + 8} rx={2} fill={palette.accent} opacity={0.9} />
+          <circle cx={handle.x} cy={BAND_TOP - 8} r={4} fill={palette.accent} />
         </g>
 
         {/* Playhead (scrub) + top grip. */}
-        <line x1={playheadX} y1={PLAYHEAD_TOP} x2={playheadX} y2={PLAYHEAD_BOTTOM} stroke="#e5484d" strokeWidth={2} />
-        <rect x={playheadX - 4} y={PLAYHEAD_TOP - 2} width={8} height={9} rx={2} fill="#e5484d" />
+        <line x1={playheadX} y1={PLAYHEAD_TOP} x2={playheadX} y2={PLAYHEAD_BOTTOM} stroke={palette.playhead} strokeWidth={2} />
+        <rect x={playheadX - 4} y={PLAYHEAD_TOP - 2} width={8} height={9} rx={2} fill={palette.playhead} />
 
         {/* Window-edge time labels. */}
-        <text x={PLOT_L + 2} y={H - 6} fontSize={12} fill="#8a93a2">
+        <text x={PLOT_L + 2} y={H - 6} fontSize={12} fill={palette.textMuted}>
           {Math.max(0, windowStart).toFixed(2)} s
         </text>
-        <text x={PLOT_R - 2} y={H - 6} fontSize={12} fill="#8a93a2" textAnchor="end">
+        <text x={PLOT_R - 2} y={H - 6} fontSize={12} fill={palette.textMuted} textAnchor="end">
           {windowEnd.toFixed(2)} s
         </text>
       </svg>
     </section>
   );
 }
-
-// --- Inline styling (matches the light shell of the Phase 3/4 UI) ------------
-
-const sectionStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.4rem',
-  padding: '0.75rem',
-  background: '#ffffff',
-  borderRadius: '0.6rem',
-  border: '1px solid #dfe3ea',
-  width: '100%',
-};
-
-const readoutRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '0.4rem 1rem',
-  alignItems: 'baseline',
-  fontSize: '0.85rem',
-  color: '#3b4252',
-};
-
-const readoutStyle: CSSProperties = {
-  color: '#5b6472',
-  fontVariantNumeric: 'tabular-nums',
-};

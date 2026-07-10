@@ -7,7 +7,7 @@ import { apexHeight } from '../core/kinematics';
 // camera-preset helpers are pure and unit-tested (the jsdom/WebGL caution keeps
 // the Canvas itself out of tests). Ball colors come from state/ballColors via
 // useBallColorResolver — the same rule the ladder uses.
-export { Scene } from './Scene';
+export { Scene, type SceneColors } from './Scene';
 export { Balls } from './Balls';
 export { Tracers } from './Tracers';
 export { HandGizmos } from './HandGizmos';

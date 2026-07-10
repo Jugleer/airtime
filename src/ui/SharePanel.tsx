@@ -1,13 +1,13 @@
 // src/ui/SharePanel — save / share + audio controls (DESIGN.md §6, Phase 9).
+// Rendered inside the Settings drawer by the redesign (2026-07-10); the component
+// and all its labels are unchanged so its standalone test still holds — only the
+// styling is now theme-aware (dark-first).
 //
 // - Copy share link: builds the versioned URL from the current config (including
 //   the live camera), copies it to the clipboard (with a visible fallback field),
-//   and syncs the address bar via history.replaceState. Button-only sync (no live
-//   per-frame URL churn) — cheaper and documented in the codec module.
+//   and syncs the address bar via history.replaceState.
 // - Save PNG: grabs the WebGL canvas (via the scene bridge) and downloads it.
-// - Presets: named localStorage saves (save / load / delete) storing the same
-//   config payload, plus JSON file export and import (with a clear error on bad
-//   JSON). All localStorage access stays in the state layer.
+// - Presets: named localStorage saves + JSON export/import.
 // - Audio: master toggle, catch-tick toggle, and a volume slider.
 
 import { useRef, useState, type CSSProperties, type ReactElement } from 'react';
@@ -18,6 +18,8 @@ import {
 } from '../state';
 import { encodeConfig, isShareConfigLike } from '../state/codec';
 import { getCanvasElement } from '../state/sceneBridge';
+import { usePalette, type Palette } from './theme';
+import { Button, SectionLabel } from './widgets';
 
 /** Trigger a browser download of a Blob (a client-side download, not server output). */
 function downloadBlob(blob: Blob, filename: string): void {
@@ -28,11 +30,11 @@ function downloadBlob(blob: Blob, filename: string): void {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  // Revoke on the next tick so the click's navigation has consumed the URL.
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export function SharePanel(): ReactElement {
+  const palette = usePalette();
   const currentConfig = useAppStore((state) => state.currentConfig);
   const applyConfig = useAppStore((state) => state.applyConfig);
   const savePreset = useAppStore((state) => state.savePreset);
@@ -64,8 +66,6 @@ export function SharePanel(): ReactElement {
   const copyLink = (): void => {
     const url = buildUrl();
     setShareUrl(url);
-    // Button-only address-bar sync (documented in codec): reflect the shared state
-    // in the URL without live per-frame history churn.
     try {
       const query = url.slice(url.indexOf('?'));
       window.history.replaceState(null, '', query);
@@ -89,7 +89,6 @@ export function SharePanel(): ReactElement {
       setMessage('The 3D scene is not ready for capture.');
       return;
     }
-    // preserveDrawingBuffer (set on the Canvas) keeps the last frame readable.
     canvas.toBlob((blob) => {
       if (blob === null) {
         setMessage('PNG capture failed.');
@@ -141,23 +140,15 @@ export function SharePanel(): ReactElement {
   };
 
   return (
-    <section style={panelStyle} aria-label="Save, share and audio">
-      <h2 style={{ margin: 0, fontSize: '1rem', color: '#3b4252' }}>Save, share &amp; audio</h2>
+    <section style={panelStyle(palette)} aria-label="Save, share and audio">
+      <SectionLabel>Save, share &amp; audio</SectionLabel>
 
       {/* Share / capture actions. */}
       <div style={rowStyle}>
-        <button type="button" onClick={copyLink} style={buttonStyle}>
-          Copy share link
-        </button>
-        <button type="button" onClick={savePng} style={buttonStyle}>
-          Save PNG
-        </button>
-        <button type="button" onClick={exportJson} style={buttonStyle}>
-          Export JSON
-        </button>
-        <button type="button" onClick={() => fileInputRef.current?.click()} style={buttonStyle}>
-          Import JSON
-        </button>
+        <Button onClick={copyLink}>Copy share link</Button>
+        <Button onClick={savePng}>Save PNG</Button>
+        <Button onClick={exportJson}>Export JSON</Button>
+        <Button onClick={() => fileInputRef.current?.click()}>Import JSON</Button>
         <input
           ref={fileInputRef}
           type="file"
@@ -169,7 +160,7 @@ export function SharePanel(): ReactElement {
             if (file) {
               importJson(file);
             }
-            event.target.value = ''; // allow re-importing the same file
+            event.target.value = '';
           }}
         />
       </div>
@@ -181,7 +172,7 @@ export function SharePanel(): ReactElement {
           value={shareUrl}
           aria-label="Share link"
           onFocus={(event) => event.target.select()}
-          style={urlFieldStyle}
+          style={urlFieldStyle(palette)}
         />
       ) : null}
 
@@ -198,58 +189,52 @@ export function SharePanel(): ReactElement {
               onSavePreset();
             }
           }}
-          style={nameFieldStyle}
+          style={nameFieldStyle(palette)}
         />
-        <button type="button" onClick={onSavePreset} style={buttonStyle}>
-          Save preset
-        </button>
+        <Button onClick={onSavePreset}>Save preset</Button>
       </div>
 
       {presetNames.length > 0 ? (
         <ul style={presetListStyle}>
           {presetNames.map((name) => (
-            <li key={name} style={presetItemStyle}>
-              <span style={{ fontWeight: 600 }}>{name}</span>
+            <li key={name} style={presetItemStyle(palette)}>
+              <span style={{ fontWeight: 600, color: palette.textPrimary }}>{name}</span>
               <span style={{ display: 'flex', gap: '0.35rem' }}>
-                <button
-                  type="button"
+                <Button
                   onClick={() => {
                     loadPreset(name);
                     setMessage(`Loaded preset "${name}".`);
                   }}
-                  style={smallButtonStyle}
                 >
                   Load
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Delete preset ${name}`}
+                </Button>
+                <Button
+                  ariaLabel={`Delete preset ${name}`}
                   onClick={() => {
                     deletePreset(name);
                     setMessage(`Deleted preset "${name}".`);
                   }}
-                  style={smallButtonStyle}
                 >
                   Delete
-                </button>
+                </Button>
               </span>
             </li>
           ))}
         </ul>
       ) : (
-        <p style={{ margin: 0, color: '#8a93a2', fontSize: '0.85rem' }}>
+        <p style={{ margin: 0, color: palette.textMuted, fontSize: '0.82rem' }}>
           No saved presets yet.
         </p>
       )}
 
       {/* Audio ticks. */}
-      <h3 style={sectionHeadingStyle}>Audio ticks</h3>
+      <SectionLabel>Audio ticks</SectionLabel>
       <div style={rowStyle}>
-        <label style={checkboxLabelStyle}>
+        <label style={checkboxLabelStyle(palette)}>
           <input type="checkbox" checked={audioEnabled} onChange={toggleAudio} />
           <span>Enable ticks</span>
         </label>
-        <label style={checkboxLabelStyle}>
+        <label style={checkboxLabelStyle(palette, !audioEnabled)}>
           <input
             type="checkbox"
             checked={catchTickEnabled}
@@ -258,7 +243,7 @@ export function SharePanel(): ReactElement {
           />
           <span>Catch tick</span>
         </label>
-        <label style={{ ...checkboxLabelStyle, flex: '1 1 12rem' }}>
+        <label style={{ ...checkboxLabelStyle(palette), flex: '1 1 11rem' }}>
           <span>Volume</span>
           <input
             type="range"
@@ -275,7 +260,7 @@ export function SharePanel(): ReactElement {
       </div>
 
       {message !== null ? (
-        <p role="status" style={{ margin: 0, color: '#3b7d4f', fontSize: '0.85rem' }}>
+        <p role="status" style={{ margin: 0, color: palette.green, fontSize: '0.82rem' }}>
           {message}
         </p>
       ) : null}
@@ -283,18 +268,20 @@ export function SharePanel(): ReactElement {
   );
 }
 
-// --- Inline styling ----------------------------------------------------------
+// --- Inline styling (theme-aware, dark-first) --------------------------------
 
-const panelStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.6rem',
-  padding: '0.75rem',
-  background: '#ffffff',
-  borderRadius: '0.6rem',
-  border: '1px solid #dfe3ea',
-  width: '100%',
-};
+function panelStyle(palette: Palette): CSSProperties {
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.55rem',
+    padding: '0.7rem 0.75rem',
+    background: palette.panel,
+    borderRadius: '0.55rem',
+    border: `1px solid ${palette.border}`,
+    width: '100%',
+  };
+}
 
 const rowStyle: CSSProperties = {
   display: 'flex',
@@ -303,43 +290,30 @@ const rowStyle: CSSProperties = {
   alignItems: 'center',
 };
 
-const buttonStyle: CSSProperties = {
-  padding: '0.4rem 0.9rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontWeight: 600,
-  fontSize: '0.85rem',
-  cursor: 'pointer',
-};
+function urlFieldStyle(palette: Palette): CSSProperties {
+  return {
+    width: '100%',
+    padding: '0.4rem 0.5rem',
+    borderRadius: '0.4rem',
+    border: `1px solid ${palette.border}`,
+    background: palette.inset,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: '0.78rem',
+    color: palette.textPrimary,
+  };
+}
 
-const smallButtonStyle: CSSProperties = {
-  padding: '0.2rem 0.6rem',
-  borderRadius: '0.35rem',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontWeight: 600,
-  fontSize: '0.8rem',
-  cursor: 'pointer',
-};
-
-const urlFieldStyle: CSSProperties = {
-  width: '100%',
-  padding: '0.4rem 0.5rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  fontSize: '0.8rem',
-  color: '#3b4252',
-};
-
-const nameFieldStyle: CSSProperties = {
-  padding: '0.4rem 0.5rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  fontSize: '0.9rem',
-  flex: '1 1 10rem',
-};
+function nameFieldStyle(palette: Palette): CSSProperties {
+  return {
+    padding: '0.4rem 0.5rem',
+    borderRadius: '0.4rem',
+    border: `1px solid ${palette.border}`,
+    background: palette.inset,
+    color: palette.textPrimary,
+    fontSize: '0.88rem',
+    flex: '1 1 9rem',
+  };
+}
 
 const presetListStyle: CSSProperties = {
   listStyle: 'none',
@@ -350,30 +324,26 @@ const presetListStyle: CSSProperties = {
   gap: '0.3rem',
 };
 
-const presetItemStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '0.5rem',
-  padding: '0.3rem 0.5rem',
-  borderRadius: '0.4rem',
-  background: '#f4f6f9',
-  fontSize: '0.9rem',
-};
+function presetItemStyle(palette: Palette): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '0.5rem',
+    padding: '0.3rem 0.5rem',
+    borderRadius: '0.4rem',
+    background: palette.panelAlt,
+    fontSize: '0.88rem',
+  };
+}
 
-const sectionHeadingStyle: CSSProperties = {
-  margin: '0.25rem 0 0',
-  fontSize: '0.8rem',
-  fontWeight: 700,
-  letterSpacing: '0.03em',
-  textTransform: 'uppercase',
-  color: '#6b7280',
-};
-
-const checkboxLabelStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.4rem',
-  fontWeight: 600,
-  fontSize: '0.9rem',
-};
+function checkboxLabelStyle(palette: Palette, disabled = false): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.4rem',
+    fontWeight: 600,
+    fontSize: '0.85rem',
+    color: disabled ? palette.textMuted : palette.textPrimary,
+  };
+}

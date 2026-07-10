@@ -1,19 +1,17 @@
-// src/ui/StateGraph — the state-graph panel (DESIGN.md §5).
+// src/ui/StateGraph — the state-graph OVERLAY (DESIGN.md §5; redesign 2026-07-10,
+// owner requirement 7). The graph is now a translucent overlay over the 3D scene,
+// default OFF, toggled by a labeled button in the scene's TOP-LEFT corner (the
+// camera presets sit top-right). When open, a semi-transparent dark backdrop
+// covers the scene with the concentric-ring SVG centered; the scene stays visible
+// behind it. Node clicks navigate (BFS splice — past bit-identical); the marker,
+// the transition status line, the N stepper and the hard-reset button live with
+// the overlay.
 //
-// SVG rendering of the (b, N) siteswap state graph: nodes are landing-schedule
-// states (C(N, b) of them), edges are beat advances, laid out as concentric
-// excitation rings — ground state at the disc center, ring radius = BFS distance
-// from ground (deterministic, NOT force-directed).
-// The current pattern's cycle is highlighted; a small ball marker hops states every
-// beat (derived from the ONE global clock — DESIGN.md §2); clicking any node
-// navigates there through the store's BFS machinery (the running timeline is
-// spliced — past bit-identical, in-flight balls unaffected). Typed pattern entry
-// routes through the same machinery via the pattern input (state.setPattern).
-//
-// Performance: the graph, layout, cycle and all static SVG elements are memoized
-// per (b, N, pattern); only the marker and the status line subscribe to simTime,
-// so nothing heavy re-renders per frame. C(11,5) = 462 nodes / ~2k edges is the
-// worst case — fine for plain SVG (and N ≥ 9 carries the DESIGN §5 warning).
+// Layout is UNCHANGED from the prior panel (concentric excitation rings, ground at
+// center, deterministic — DESIGN.md §5): only the container (panel → overlay) and
+// the palette (light → theme-aware) changed. Performance is unchanged too — the
+// graph/layout/cycle are memoized per (b, N, pattern); only the marker + status
+// line subscribe to simTime.
 
 import { memo, useMemo, type CSSProperties, type ReactElement } from 'react';
 import {
@@ -29,35 +27,25 @@ import {
 } from '../core/stategraph';
 import { GRAPH_N_MAX, GRAPH_N_MIN, useAppStore } from '../state';
 import { currentBeatIndex, transitionStatusOf } from '../state/simulation';
+import { usePalette, type Palette } from './theme';
+import { Button } from './widgets';
 
-const TITLE_COLOR = '#3b4252';
-const NOTE_COLOR = '#5b6472';
-const AMBER = '#b7791f';
-const NODE_FILL = '#ffffff';
-const NODE_STROKE = '#aab2c0';
-const EDGE_STROKE = '#e2e6ec';
-const CYCLE_COLOR = '#2f6fed';
-const MARKER_COLOR = '#e8710a';
+const CYCLE_COLOR = '#3b82f6';
+const MARKER_COLOR = '#f59e0b';
 
-// SVG geometry (viewBox units). The ring layout's normalized [0, 1] disc maps
-// into a fixed square viewport; node/marker radii shrink with the smallest
-// adjacent-node arc gap so dense rings stay distinct without scrolling.
+// SVG geometry (viewBox units) — unchanged from the prior layout.
 const VIEW_SIZE = 480;
 const MARGIN_PLAIN = 30;
-/** Wider inset when bit-string labels are shown (they anchor radially outward). */
 const MARGIN_LABELED = 60;
 const MAX_NODE_RADIUS = 8;
 const MIN_NODE_RADIUS = 1.6;
 const TAU = Math.PI * 2;
-/** Show bit-string labels next to nodes only while the graph is small enough. */
 const LABEL_NODE_LIMIT = 42;
 
 interface GraphGeometry {
   readonly width: number;
   readonly height: number;
-  /** Node circle radius, shrunk on dense rings so ring neighbors stay distinct. */
   readonly nodeRadius: number;
-  /** Current-state marker radius (scales with the node radius). */
   readonly markerRadius: number;
   toX(x: number): number;
   toY(y: number): number;
@@ -66,8 +54,6 @@ interface GraphGeometry {
 function geometryOf(layout: GraphLayout): GraphGeometry {
   const margin = layout.nodes.length <= LABEL_NODE_LIMIT ? MARGIN_LABELED : MARGIN_PLAIN;
   const span = VIEW_SIZE - 2 * margin;
-  // The smallest arc gap between ring neighbors, in viewBox units. All nodes of
-  // a level share one radius, so one (count, radius) pair per level suffices.
   const rings = new Map<number, { count: number; radius: number }>();
   for (const node of layout.nodes) {
     const ring = rings.get(node.level);
@@ -102,12 +88,14 @@ const GraphPicture = memo(function GraphPicture({
   layout,
   cycle,
   geometry,
+  palette,
   onNodeClick,
 }: {
   readonly graph: CoreStateGraph;
   readonly layout: GraphLayout;
   readonly cycle: PatternCycle;
   readonly geometry: GraphGeometry;
+  readonly palette: Palette;
   onNodeClick(bits: number): void;
 }): ReactElement {
   const { toX, toY, nodeRadius } = geometry;
@@ -126,9 +114,6 @@ const GraphPicture = memo(function GraphPicture({
       const key = `${node.bits}:${edge.to}`;
       const onCycle = cycleEdgeKeys.has(key);
       if (edge.to === node.bits) {
-        // Self-loop (e.g. the ground state's cascade throw): a small loop
-        // radially outward from the node — drawn only when on the cycle
-        // (visual noise otherwise). The center node's loop points up (−π/2).
         if (onCycle) {
           const loopRadius = Math.max(3, nodeRadius * 0.7);
           const loopDistance = nodeRadius + loopRadius - 1;
@@ -155,8 +140,6 @@ const GraphPicture = memo(function GraphPicture({
       const x2 = toX(to.x);
       const y2 = toY(to.y);
       if (onCycle) {
-        // Cycle edges bow away from the disc center as quadratic arcs, so the
-        // highlighted loop lifts off the straight background chords.
         const midX = (x1 + x2) / 2;
         const midY = (y1 + y2) / 2;
         const chordLength = Math.hypot(x2 - x1, y2 - y1);
@@ -167,7 +150,6 @@ const GraphPicture = memo(function GraphPicture({
           dirX /= dirLength;
           dirY /= dirLength;
         } else {
-          // Chord through the center: bow perpendicular to it (deterministic).
           dirX = -(y2 - y1) / (chordLength || 1);
           dirY = (x2 - x1) / (chordLength || 1);
         }
@@ -190,7 +172,7 @@ const GraphPicture = memo(function GraphPicture({
             y1={y1}
             x2={x2}
             y2={y2}
-            stroke={EDGE_STROKE}
+            stroke={palette.edgeStroke}
             strokeWidth={1}
           />,
         );
@@ -201,8 +183,6 @@ const GraphPicture = memo(function GraphPicture({
   const showLabels = layout.nodes.length <= LABEL_NODE_LIMIT;
   const nodes: ReactElement[] = layout.nodes.map((node) => {
     const onCycle = cycle.nodeSet.has(node.bits);
-    // Labels anchor radially outward from the ring; a node whose self-loop is
-    // highlighted flips its label inward so text and loop don't collide.
     const labelAngle = cycleEdgeKeys.has(`${node.bits}:${node.bits}`)
       ? node.angle + Math.PI
       : node.angle;
@@ -217,8 +197,8 @@ const GraphPicture = memo(function GraphPicture({
           cx={toX(node.x)}
           cy={toY(node.y)}
           r={nodeRadius}
-          fill={onCycle ? CYCLE_COLOR : NODE_FILL}
-          stroke={onCycle ? CYCLE_COLOR : NODE_STROKE}
+          fill={onCycle ? CYCLE_COLOR : palette.nodeFill}
+          stroke={onCycle ? CYCLE_COLOR : palette.nodeStroke}
           strokeWidth={1.2}
           style={{ cursor: 'pointer' }}
           onClick={() => onNodeClick(node.bits)}
@@ -231,7 +211,7 @@ const GraphPicture = memo(function GraphPicture({
             y={toY(node.y) + Math.sin(labelAngle) * labelDistance + 3}
             textAnchor={labelAnchor}
             fontSize={8}
-            fill={NOTE_COLOR}
+            fill={palette.textSecondary}
             style={{ pointerEvents: 'none', fontFamily: 'ui-monospace, monospace' }}
           >
             {node.label}
@@ -263,11 +243,7 @@ const GraphPicture = memo(function GraphPicture({
   );
 });
 
-/**
- * The current-state marker (the "little ball", DESIGN.md §5): hops each beat,
- * following the actual landing schedule — during a transition it walks the
- * bridge states off the cycle. The only SVG piece that re-renders per frame.
- */
+/** The current-state marker (the "little ball", DESIGN.md §5): hops each beat. */
 function CurrentStateMarker({
   layout,
   geometry,
@@ -283,8 +259,6 @@ function CurrentStateMarker({
   const bits = stateToBits(sim.timeline.landingScheduleAt(beat, maxHeight));
   const coord = layout.coordOf.get(bits);
   if (!coord) {
-    // A ball is still in flight above N (e.g. right after a hard reset from a
-    // taller pattern): the state is off-graph for a few beats — hide the marker.
     return null;
   }
   return (
@@ -303,6 +277,7 @@ function CurrentStateMarker({
 
 /** The transition status line: "transitioning to 531 (2 beats)" or the pattern. */
 function StatusLine(): ReactElement {
+  const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const simTime = useAppStore((state) => state.simTime);
   const transition = useAppStore((state) => state.transition);
@@ -310,13 +285,13 @@ function StatusLine(): ReactElement {
   if (status) {
     const beats = status.beatsRemaining === 1 ? 'beat' : 'beats';
     return (
-      <p role="status" style={{ ...statusStyle, color: MARKER_COLOR, fontWeight: 600 }}>
+      <p role="status" style={{ ...statusStyle(palette), color: MARKER_COLOR, fontWeight: 700 }}>
         transitioning to {status.targetText} ({status.beatsRemaining} {beats})
       </p>
     );
   }
   return (
-    <p role="status" style={statusStyle}>
+    <p role="status" style={statusStyle(palette)}>
       on pattern {sim.patternText}
     </p>
   );
@@ -324,6 +299,7 @@ function StatusLine(): ReactElement {
 
 /** The graph body: derived graph/layout/cycle + the SVG (mounted only when shown). */
 function StateGraphBody(): ReactElement {
+  const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const graphMaxHeight = useAppStore((state) => state.graphMaxHeight);
   const navigateToState = useAppStore((state) => state.navigateToState);
@@ -333,7 +309,6 @@ function StateGraphBody(): ReactElement {
   const patternMax = maxThrowOf(values);
   const unavailable = patternMax > GRAPH_N_MAX;
 
-  // Memoized per (b, N): graph + layout. Cycle re-derives when the pattern moves.
   const derived = useMemo(() => {
     if (unavailable || !Number.isInteger(ballCount)) {
       return null;
@@ -350,7 +325,7 @@ function StateGraphBody(): ReactElement {
 
   if (unavailable) {
     return (
-      <p role="note" style={{ ...statusStyle, color: AMBER }}>
+      <p role="note" style={{ ...statusStyle(palette), color: palette.amber }}>
         State graph unavailable for this pattern (max throw {patternMax} &gt; {GRAPH_N_MAX}). The
         simulation still runs; type a pattern with throws ≤ {GRAPH_N_MAX} to navigate the graph.
       </p>
@@ -358,7 +333,7 @@ function StateGraphBody(): ReactElement {
   }
   if (!derived || !cycle) {
     return (
-      <p role="note" style={{ ...statusStyle, color: AMBER }}>
+      <p role="note" style={{ ...statusStyle(palette), color: palette.amber }}>
         State graph needs a valid pattern with an integer ball count.
       </p>
     );
@@ -366,55 +341,50 @@ function StateGraphBody(): ReactElement {
 
   const { graph, layout, geometry } = derived;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'center', minHeight: 0 }}>
       <StatusLine />
-      <div style={{ overflowX: 'auto' }}>
-        <svg
-          viewBox={`0 0 ${geometry.width} ${geometry.height}`}
-          width="100%"
-          role="img"
-          aria-label={`State graph for ${ballCount} balls, max throw ${graphMaxHeight}`}
-          style={{ display: 'block', minWidth: '20rem' }}
-        >
-          <GraphPicture
-            graph={graph}
-            layout={layout}
-            cycle={cycle}
-            geometry={geometry}
-            onNodeClick={navigateToState}
-          />
-          <CurrentStateMarker layout={layout} geometry={geometry} maxHeight={graphMaxHeight} />
-        </svg>
-      </div>
-      <p style={{ ...statusStyle, fontSize: '0.75rem' }}>
-        {graph.nodes.length} states (b = {ballCount}, N = {graphMaxHeight}), arranged in rings by
-        excitation level (ground at centre). Click a state to transition to it — the shortest
-        cycle through a bare state becomes the running pattern.
+      <svg
+        viewBox={`0 0 ${geometry.width} ${geometry.height}`}
+        role="img"
+        aria-label={`State graph for ${ballCount} balls, max throw ${graphMaxHeight}`}
+        style={{ display: 'block', width: 'auto', height: '100%', maxHeight: '58vh', maxWidth: '100%' }}
+      >
+        <GraphPicture
+          graph={graph}
+          layout={layout}
+          cycle={cycle}
+          geometry={geometry}
+          palette={palette}
+          onNodeClick={navigateToState}
+        />
+        <CurrentStateMarker layout={layout} geometry={geometry} maxHeight={graphMaxHeight} />
+      </svg>
+      <p style={{ ...statusStyle(palette), fontSize: '0.72rem', textAlign: 'center' }}>
+        {graph.nodes.length} states (b = {ballCount}, N = {graphMaxHeight}) in excitation rings
+        (ground at centre). Click a state to transition to it.
       </p>
     </div>
   );
 }
 
-/** A ±stepper for N (mirrors the Controls stepper, local to this panel). */
+/** A ±stepper for N (mirrors the widgets stepper, local to the overlay). */
 function NStepper(): ReactElement {
+  const palette = usePalette();
   const graphMaxHeight = useAppStore((state) => state.graphMaxHeight);
   const setGraphMaxHeight = useAppStore((state) => state.setGraphMaxHeight);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', color: palette.textSecondary }}>
       <span style={{ fontWeight: 600 }}>Max throw N</span>
       <button
         type="button"
         aria-label="Max throw N decrease"
         disabled={graphMaxHeight <= GRAPH_N_MIN}
         onClick={() => setGraphMaxHeight(graphMaxHeight - 1)}
-        style={stepperButtonStyle}
+        style={stepperButtonStyle(palette, graphMaxHeight <= GRAPH_N_MIN)}
       >
         −
       </button>
-      <span
-        aria-label="Max throw N"
-        style={{ minWidth: '1.4rem', textAlign: 'center', fontWeight: 600 }}
-      >
+      <span aria-label="Max throw N" style={{ minWidth: '1.3rem', textAlign: 'center', fontWeight: 700, color: palette.textPrimary }}>
         {graphMaxHeight}
       </span>
       <button
@@ -422,7 +392,7 @@ function NStepper(): ReactElement {
         aria-label="Max throw N increase"
         disabled={graphMaxHeight >= GRAPH_N_MAX}
         onClick={() => setGraphMaxHeight(graphMaxHeight + 1)}
-        style={stepperButtonStyle}
+        style={stepperButtonStyle(palette, graphMaxHeight >= GRAPH_N_MAX)}
       >
         +
       </button>
@@ -431,10 +401,12 @@ function NStepper(): ReactElement {
 }
 
 /**
- * The collapsible state-graph panel (DESIGN.md §5, §6). The header never
- * subscribes to simTime; when hidden the body unmounts (nothing derived/drawn).
+ * The state-graph overlay + its top-left scene toggle (DESIGN.md §5, §6). The
+ * toggle is always present; the overlay renders over the scene only when
+ * `graphVisible`. When hidden the body unmounts (nothing derived/drawn).
  */
 export function StateGraph(): ReactElement {
+  const palette = usePalette();
   const graphVisible = useAppStore((state) => state.graphVisible);
   const graphMaxHeight = useAppStore((state) => state.graphMaxHeight);
   const graphNotice = useAppStore((state) => state.graphNotice);
@@ -442,98 +414,99 @@ export function StateGraph(): ReactElement {
   const hardReset = useAppStore((state) => state.hardReset);
 
   return (
-    <section style={sectionStyle} aria-label="State graph panel">
-      <div style={headerRowStyle}>
-        <h2 style={{ margin: 0, fontSize: '1rem', color: TITLE_COLOR }}>State graph</h2>
-        <button
-          type="button"
-          onClick={toggleGraph}
-          aria-pressed={graphVisible}
-          aria-label="Toggle state graph panel"
-          style={toggleButtonStyle}
-        >
-          {graphVisible ? 'Hide graph' : 'Show graph'}
-        </button>
-      </div>
+    <>
+      {/* Scene TOP-LEFT toggle (camera presets sit top-right). */}
+      <button
+        type="button"
+        onClick={toggleGraph}
+        aria-label="Toggle state graph panel"
+        aria-pressed={graphVisible}
+        style={toggleButtonStyle(palette, graphVisible)}
+      >
+        <span aria-hidden>◎</span> State graph
+      </button>
 
       {graphVisible ? (
-        <>
-          <div style={controlRowStyle}>
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 5,
+            background: palette.overlayBackdrop,
+            backdropFilter: 'blur(2px)',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '2.9rem 0.8rem 0.8rem',
+            gap: '0.5rem',
+          }}
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem 1rem' }}>
             <NStepper />
-            <button type="button" onClick={hardReset} aria-label="Hard reset" style={toggleButtonStyle}>
+            <Button onClick={hardReset} ariaLabel="Hard reset" variant="default">
               Hard reset
-            </button>
+            </Button>
             {graphMaxHeight >= GRAPH_WARN_N ? (
-              <span role="note" style={{ color: AMBER, fontSize: '0.8rem' }}>
+              <span role="note" style={{ color: palette.amber, fontSize: '0.75rem' }}>
                 N ≥ {GRAPH_WARN_N}: the graph grows combinatorially (C(N, b) states) — expect a
                 dense picture.
               </span>
             ) : null}
           </div>
           {graphNotice ? (
-            <p role="note" style={{ ...statusStyle, color: AMBER }}>
+            <p role="note" style={{ ...statusStyle(palette), color: palette.amber }}>
               {graphNotice}
             </p>
           ) : null}
-          <StateGraphBody />
-        </>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
+            <StateGraphBody />
+          </div>
+        </div>
       ) : null}
-    </section>
+    </>
   );
 }
 
-// --- Inline styling (matches the light shell of the Phase 3–7 UI) ------------
+// --- Styling -----------------------------------------------------------------
 
-const sectionStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '0.6rem',
-  padding: '0.75rem',
-  background: '#ffffff',
-  borderRadius: '0.6rem',
-  border: '1px solid #dfe3ea',
-  width: '100%',
-};
+function statusStyle(palette: Palette): CSSProperties {
+  return {
+    margin: 0,
+    fontSize: '0.82rem',
+    color: palette.textSecondary,
+    fontVariantNumeric: 'tabular-nums',
+  };
+}
 
-const headerRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '0.5rem',
-};
+function toggleButtonStyle(palette: Palette, active: boolean): CSSProperties {
+  return {
+    position: 'absolute',
+    top: '0.55rem',
+    left: '0.55rem',
+    zIndex: 6,
+    padding: '0.28rem 0.6rem',
+    borderRadius: '0.35rem',
+    border: `1px solid ${active ? palette.accent : palette.border}`,
+    background: active ? palette.accent : palette.panelHover,
+    color: active ? palette.accentText : palette.textPrimary,
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    backdropFilter: 'blur(4px)',
+  };
+}
 
-const controlRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  gap: '0.6rem 1rem',
-};
-
-const statusStyle: CSSProperties = {
-  margin: 0,
-  fontSize: '0.85rem',
-  color: NOTE_COLOR,
-  fontVariantNumeric: 'tabular-nums',
-};
-
-const toggleButtonStyle: CSSProperties = {
-  padding: '0.35rem 0.8rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontWeight: 600,
-  fontSize: '0.85rem',
-  cursor: 'pointer',
-};
-
-const stepperButtonStyle: CSSProperties = {
-  width: '1.7rem',
-  height: '1.7rem',
-  borderRadius: '0.4rem',
-  border: '1px solid #c8cdd6',
-  background: '#ffffff',
-  fontWeight: 700,
-  fontSize: '0.95rem',
-  cursor: 'pointer',
-  lineHeight: 1,
-};
+function stepperButtonStyle(palette: Palette, disabled: boolean): CSSProperties {
+  return {
+    width: '1.7rem',
+    height: '1.7rem',
+    borderRadius: '0.4rem',
+    border: `1px solid ${palette.border}`,
+    background: palette.panelAlt,
+    color: palette.textPrimary,
+    fontWeight: 700,
+    fontSize: '0.95rem',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.4 : 1,
+    lineHeight: 1,
+  };
+}
