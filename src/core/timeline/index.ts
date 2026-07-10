@@ -376,10 +376,22 @@ export function buildTimeline(
   const scheduleBeats = genEnd; // beats 0..genEnd-1 (beatTimes has genEnd+1 entries)
   const beatTimes: number[] = new Array<number>(scheduleBeats + 1);
   const beatPeriods: number[] = new Array<number>(scheduleBeats);
+  // Pre-guard "aim" period per beat: the slew's proposed τ_b BEFORE the arrival
+  // guard lengthens it. Throws are AIMED with this tempo; the guard's stretch
+  // shifts the schedule (delays the next beat) and must land in DWELL, never in
+  // throw height — DESIGN.md §4.6 "dwell absorbs the slack". Computing air time
+  // from the guarded period instead couples the guard back into throw height: a
+  // guard stretch δ at the throw beat inflates that throw's air time by h·δ,
+  // forcing a ≈(h−1)·δ guard h beats later — positive feedback that diverges
+  // (periods overflow to Infinity/NaN) for h ≥ ~6 on a tempo speed-up.
+  const aimPeriods: number[] = new Array<number>(scheduleBeats);
   beatTimes[0] = 0;
 
   const periodOfBeat = (beat: number): number =>
     beat < 0 ? initialBeatPeriod : (beatPeriods[beat] as number);
+  // Prehistory (< 0) is the pre-slew steady state, so aim = actual there.
+  const aimPeriodOfBeat = (beat: number): number =>
+    beat < 0 ? initialBeatPeriod : (aimPeriods[beat] as number);
   const beatTimeOf = (beat: number): number => {
     // Prehistory (beat < 0) extends uniformly on the initial-tempo grid.
     if (beat < 0) {
@@ -396,12 +408,17 @@ export function buildTimeline(
   };
 
   // Flight arrival time for a flight thrown at `beat` (needs only past data).
+  // Air time uses the AIM (pre-guard) period — the tempo the throw was aimed
+  // with — so a guard-stretched beat never throws higher (see aimPeriods above).
+  // The dwell cap keeps the ACTUAL (guarded) period: the hand really does have
+  // the stretched beat available, and a larger cap only ever shortens air time.
   function flightArrival(beat: number): number {
     const value = valueAt(beat);
     const active = paramsAt(beat);
-    const period = periodOfBeat(beat);
-    const dwell = clampDwell(active.dwellTime, handCount, period);
-    return beatTimeOf(beat) + airTime(value, period, dwell, active.betaClamp ?? betaClamp);
+    const dwell = clampDwell(active.dwellTime, handCount, periodOfBeat(beat));
+    return (
+      beatTimeOf(beat) + airTime(value, aimPeriodOfBeat(beat), dwell, active.betaClamp ?? betaClamp)
+    );
   }
 
   // Arrivals of flights that land at beat `m` (guard deadline candidates).
@@ -426,19 +443,32 @@ export function buildTimeline(
     return arrivals;
   }
 
-  let previousPeriod = initialBeatPeriod;
+  // The slew STATE is the aim period, not the guarded one: re-seeding the slew
+  // from a guard-stretched period re-injects an above-target tempo after every
+  // stretch, which re-inflates the next high throw and re-engages the guard — a
+  // persistent limit cycle (e.g. 0000a sped to 0.08 s never settles). Tracking
+  // the aim keeps the tempo ramp a pure exponential toward the target (it always
+  // converges); the guard only delays the SCHEDULE, and each delay strictly
+  // reduces future guard need, so guards die out. The elapsed time for each slew
+  // step is the previous beat's ACTUAL (guarded) duration — that much wall time
+  // really passed. When the guard is silent (guarded == proposed, the common
+  // case), all of this is bit-identical to slewing from the guarded period.
+  let previousAimPeriod = initialBeatPeriod;
+  let previousBeatDuration = initialBeatPeriod;
   for (let beat = 0; beat < scheduleBeats; beat++) {
-    // Slew this beat's period toward the target active at this beat.
+    // Slew this beat's aim period toward the target active at this beat.
     const target = paramsAt(beat).beatPeriod;
     const proposed =
       beat === 0
         ? initialBeatPeriod
-        : slewBeatPeriod(previousPeriod, target, previousPeriod, slewTimeConstant);
+        : slewBeatPeriod(previousAimPeriod, target, previousBeatDuration, slewTimeConstant);
+    aimPeriods[beat] = proposed;
     // Guard so beat `beat+1` starts no earlier than any ball rethrown then.
     const guarded = guardBeatPeriod(proposed, beatTimeOf(beat), arrivalsLandingAt(beat + 1));
     beatPeriods[beat] = guarded;
     beatTimes[beat + 1] = (beatTimes[beat] as number) + guarded;
-    previousPeriod = guarded;
+    previousAimPeriod = proposed;
+    previousBeatDuration = guarded;
   }
   const beatSchedule: BeatSchedule = { beatTimes, beatPeriods };
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
+import { airTime, clampDwell } from '../timing';
 import { orbits, stateAt, validatePattern } from '../siteswap';
 import {
   bitsToState,
@@ -145,6 +146,165 @@ describe('buildTimeline — slew-limited tempo', () => {
   });
 });
 
+// --- Slew & guard: long-horizon stability -------------------------------------
+//
+// The guard-ratchet regression (BUILD_LOG): air time computed from the GUARDED
+// period of a throw beat couples the guard back into throw height — a guard
+// stretch δ inflates that throw's air time by h·δ, forcing a ≈(h−1)·δ guard h
+// beats later. On a tempo speed-up with h ≥ ~6 the loop gain exceeds 1 and the
+// schedule diverges (periods overflow to Infinity/NaN within a few thousand
+// beats). Throws must be aimed with the PRE-guard (slewed) tempo; the guard's
+// stretch lands in dwell (DESIGN.md §4.6 "dwell absorbs the slack"). These tests
+// pin steady-state exactness, post-epoch convergence, and the exact runaway
+// examples that used to overflow.
+
+/** Reuse-me helper: min/max air time per throw value over a window of flights. */
+function airTimeRangeByValue(
+  flights: readonly { throwBeat: number; throwTime: number; arrivalTime: number; value: number }[],
+  fromBeat: number,
+  toBeat: number,
+): Map<number, { min: number; max: number }> {
+  const byValue = new Map<number, { min: number; max: number }>();
+  for (const flight of flights) {
+    if (flight.throwBeat < fromBeat || flight.throwBeat >= toBeat) {
+      continue;
+    }
+    const air = flight.arrivalTime - flight.throwTime;
+    const range = byValue.get(flight.value);
+    if (range === undefined) {
+      byValue.set(flight.value, { min: air, max: air });
+    } else {
+      range.min = Math.min(range.min, air);
+      range.max = Math.max(range.max, air);
+    }
+  }
+  return byValue;
+}
+
+// Long-horizon builds are slow on constrained hardware: these three suites use
+// FEW runs with LONG horizons (the ratchet's onset needs thousands of beats to
+// surface) and explicit timeouts, rather than many short runs that miss it.
+const LONG_HORIZON_TIMEOUT = 120_000;
+
+describe('property: constant params are exactly periodic over long horizons', () => {
+  it(
+    'beatPeriods identical and per-value air times constant over ~2000 beats',
+    () => {
+      fc.assert(
+        fc.property(validPatternArb, (values) => {
+          const beatCount = 2000;
+          const timeline = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS });
+          // With target == base the slew is a fixed point and the guard can never
+          // engage (a landing ball always arrives t_d_eff before its rethrow), so
+          // every beat period is EXACTLY the base period — no drift, ever.
+          for (const period of timeline.schedule.beatPeriods) {
+            expect(period).toBe(DEFAULT_PARAMS.beatPeriod);
+          }
+          // Per-throw-value air time is constant across the whole window (float
+          // noise from beat-time summation only — far below any visible height).
+          for (const [, range] of airTimeRangeByValue(timeline.flights, 0, beatCount)) {
+            expect(range.max - range.min).toBeLessThan(1e-12);
+          }
+        }),
+        { numRuns: 25 },
+      );
+    },
+    LONG_HORIZON_TIMEOUT,
+  );
+});
+
+describe('property: a tempo epoch converges (no guard ratchet)', () => {
+  it(
+    'finite schedule, tail at target, dwell ≥ 0, air times at h·target − t_d_eff',
+    () => {
+      fc.assert(
+        fc.property(
+          validPatternArb,
+          fc.double({ min: 0.08, max: 1.0, noNaN: true }),
+          (values, target) => {
+            const beatCount = 3000;
+            const epochBeat = 40;
+            const timeline = buildTimeline(values, {
+              beatCount,
+              params: DEFAULT_PARAMS,
+              epochs: [{ beat: epochBeat, params: { beatPeriod: target } }],
+            });
+            // The whole generated schedule stays finite (pre-fix, speed-ups with
+            // h ≥ ~6 overflowed to Infinity/NaN within a few thousand beats).
+            for (const time of timeline.schedule.beatTimes) {
+              expect(Number.isFinite(time)).toBe(true);
+            }
+            // Long after the epoch the slew has converged and the guard is silent:
+            // the tail runs exactly at the slider target.
+            const periods = timeline.schedule.beatPeriods;
+            for (let beat = beatCount - 100; beat < beatCount; beat++) {
+              expect(Math.abs((periods[beat] as number) - target)).toBeLessThan(1e-9);
+            }
+            // The guard's stretch lands in dwell, which never goes negative.
+            for (const carry of timeline.carries) {
+              expect(carry.endTime).toBeGreaterThanOrEqual(carry.startTime - 1e-9);
+            }
+            // Tail air times equal the steady-state identity at the NEW tempo:
+            // t_air(h) = h·target − t_d_eff(h, target) (NOTATION identities 1, 4).
+            const dwell = clampDwell(DEFAULT_PARAMS.dwellTime, DEFAULT_PARAMS.handCount, target);
+            for (const [value, range] of airTimeRangeByValue(
+              timeline.flights,
+              beatCount - 100,
+              beatCount,
+            )) {
+              const expected = airTime(value, target, dwell);
+              expect(Math.abs(range.min - expected)).toBeLessThan(1e-9);
+              expect(Math.abs(range.max - expected)).toBeLessThan(1e-9);
+            }
+          },
+        ),
+        { numRuns: 25 },
+      );
+    },
+    LONG_HORIZON_TIMEOUT,
+  );
+});
+
+describe('guard ratchet regressions: speed-ups that used to overflow', () => {
+  // Pre-fix these three diverged (beat periods reached ~1e307, then beatTimes
+  // went Infinity/NaN, freezing the app via NaN horizon checks). Post-fix they
+  // converge to the target with the documented steady-state air times.
+  const cases: readonly { pattern: string; target: number }[] = [
+    { pattern: '744', target: 0.15 },
+    { pattern: '567', target: 0.12 },
+    { pattern: '9', target: 0.15 },
+  ];
+  for (const { pattern, target } of cases) {
+    it(
+      `${pattern} sped up to ${target} s stays finite and converges`,
+      () => {
+        const beatCount = 4000;
+        const timeline = buildTimeline(parse(pattern), {
+          beatCount,
+          params: DEFAULT_PARAMS,
+          epochs: [{ beat: 40, params: { beatPeriod: target } }],
+        });
+        for (const time of timeline.schedule.beatTimes) {
+          expect(Number.isFinite(time)).toBe(true);
+        }
+        const periods = timeline.schedule.beatPeriods;
+        for (let beat = beatCount - 100; beat < beatCount; beat++) {
+          expect(Math.abs((periods[beat] as number) - target)).toBeLessThan(1e-9);
+        }
+        const dwell = clampDwell(DEFAULT_PARAMS.dwellTime, DEFAULT_PARAMS.handCount, target);
+        const maxValue = Math.max(...parse(pattern));
+        const tail = airTimeRangeByValue(timeline.flights, beatCount - 200, beatCount);
+        const range = tail.get(maxValue);
+        expect(range).toBeDefined();
+        const expected = airTime(maxValue, target, dwell);
+        expect(Math.abs((range as { min: number }).min - expected)).toBeLessThan(1e-9);
+        expect(Math.abs((range as { max: number }).max - expected)).toBeLessThan(1e-9);
+      },
+      LONG_HORIZON_TIMEOUT,
+    );
+  }
+});
+
 // --- Property tests ----------------------------------------------------------
 
 /** Argsort-derived permutation of [0..L-1]. */
@@ -168,7 +328,7 @@ const validPatternArb = fc.integer({ min: 1, max: 6 }).chain((length) =>
     .map(({ keys, extra }) => {
       const permutation = permutationFromKeys(keys);
       return permutation.map((target, index) => {
-        const base = ((target - index) % length + length) % length;
+        const base = (((target - index) % length) + length) % length;
         return base + length * (extra[index] as number);
       });
     }),
@@ -177,23 +337,19 @@ const validPatternArb = fc.integer({ min: 1, max: 6 }).chain((length) =>
 describe('property: landing schedule matches the state-vector semantics', () => {
   it('timeline.landingScheduleAt == siteswap.stateAt for every beat', () => {
     fc.assert(
-      fc.property(
-        validPatternArb,
-        fc.integer({ min: 1, max: 4 }),
-        (values, handCount) => {
-          const beatCount = 16;
-          const maxHeight = Math.max(...values, 1) + 2;
-          const timeline = buildTimeline(values, {
-            beatCount,
-            params: { ...DEFAULT_PARAMS, handCount },
-          });
-          for (let beat = 0; beat < beatCount; beat++) {
-            expect(timeline.landingScheduleAt(beat, maxHeight)).toEqual(
-              stateAt(values, beat, maxHeight),
-            );
-          }
-        },
-      ),
+      fc.property(validPatternArb, fc.integer({ min: 1, max: 4 }), (values, handCount) => {
+        const beatCount = 16;
+        const maxHeight = Math.max(...values, 1) + 2;
+        const timeline = buildTimeline(values, {
+          beatCount,
+          params: { ...DEFAULT_PARAMS, handCount },
+        });
+        for (let beat = 0; beat < beatCount; beat++) {
+          expect(timeline.landingScheduleAt(beat, maxHeight)).toEqual(
+            stateAt(values, beat, maxHeight),
+          );
+        }
+      }),
     );
   });
 });
@@ -211,9 +367,7 @@ describe('property: every catch precedes its throw', () => {
         // after the catch beat (an immutable beat ordering, NOT a time filter) —
         // then assert its scheduled time did not regress before the catch. This
         // genuinely fails if a throw's time were computed ahead of its catch.
-        const catches = timeline.events.filter(
-          (e): e is CatchEvent => e.kind === 'catch',
-        );
+        const catches = timeline.events.filter((e): e is CatchEvent => e.kind === 'catch');
         const throws = timeline.events.filter((e): e is ThrowEvent => e.kind === 'throw');
         for (const c of catches) {
           const nextThrow = throws
@@ -382,7 +536,9 @@ function makeTransition(
   maxHeight: number,
   spliceBeat: number,
 ): { schedule: PatternSchedule; bridgeEndBeat: number; targetPhase: number } {
-  const b = validatePattern(prefixValues).ok ? (validatePattern(prefixValues) as { ballCount: number }).ballCount : 0;
+  const b = validatePattern(prefixValues).ok
+    ? (validatePattern(prefixValues) as { ballCount: number }).ballCount
+    : 0;
   const graph = buildStateGraph(b, maxHeight);
   const currentState = stateAtBits(prefixValues, spliceBeat, maxHeight);
   const cycle = patternCycle(targetValues, maxHeight);
@@ -412,7 +568,8 @@ describe('buildTimeline — splice: bit-identical past', () => {
       expect(spliced.beatTime(beat)).toBeCloseTo(baseline.beatTime(beat), 12);
     }
     // Instantaneous events strictly before the splice are bit-identical.
-    const before = (e: TimelineEvent): boolean => e.kind !== 'hold' && eventTime(e) < spliceTime - 1e-9;
+    const before = (e: TimelineEvent): boolean =>
+      e.kind !== 'hold' && eventTime(e) < spliceTime - 1e-9;
     expect(spliced.events.filter(before)).toEqual(baseline.events.filter(before));
   });
 
@@ -423,13 +580,23 @@ describe('buildTimeline — splice: bit-identical past', () => {
     fc.assert(
       fc.property(arb, fc.nat(), fc.nat(), ({ b, n }, pickA, pickB) => {
         const graph = buildStateGraph(b, n);
-        const prefixValues = shortestCycle(graph, graph.nodes[pickA % graph.nodes.length] as StateBits);
-        const targetValues = shortestCycle(graph, graph.nodes[pickB % graph.nodes.length] as StateBits);
+        const prefixValues = shortestCycle(
+          graph,
+          graph.nodes[pickA % graph.nodes.length] as StateBits,
+        );
+        const targetValues = shortestCycle(
+          graph,
+          graph.nodes[pickB % graph.nodes.length] as StateBits,
+        );
         const spliceBeat = n + prefixValues.length + 4;
         const { schedule } = makeTransition(prefixValues, targetValues, n, spliceBeat);
         const beatCount = spliceBeat + 24;
         const baseline = buildTimeline(prefixValues, { beatCount, params: DEFAULT_PARAMS });
-        const spliced = buildTimeline(prefixValues, { beatCount, params: DEFAULT_PARAMS, schedule });
+        const spliced = buildTimeline(prefixValues, {
+          beatCount,
+          params: DEFAULT_PARAMS,
+          schedule,
+        });
         const spliceTime = baseline.beatTime(spliceBeat);
         const before = (e: TimelineEvent): boolean =>
           e.kind !== 'hold' && eventTime(e) < spliceTime - 1e-9;
@@ -448,8 +615,14 @@ describe('buildTimeline — splice: post-transition steady state', () => {
     fc.assert(
       fc.property(arb, fc.nat(), fc.nat(), ({ b, n }, pickA, pickB) => {
         const graph = buildStateGraph(b, n);
-        const prefixValues = shortestCycle(graph, graph.nodes[pickA % graph.nodes.length] as StateBits);
-        const targetValues = shortestCycle(graph, graph.nodes[pickB % graph.nodes.length] as StateBits);
+        const prefixValues = shortestCycle(
+          graph,
+          graph.nodes[pickA % graph.nodes.length] as StateBits,
+        );
+        const targetValues = shortestCycle(
+          graph,
+          graph.nodes[pickB % graph.nodes.length] as StateBits,
+        );
         const spliceBeat = n + prefixValues.length + 4;
         const { schedule, bridgeEndBeat, targetPhase } = makeTransition(
           prefixValues,
@@ -458,7 +631,11 @@ describe('buildTimeline — splice: post-transition steady state', () => {
           spliceBeat,
         );
         const beatCount = bridgeEndBeat + 3 * n + 16;
-        const spliced = buildTimeline(targetValues, { beatCount, params: DEFAULT_PARAMS, schedule });
+        const spliced = buildTimeline(targetValues, {
+          beatCount,
+          params: DEFAULT_PARAMS,
+          schedule,
+        });
         // Well past the bridge (all landing sources are in the target region), the
         // state equals stateAt of the phased target — steady-state has been reached.
         const start = bridgeEndBeat + maxThrowOf(targetValues) + n;
@@ -482,8 +659,14 @@ describe('buildTimeline — splice: identity + held-2 across the seam', () => {
     fc.assert(
       fc.property(arb, fc.nat(), fc.nat(), ({ b, n }, pickA, pickB) => {
         const graph = buildStateGraph(b, n);
-        const prefixValues = shortestCycle(graph, graph.nodes[pickA % graph.nodes.length] as StateBits);
-        const targetValues = shortestCycle(graph, graph.nodes[pickB % graph.nodes.length] as StateBits);
+        const prefixValues = shortestCycle(
+          graph,
+          graph.nodes[pickA % graph.nodes.length] as StateBits,
+        );
+        const targetValues = shortestCycle(
+          graph,
+          graph.nodes[pickB % graph.nodes.length] as StateBits,
+        );
         // A held-forever orbit (all-2 pattern) has no bounded carry model; skip.
         const allTwo = (values: readonly number[]): boolean =>
           orbits(values).some((cycle) => cycle.every((i) => values[i] === 2));
