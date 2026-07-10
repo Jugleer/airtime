@@ -10,8 +10,20 @@ import { apexHeight } from '../core/kinematics';
 export { Scene, type SceneColors } from './Scene';
 export { Balls } from './Balls';
 export { Tracers } from './Tracers';
+export { Hands, HandPaths } from './Hands';
 export { HandGizmos } from './HandGizmos';
 export { useBallColorResolver } from './useBallColors';
+export {
+  HAND_CUP_RADIUS_FACTOR,
+  HAND_PATH_MAX_PERIOD_BEATS,
+  HAND_PATH_PALETTE,
+  handCupRadius,
+  handPathColor,
+  handPathPeriodBeats,
+  handPathPointCount,
+  handPathStartBeat,
+  maxHandPathPoints,
+} from './hands';
 export {
   GHOST_SPAN_SECONDS,
   TRAIL_SAMPLE_DT,

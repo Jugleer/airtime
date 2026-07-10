@@ -128,4 +128,40 @@ describe('StateGraph panel (ui layer)', () => {
     expect(state.transition).toBeNull();
     expect(state.sim.schedule).toBeUndefined();
   });
+
+  it('a Close button dismisses the open overlay', () => {
+    render(<StateGraph />); // beforeEach opens the overlay
+    expect(screen.getByLabelText('Current state marker')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('Close state graph'));
+    expect(useAppStore.getState().graphVisible).toBe(false);
+    expect(screen.queryByLabelText('Current state marker')).toBeNull();
+  });
+});
+
+describe('StateGraph minimap (always-visible corner preview)', () => {
+  it('shows a non-interactive minimap when the overlay is closed and expands on click', () => {
+    useAppStore.setState({ graphVisible: false, graphMinimap: true });
+    render(<StateGraph />);
+    // The overlay controls are gone; the minimap + its own marker are present.
+    expect(screen.queryByLabelText('Max throw N')).toBeNull();
+    expect(screen.queryByLabelText('Current state marker')).toBeNull();
+    expect(screen.getByLabelText('State graph minimap')).toBeTruthy();
+    expect(screen.getByLabelText('State minimap marker')).toBeTruthy();
+    // The minimap draws no interactive per-node buttons (labels off, non-interactive).
+    expect(screen.queryAllByLabelText(/^State [01]+$/)).toHaveLength(0);
+    // Clicking it opens the full overlay.
+    fireEvent.click(screen.getByLabelText('Expand state graph'));
+    expect(useAppStore.getState().graphVisible).toBe(true);
+    expect(screen.getByLabelText('Max throw N')).toBeTruthy();
+  });
+
+  it('hides the minimap entirely when graphMinimap is off (toggle still opens the overlay)', () => {
+    useAppStore.setState({ graphVisible: false, graphMinimap: false });
+    render(<StateGraph />);
+    expect(screen.queryByLabelText('State graph minimap')).toBeNull();
+    expect(screen.queryByLabelText('State minimap marker')).toBeNull();
+    // The persistent toggle button still opens the overlay.
+    fireEvent.click(screen.getByLabelText('Toggle state graph panel'));
+    expect(useAppStore.getState().graphVisible).toBe(true);
+  });
 });

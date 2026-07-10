@@ -51,8 +51,13 @@ interface GraphGeometry {
   toY(y: number): number;
 }
 
-function geometryOf(layout: GraphLayout): GraphGeometry {
-  const margin = layout.nodes.length <= LABEL_NODE_LIMIT ? MARGIN_LABELED : MARGIN_PLAIN;
+function geometryOf(
+  layout: GraphLayout,
+  labeled: boolean = layout.nodes.length <= LABEL_NODE_LIMIT,
+): GraphGeometry {
+  // The minimap draws no labels at any size (owner requirement), so it passes
+  // `labeled = false` to reclaim the label margin and fill its small box.
+  const margin = labeled ? MARGIN_LABELED : MARGIN_PLAIN;
   const span = VIEW_SIZE - 2 * margin;
   const rings = new Map<number, { count: number; radius: number }>();
   for (const node of layout.nodes) {
@@ -90,6 +95,8 @@ const GraphPicture = memo(function GraphPicture({
   geometry,
   palette,
   onNodeClick,
+  labels,
+  interactive = true,
 }: {
   readonly graph: CoreStateGraph;
   readonly layout: GraphLayout;
@@ -97,6 +104,10 @@ const GraphPicture = memo(function GraphPicture({
   readonly geometry: GraphGeometry;
   readonly palette: Palette;
   onNodeClick(bits: number): void;
+  /** Force node labels on/off; defaults to the node-count rule (overlay behavior). */
+  readonly labels?: boolean;
+  /** When false (the minimap), nodes are plain, unclickable circles (no role/aria). */
+  readonly interactive?: boolean;
 }): ReactElement {
   const { toX, toY, nodeRadius } = geometry;
   const cycleEdgeKeys = new Set(cycle.edges.map((edge) => `${edge.from}:${edge.to}`));
@@ -180,7 +191,7 @@ const GraphPicture = memo(function GraphPicture({
     }
   }
 
-  const showLabels = layout.nodes.length <= LABEL_NODE_LIMIT;
+  const showLabels = labels ?? layout.nodes.length <= LABEL_NODE_LIMIT;
   const nodes: ReactElement[] = layout.nodes.map((node) => {
     const onCycle = cycle.nodeSet.has(node.bits);
     const labelAngle = cycleEdgeKeys.has(`${node.bits}:${node.bits}`)
@@ -189,19 +200,26 @@ const GraphPicture = memo(function GraphPicture({
     const labelCos = Math.cos(labelAngle);
     const labelDistance = nodeRadius + 7;
     const labelAnchor = labelCos > 0.35 ? 'start' : labelCos < -0.35 ? 'end' : 'middle';
+    // Non-interactive (minimap) nodes drop role/aria/onClick and the pointer
+    // cursor — the whole minimap is a single "expand" affordance instead.
+    const interactiveProps = interactive
+      ? {
+          role: 'button',
+          'aria-label': `State ${node.label}`,
+          style: { cursor: 'pointer' as const },
+          onClick: () => onNodeClick(node.bits),
+        }
+      : {};
     return (
       <g key={`node-${node.bits}`}>
         <circle
-          role="button"
-          aria-label={`State ${node.label}`}
+          {...interactiveProps}
           cx={toX(node.x)}
           cy={toY(node.y)}
           r={nodeRadius}
           fill={onCycle ? CYCLE_COLOR : palette.nodeFill}
           stroke={onCycle ? CYCLE_COLOR : palette.nodeStroke}
           strokeWidth={1.2}
-          style={{ cursor: 'pointer' }}
-          onClick={() => onNodeClick(node.bits)}
         >
           <title>{`state ${node.label} (level ${node.level})`}</title>
         </circle>
@@ -243,27 +261,36 @@ const GraphPicture = memo(function GraphPicture({
   );
 });
 
-/** The current-state marker (the "little ball", DESIGN.md §5): hops each beat. */
+/**
+ * The current-state marker (the "little ball", DESIGN.md §5): hops each beat.
+ * The selector returns the marker's STATE BITS, so the component re-renders (and
+ * the DOM circle moves) only when the marker hops to a new node — not on every
+ * frame — even though the underlying simTime advances continuously. This is what
+ * keeps the always-visible minimap cheap (only the marker tracks simTime).
+ */
 function CurrentStateMarker({
   layout,
   geometry,
   maxHeight,
+  markerLabel = 'Current state marker',
 }: {
   readonly layout: GraphLayout;
   readonly geometry: GraphGeometry;
   readonly maxHeight: number;
+  readonly markerLabel?: string;
 }): ReactElement | null {
-  const sim = useAppStore((state) => state.sim);
-  const simTime = useAppStore((state) => state.simTime);
-  const beat = currentBeatIndex(sim.timeline, simTime);
-  const bits = stateToBits(sim.timeline.landingScheduleAt(beat, maxHeight));
+  const bits = useAppStore((state) =>
+    stateToBits(
+      state.sim.timeline.landingScheduleAt(currentBeatIndex(state.sim.timeline, state.simTime), maxHeight),
+    ),
+  );
   const coord = layout.coordOf.get(bits);
   if (!coord) {
     return null;
   }
   return (
     <circle
-      aria-label="Current state marker"
+      aria-label={markerLabel}
       cx={geometry.toX(coord.x)}
       cy={geometry.toY(coord.y)}
       r={geometry.markerRadius}
@@ -297,12 +324,24 @@ function StatusLine(): ReactElement {
   );
 }
 
-/** The graph body: derived graph/layout/cycle + the SVG (mounted only when shown). */
-function StateGraphBody(): ReactElement {
-  const palette = usePalette();
+/** The derived (b, N) graph + layout + current cycle, memoized and shared by the
+ *  minimap and the full overlay (only one is mounted at a time, so this computes
+ *  once). Returns a tagged status so callers render the right notice. */
+type GraphModel =
+  | { readonly status: 'unavailable'; readonly patternMax: number }
+  | { readonly status: 'invalid' }
+  | {
+      readonly status: 'ok';
+      readonly graph: CoreStateGraph;
+      readonly layout: GraphLayout;
+      readonly cycle: PatternCycle;
+      readonly ballCount: number;
+      readonly graphMaxHeight: number;
+    };
+
+function useGraphModel(): GraphModel {
   const sim = useAppStore((state) => state.sim);
   const graphMaxHeight = useAppStore((state) => state.graphMaxHeight);
-  const navigateToState = useAppStore((state) => state.navigateToState);
 
   const ballCount = sim.ballCount;
   const values = sim.values;
@@ -315,7 +354,7 @@ function StateGraphBody(): ReactElement {
     }
     const graph = buildStateGraph(ballCount, graphMaxHeight);
     const layout = layoutStateGraph(graph);
-    return { graph, layout, geometry: geometryOf(layout) };
+    return { graph, layout };
   }, [ballCount, graphMaxHeight, unavailable]);
 
   const cycle = useMemo(
@@ -324,14 +363,29 @@ function StateGraphBody(): ReactElement {
   );
 
   if (unavailable) {
+    return { status: 'unavailable', patternMax };
+  }
+  if (!derived || !cycle) {
+    return { status: 'invalid' };
+  }
+  return { status: 'ok', graph: derived.graph, layout: derived.layout, cycle, ballCount, graphMaxHeight };
+}
+
+/** The full-overlay graph body: derived graph/layout/cycle + the interactive SVG. */
+function StateGraphBody(): ReactElement {
+  const palette = usePalette();
+  const navigateToState = useAppStore((state) => state.navigateToState);
+  const model = useGraphModel();
+
+  if (model.status === 'unavailable') {
     return (
       <p role="note" style={{ ...statusStyle(palette), color: palette.amber }}>
-        State graph unavailable for this pattern (max throw {patternMax} &gt; {GRAPH_N_MAX}). The
+        State graph unavailable for this pattern (max throw {model.patternMax} &gt; {GRAPH_N_MAX}). The
         simulation still runs; type a pattern with throws ≤ {GRAPH_N_MAX} to navigate the graph.
       </p>
     );
   }
-  if (!derived || !cycle) {
+  if (model.status === 'invalid') {
     return (
       <p role="note" style={{ ...statusStyle(palette), color: palette.amber }}>
         State graph needs a valid pattern with an integer ball count.
@@ -339,7 +393,8 @@ function StateGraphBody(): ReactElement {
     );
   }
 
-  const { graph, layout, geometry } = derived;
+  const { graph, layout, cycle, ballCount, graphMaxHeight } = model;
+  const geometry = geometryOf(layout);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'center', minHeight: 0 }}>
       <StatusLine />
@@ -400,17 +455,91 @@ function NStepper(): ReactElement {
   );
 }
 
+/** No-op node-click handler for the non-interactive minimap. */
+const NOOP = (): void => {};
+
 /**
- * The state-graph overlay + its top-left scene toggle (DESIGN.md §5, §6). The
- * toggle is always present; the overlay renders over the scene only when
- * `graphVisible`. When hidden the body unmounts (nothing derived/drawn).
+ * The always-visible corner MINIMAP (DESIGN.md §5; owner requirement 2026-07-11):
+ * a compact, non-interactive ring-graph preview in the scene's top-left corner
+ * (under the toggle button) — cycle highlighted, no labels, the marker hopping
+ * each beat is the point. Clicking anywhere on it opens the full overlay. It
+ * reuses the memoized layout via {@link useGraphModel} and only the marker
+ * subscribes to simTime, so it stays cheap even at dense (462-node) graphs.
+ */
+function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
+  const palette = usePalette();
+  const model = useGraphModel();
+
+  const body =
+    model.status === 'ok' ? (
+      (() => {
+        const { graph, layout, cycle, graphMaxHeight } = model;
+        const geometry = geometryOf(layout, false);
+        return (
+          <svg
+            viewBox={`0 0 ${geometry.width} ${geometry.height}`}
+            role="img"
+            aria-label="State graph minimap"
+            style={{ display: 'block', width: '100%', height: '100%', pointerEvents: 'none' }}
+          >
+            <GraphPicture
+              graph={graph}
+              layout={layout}
+              cycle={cycle}
+              geometry={geometry}
+              palette={palette}
+              onNodeClick={NOOP}
+              labels={false}
+              interactive={false}
+            />
+            <CurrentStateMarker
+              layout={layout}
+              geometry={geometry}
+              maxHeight={graphMaxHeight}
+              markerLabel="State minimap marker"
+            />
+          </svg>
+        );
+      })()
+    ) : (
+      <span style={{ ...statusStyle(palette), fontSize: '0.68rem', textAlign: 'center', padding: '0.6rem' }}>
+        graph unavailable — expand for details
+      </span>
+    );
+
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      aria-label="Expand state graph"
+      title="Expand state graph"
+      style={minimapCardStyle(palette)}
+    >
+      {body}
+      <span aria-hidden style={minimapExpandGlyphStyle(palette)}>
+        ⤢
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The state-graph scene affordances (DESIGN.md §5, §6):
+ *   • a persistent top-left toggle button that opens/closes the FULL overlay;
+ *   • an always-visible corner MINIMAP under it (unless the overlay is open or the
+ *     operator turned it off in Settings) that also expands the overlay on click;
+ *   • the full interactive overlay (N stepper, hard reset, navigation) when
+ *     `graphVisible`. When the overlay is closed its body unmounts (nothing derived
+ *     or drawn beyond the cheap minimap).
  */
 export function StateGraph(): ReactElement {
   const palette = usePalette();
   const graphVisible = useAppStore((state) => state.graphVisible);
+  const graphMinimap = useAppStore((state) => state.graphMinimap);
   const graphMaxHeight = useAppStore((state) => state.graphMaxHeight);
   const graphNotice = useAppStore((state) => state.graphNotice);
   const toggleGraph = useAppStore((state) => state.toggleGraph);
+  const setGraphVisible = useAppStore((state) => state.setGraphVisible);
   const hardReset = useAppStore((state) => state.hardReset);
 
   return (
@@ -425,6 +554,12 @@ export function StateGraph(): ReactElement {
       >
         <span aria-hidden>◎</span> State graph
       </button>
+
+      {/* Corner minimap, under the toggle (hidden while the overlay is open, or
+          when the operator turned the minimap off — the toggle still opens it). */}
+      {!graphVisible && graphMinimap ? (
+        <GraphMinimap onExpand={() => setGraphVisible(true)} />
+      ) : null}
 
       {graphVisible ? (
         <div
@@ -444,6 +579,9 @@ export function StateGraph(): ReactElement {
             <NStepper />
             <Button onClick={hardReset} ariaLabel="Hard reset" variant="default">
               Hard reset
+            </Button>
+            <Button onClick={() => setGraphVisible(false)} ariaLabel="Close state graph" variant="ghost">
+              ✕ Close
             </Button>
             {graphMaxHeight >= GRAPH_WARN_N ? (
               <span role="note" style={{ color: palette.amber, fontSize: '0.75rem' }}>
@@ -492,6 +630,42 @@ function toggleButtonStyle(palette: Palette, active: boolean): CSSProperties {
     fontWeight: 600,
     cursor: 'pointer',
     backdropFilter: 'blur(4px)',
+  };
+}
+
+/** The translucent minimap card, top-left under the toggle button. */
+function minimapCardStyle(palette: Palette): CSSProperties {
+  return {
+    position: 'absolute',
+    top: '2.7rem',
+    left: '0.55rem',
+    zIndex: 4,
+    width: '200px',
+    height: '200px',
+    padding: '0.3rem',
+    borderRadius: '0.5rem',
+    border: `1px solid ${palette.border}`,
+    // Very translucent so the scene reads behind it.
+    background: palette.name === 'dark' ? 'rgba(15, 23, 42, 0.45)' : 'rgba(255, 255, 255, 0.5)',
+    backdropFilter: 'blur(3px)',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  };
+}
+
+/** The small ⤢ expand glyph pinned in the minimap's corner. */
+function minimapExpandGlyphStyle(palette: Palette): CSSProperties {
+  return {
+    position: 'absolute',
+    top: '0.15rem',
+    right: '0.3rem',
+    fontSize: '0.8rem',
+    lineHeight: 1,
+    color: palette.textSecondary,
+    pointerEvents: 'none',
   };
 }
 

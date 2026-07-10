@@ -24,6 +24,7 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { Grid, OrbitControls } from '@react-three/drei';
 import { Balls } from './Balls';
 import { Tracers } from './Tracers';
+import { Hands, HandPaths } from './Hands';
 import { HandGizmos } from './HandGizmos';
 import { useAppStore } from '../state';
 import { setCameraSampler, setCanvasElement } from '../state/sceneBridge';
@@ -156,6 +157,8 @@ export interface SceneColors {
   readonly overlayText: string;
   readonly accent: string;
   readonly accentText: string;
+  /** Translucent hand-cup color (a neutral, theme-appropriate tone). */
+  readonly handCup: string;
 }
 
 const DEFAULT_SCENE_COLORS: SceneColors = {
@@ -167,6 +170,7 @@ const DEFAULT_SCENE_COLORS: SceneColors = {
   overlayText: '#f1f5f9',
   accent: '#3b82f6',
   accentText: '#ffffff',
+  handCup: '#94a3b8',
 };
 
 /** Lights + ground grid — analytic, asset-free (DESIGN.md §6). */
@@ -235,7 +239,9 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
         <Environment colors={colors} />
         <CameraRig />
         <Tracers />
+        <HandPaths />
         <Balls />
+        <Hands color={colors.handCup} />
         <HandGizmos />
       </Canvas>
 

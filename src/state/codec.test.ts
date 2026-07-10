@@ -43,6 +43,8 @@ const shareConfigArb: fc.Arbitrary<ShareConfig> = fc
         ballRadius: positive(0.1),
         ballColor: hexColor,
         orbitColoring: fc.boolean(),
+        showHands: fc.boolean(),
+        showHandPaths: fc.boolean(),
         timelineWindow: positive(15),
         trailLength: positive(8),
         ghostsEnabled: fc.boolean(),
@@ -55,6 +57,7 @@ const shareConfigArb: fc.Arbitrary<ShareConfig> = fc
         ),
         graphMaxHeight: fc.integer({ min: 3, max: 11 }),
         graphVisible: fc.boolean(),
+        graphMinimap: fc.boolean(),
         audioEnabled: fc.boolean(),
         catchTickEnabled: fc.boolean(),
         audioVolume: fc.double({ min: 0, max: 1, noNaN: true, noDefaultInfinity: true }),
@@ -84,9 +87,12 @@ describe('URL codec round-trip (encode → decode = identity to codec precision)
         expect(decoded.handCount).toBe(config.handCount);
         expect(decoded.graphMaxHeight).toBe(config.graphMaxHeight);
         expect(decoded.orbitColoring).toBe(config.orbitColoring);
+        expect(decoded.showHands).toBe(config.showHands);
+        expect(decoded.showHandPaths).toBe(config.showHandPaths);
         expect(decoded.ghostsEnabled).toBe(config.ghostsEnabled);
         expect(decoded.chartsVisible).toBe(config.chartsVisible);
         expect(decoded.graphVisible).toBe(config.graphVisible);
+        expect(decoded.graphMinimap).toBe(config.graphMinimap);
         expect(decoded.audioEnabled).toBe(config.audioEnabled);
         expect(decoded.catchTickEnabled).toBe(config.catchTickEnabled);
 
@@ -207,6 +213,8 @@ function sampleConfig(): ShareConfig {
     ballRadius: 0.035,
     ballColor: '#2f6fed',
     orbitColoring: false,
+    showHands: true,
+    showHandPaths: false,
     timelineWindow: 3,
     trailLength: 0.8,
     ghostsEnabled: true,
@@ -214,6 +222,7 @@ function sampleConfig(): ShareConfig {
     chartAxisMode: 'magnitude',
     graphMaxHeight: 7,
     graphVisible: true,
+    graphMinimap: true,
     audioEnabled: false,
     catchTickEnabled: true,
     audioVolume: 0.5,

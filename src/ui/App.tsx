@@ -35,6 +35,7 @@ function sceneColorsOf(palette: Palette): SceneColors {
     overlayText: palette.textPrimary,
     accent: palette.accent,
     accentText: palette.accentText,
+    handCup: palette.textSecondary,
   };
 }
 

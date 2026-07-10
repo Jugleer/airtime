@@ -20,8 +20,11 @@ import {
   DEFAULT_BALL_COLOR,
   DEFAULT_BALL_RADIUS,
   DEFAULT_GHOSTS_ENABLED,
+  DEFAULT_GRAPH_MINIMAP,
   DEFAULT_ORBIT_COLORING,
   DEFAULT_PLAYBACK_SPEED,
+  DEFAULT_SHOW_HANDS,
+  DEFAULT_SHOW_HAND_PATHS,
   DEFAULT_TRAIL_LENGTH,
   PLAYBACK_MAX,
   PLAYBACK_MIN,
@@ -45,6 +48,9 @@ function ViewSettings(): ReactElement {
   const ballRadius = useAppStore((state) => state.ballRadius);
   const orbitColoring = useAppStore((state) => state.orbitColoring);
   const ballColor = useAppStore((state) => state.ballColor);
+  const showHands = useAppStore((state) => state.showHands);
+  const showHandPaths = useAppStore((state) => state.showHandPaths);
+  const graphMinimap = useAppStore((state) => state.graphMinimap);
   const timelineWindow = useAppStore((state) => state.timelineWindow);
   const trailLength = useAppStore((state) => state.trailLength);
   const ghostsEnabled = useAppStore((state) => state.ghostsEnabled);
@@ -54,6 +60,12 @@ function ViewSettings(): ReactElement {
   const toggleOrbitColoring = useAppStore((state) => state.toggleOrbitColoring);
   const setOrbitColoring = useAppStore((state) => state.setOrbitColoring);
   const setBallColor = useAppStore((state) => state.setBallColor);
+  const toggleShowHands = useAppStore((state) => state.toggleShowHands);
+  const setShowHands = useAppStore((state) => state.setShowHands);
+  const toggleShowHandPaths = useAppStore((state) => state.toggleShowHandPaths);
+  const setShowHandPaths = useAppStore((state) => state.setShowHandPaths);
+  const toggleGraphMinimap = useAppStore((state) => state.toggleGraphMinimap);
+  const setGraphMinimap = useAppStore((state) => state.setGraphMinimap);
   const setTimelineWindow = useAppStore((state) => state.setTimelineWindow);
   const setTrailLength = useAppStore((state) => state.setTrailLength);
   const toggleGhosts = useAppStore((state) => state.toggleGhosts);
@@ -68,6 +80,9 @@ function ViewSettings(): ReactElement {
     trailLength !== DEFAULT_TRAIL_LENGTH ||
     orbitColoring !== DEFAULT_ORBIT_COLORING ||
     ghostsEnabled !== DEFAULT_GHOSTS_ENABLED ||
+    showHands !== DEFAULT_SHOW_HANDS ||
+    showHandPaths !== DEFAULT_SHOW_HAND_PATHS ||
+    graphMinimap !== DEFAULT_GRAPH_MINIMAP ||
     ballColor !== DEFAULT_BALL_COLOR;
   const resetView = (): void => {
     setPlaybackSpeed(DEFAULT_PLAYBACK_SPEED);
@@ -76,6 +91,9 @@ function ViewSettings(): ReactElement {
     setTrailLength(DEFAULT_TRAIL_LENGTH);
     setOrbitColoring(DEFAULT_ORBIT_COLORING);
     setGhostsEnabled(DEFAULT_GHOSTS_ENABLED);
+    setShowHands(DEFAULT_SHOW_HANDS);
+    setShowHandPaths(DEFAULT_SHOW_HAND_PATHS);
+    setGraphMinimap(DEFAULT_GRAPH_MINIMAP);
     setBallColor(DEFAULT_BALL_COLOR);
   };
 
@@ -145,6 +163,24 @@ function ViewSettings(): ReactElement {
           checked={ghostsEnabled}
           defaultChecked={DEFAULT_GHOSTS_ENABLED}
           onChange={toggleGhosts}
+        />
+        <CheckToggle
+          label="Show hands"
+          checked={showHands}
+          defaultChecked={DEFAULT_SHOW_HANDS}
+          onChange={toggleShowHands}
+        />
+        <CheckToggle
+          label="Hand paths"
+          checked={showHandPaths}
+          defaultChecked={DEFAULT_SHOW_HAND_PATHS}
+          onChange={toggleShowHandPaths}
+        />
+        <CheckToggle
+          label="State-graph minimap"
+          checked={graphMinimap}
+          defaultChecked={DEFAULT_GRAPH_MINIMAP}
+          onChange={toggleGraphMinimap}
         />
         <label
           style={{

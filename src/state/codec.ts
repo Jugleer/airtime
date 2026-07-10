@@ -52,6 +52,8 @@ export interface ShareConfig {
   readonly ballRadius: number;
   readonly ballColor: string;
   readonly orbitColoring: boolean;
+  readonly showHands: boolean;
+  readonly showHandPaths: boolean;
   readonly timelineWindow: number;
   readonly trailLength: number;
   readonly ghostsEnabled: boolean;
@@ -59,6 +61,7 @@ export interface ShareConfig {
   readonly chartAxisMode: ChartAxisModeCode;
   readonly graphMaxHeight: number;
   readonly graphVisible: boolean;
+  readonly graphMinimap: boolean;
   readonly audioEnabled: boolean;
   readonly catchTickEnabled: boolean;
   readonly audioVolume: number;
@@ -162,6 +165,8 @@ export function encodeConfig(config: ShareConfig): string {
   params.set('br', fixed(config.ballRadius));
   params.set('bc', config.ballColor.replace('#', ''));
   params.set('oc', config.orbitColoring ? '1' : '0');
+  params.set('sh', config.showHands ? '1' : '0');
+  params.set('hp', config.showHandPaths ? '1' : '0');
   params.set('tw', fixed(config.timelineWindow));
   params.set('tl', fixed(config.trailLength));
   params.set('gh', config.ghostsEnabled ? '1' : '0');
@@ -169,6 +174,7 @@ export function encodeConfig(config: ShareConfig): string {
   params.set('ca', AXIS_TO_CODE[config.chartAxisMode]);
   params.set('gn', String(config.graphMaxHeight));
   params.set('gv', config.graphVisible ? '1' : '0');
+  params.set('gm', config.graphMinimap ? '1' : '0');
   params.set('au', config.audioEnabled ? '1' : '0');
   params.set('ac', config.catchTickEnabled ? '1' : '0');
   params.set('av', fixed(config.audioVolume));
@@ -227,9 +233,12 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
 
   const boolFields: readonly [string, keyof ShareConfig][] = [
     ['oc', 'orbitColoring'],
+    ['sh', 'showHands'],
+    ['hp', 'showHandPaths'],
     ['gh', 'ghostsEnabled'],
     ['cv', 'chartsVisible'],
     ['gv', 'graphVisible'],
+    ['gm', 'graphMinimap'],
     ['au', 'audioEnabled'],
     ['ac', 'catchTickEnabled'],
   ];
@@ -351,9 +360,12 @@ export function isShareConfigLike(raw: unknown): raw is ShareConfig {
   }
   const boolFields = [
     'orbitColoring',
+    'showHands',
+    'showHandPaths',
     'ghostsEnabled',
     'chartsVisible',
     'graphVisible',
+    'graphMinimap',
     'audioEnabled',
     'catchTickEnabled',
   ];

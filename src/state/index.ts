@@ -165,6 +165,19 @@ export const DEFAULT_BALL_COLOR = '#2f6fed';
  * (`orbitColoring`, codec key `oc`) to avoid store/codec churn.
  */
 export const DEFAULT_ORBIT_COLORING = true;
+/**
+ * Hand cups ON by default (owner decision 2026-07-11): the hands are now core to
+ * the visual, so a fresh boot shows a simple translucent partial hollow sphere
+ * (a cup opening upward) riding each hand's `handState(hand, t)` position. Codec
+ * key `sh`; toggled in Settings › View.
+ */
+export const DEFAULT_SHOW_HANDS = true;
+/**
+ * Persistent hand paths OFF by default: the closed loop each hand traverses over
+ * one spatial period (carries + returns) is a subtle guide line drawn only when
+ * asked. Codec key `hp`; toggled in Settings › View.
+ */
+export const DEFAULT_SHOW_HAND_PATHS = false;
 
 // --- Timeline-bar settings (DESIGN.md §6) — presentation only ---------------
 // The window, trail length, and ghost toggle shape the timeline bar + 3D tracers
@@ -226,6 +239,15 @@ export const DEFAULT_GRAPH_MAX_HEIGHT = GRAPH_DEFAULT_N;
  * `graphVisible` still round-trips the URL codec; only the fresh-boot default changed.
  */
 export const DEFAULT_GRAPH_VISIBLE = false;
+/**
+ * The always-visible corner minimap of the state graph ON by default (redesign
+ * 2026-07-11, owner requirement): a compact, non-interactive ring-graph preview
+ * sits in the scene's top-left corner (cycle + hopping marker visible, no labels)
+ * and expands to the full {@link DEFAULT_GRAPH_VISIBLE} overlay on click. Turn it
+ * OFF for a minimal scene (the labeled toggle button still opens the overlay).
+ * Codec key `gm`; toggled in Settings › View.
+ */
+export const DEFAULT_GRAPH_MINIMAP = true;
 
 // --- Theme (redesign 2026-07-10) — a pure VIEW preference, dark by default. It is
 // deliberately NOT part of ShareConfig, so the URL codec is unchanged (a shared
@@ -310,6 +332,10 @@ export interface AppStore {
   readonly orbitColoring: boolean;
   /** The single ball color (CSS string) used when per-ball coloring is off. */
   readonly ballColor: string;
+  /** Whether translucent hand cups ride each hand's `handState` position (§4.3, §4.4). */
+  readonly showHands: boolean;
+  /** Whether each hand's closed path over one spatial period is drawn (a subtle line). */
+  readonly showHandPaths: boolean;
 
   // timeline-bar settings (DESIGN.md §6) — presentation only, no sim rebuild.
   /** Visible window width (s) for the timeline bar + ladder (1–15, DESIGN.md §7). */
@@ -328,8 +354,10 @@ export interface AppStore {
   // state-graph settings & navigation (DESIGN.md §5)
   /** N, the graph's maximum throw value (3–11; auto-expands to fit patterns). */
   readonly graphMaxHeight: number;
-  /** Whether the state-graph panel is shown (collapsible, like the charts). */
+  /** Whether the FULL state-graph overlay is open (N stepper, hard reset, navigation). */
   readonly graphVisible: boolean;
+  /** Whether the always-visible corner minimap of the state graph is shown. */
+  readonly graphMinimap: boolean;
   /** The in-progress transition's splice metadata (null = on the pattern). */
   readonly transition: TransitionInfo | null;
   /** The last navigation notice (hard reset / graph unavailable), or null. */
@@ -399,9 +427,12 @@ export interface AppStore {
   hardReset(): void;
   /** N stepper (3–11); never drops below the running pattern's max throw. */
   setGraphMaxHeight(n: number): void;
-  /** Show/hide the state-graph panel (hidden ⇒ nothing derived or drawn). */
+  /** Show/hide the FULL state-graph overlay (hidden ⇒ overlay body unmounts). */
   setGraphVisible(graphVisible: boolean): void;
   toggleGraph(): void;
+  /** Show/hide the always-visible corner minimap of the state graph. */
+  setGraphMinimap(graphMinimap: boolean): void;
+  toggleGraphMinimap(): void;
   setBeatPeriod(beatPeriod: number): void;
   setDwellTime(dwellTime: number): void;
   setPlaybackSpeed(playbackSpeed: number): void;
@@ -424,6 +455,12 @@ export interface AppStore {
   setOrbitColoring(orbitColoring: boolean): void;
   toggleOrbitColoring(): void;
   setBallColor(ballColor: string): void;
+  /** Show/hide the translucent hand cups (presentation only, no rebuild). */
+  setShowHands(showHands: boolean): void;
+  toggleShowHands(): void;
+  /** Show/hide the persistent per-hand path lines (presentation only, no rebuild). */
+  setShowHandPaths(showHandPaths: boolean): void;
+  toggleShowHandPaths(): void;
   setTimelineWindow(timelineWindow: number): void;
   setTrailLength(trailLength: number): void;
   setGhostsEnabled(ghostsEnabled: boolean): void;
@@ -707,6 +744,8 @@ export const useAppStore = create<AppStore>((set, get) => {
     ballRadius: DEFAULT_BALL_RADIUS,
     orbitColoring: DEFAULT_ORBIT_COLORING,
     ballColor: DEFAULT_BALL_COLOR,
+    showHands: DEFAULT_SHOW_HANDS,
+    showHandPaths: DEFAULT_SHOW_HAND_PATHS,
 
     timelineWindow: DEFAULT_TIMELINE_WINDOW,
     trailLength: DEFAULT_TRAIL_LENGTH,
@@ -717,6 +756,7 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     graphMaxHeight: DEFAULT_GRAPH_MAX_HEIGHT,
     graphVisible: DEFAULT_GRAPH_VISIBLE,
+    graphMinimap: DEFAULT_GRAPH_MINIMAP,
     transition: null,
     graphNotice: null,
 
@@ -939,6 +979,8 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     setGraphVisible: (graphVisible) => set({ graphVisible }),
     toggleGraph: () => set((state) => ({ graphVisible: !state.graphVisible })),
+    setGraphMinimap: (graphMinimap) => set({ graphMinimap }),
+    toggleGraphMinimap: () => set((state) => ({ graphMinimap: !state.graphMinimap })),
 
     setBeatPeriod: (raw) => {
       const state = get();
@@ -1075,6 +1117,10 @@ export const useAppStore = create<AppStore>((set, get) => {
     setOrbitColoring: (orbitColoring) => set({ orbitColoring }),
     toggleOrbitColoring: () => set((state) => ({ orbitColoring: !state.orbitColoring })),
     setBallColor: (ballColor) => set({ ballColor }),
+    setShowHands: (showHands) => set({ showHands }),
+    toggleShowHands: () => set((state) => ({ showHands: !state.showHands })),
+    setShowHandPaths: (showHandPaths) => set({ showHandPaths }),
+    toggleShowHandPaths: () => set((state) => ({ showHandPaths: !state.showHandPaths })),
 
     // Timeline-bar settings. Trail length + ghost toggle are pure presentation
     // (never touch the sim). A wider window may need more future generated, so it
@@ -1178,6 +1224,8 @@ export const useAppStore = create<AppStore>((set, get) => {
         ballRadius: s.ballRadius,
         ballColor: s.ballColor,
         orbitColoring: s.orbitColoring,
+        showHands: s.showHands,
+        showHandPaths: s.showHandPaths,
         timelineWindow: s.timelineWindow,
         trailLength: s.trailLength,
         ghostsEnabled: s.ghostsEnabled,
@@ -1185,6 +1233,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         chartAxisMode: s.chartAxisMode,
         graphMaxHeight: s.graphMaxHeight,
         graphVisible: s.graphVisible,
+        graphMinimap: s.graphMinimap,
         audioEnabled: s.audioEnabled,
         catchTickEnabled: s.catchTickEnabled,
         audioVolume: s.audioVolume,
@@ -1264,6 +1313,8 @@ export const useAppStore = create<AppStore>((set, get) => {
         ballRadius: clamp(config.ballRadius, BALL_RADIUS_MIN, BALL_RADIUS_MAX),
         orbitColoring: config.orbitColoring,
         ballColor: config.ballColor,
+        showHands: config.showHands,
+        showHandPaths: config.showHandPaths,
         timelineWindow: clamp(config.timelineWindow, TIMELINE_WINDOW_MIN, TIMELINE_WINDOW_MAX),
         trailLength: clamp(config.trailLength, TRAIL_LENGTH_MIN, TRAIL_LENGTH_MAX),
         ghostsEnabled: config.ghostsEnabled,
@@ -1271,6 +1322,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         chartAxisMode: config.chartAxisMode,
         graphMaxHeight,
         graphVisible: config.graphVisible,
+        graphMinimap: config.graphMinimap,
         audioEnabled: config.audioEnabled,
         catchTickEnabled: config.catchTickEnabled,
         audioVolume: clamp(config.audioVolume, AUDIO_VOLUME_MIN, AUDIO_VOLUME_MAX),
