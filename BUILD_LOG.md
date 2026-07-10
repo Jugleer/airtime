@@ -287,3 +287,10 @@ Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-o
 - Commit: d09c778
 - Gate: (2026-07-10, "npm run gate", green — 31 files / 386 tests; orchestrator-run)
 - Original report ("orbit colouring does nothing") diagnosed as working-as-designed (pixel-probe proof) with two perception factors: 1-orbit patterns legitimately single-colored, and the palette's first color identical to the default blue. Owner then overrode the design: per-BALL colors matching the ladder. Implemented as a shared resolver (state/ballColors.ts) used identically by ladder/balls/tracers; both views follow the toggle (closes the Phase 4 deferred item); default ON; label "Colour balls individually"; colors stable across extensions/splices (Phase 8 anchoring). Per-orbit machinery deleted. DESIGN §3/§6/§7 amended to record the override.
+
+## Fix 6 — State graph as concentric excitation rings            DONE
+- Date: 2026-07-10
+- Commit: 353217e
+- Gate: (2026-07-10, "npm run gate", green — 31 files / 392 tests; orchestrator-run)
+- Owner disliked the neural-net column layout. Research agent surveyed conventional siteswap state diagrams (Lundmark's ground-anchored compact polygons; graphviz-based generators) and prototyped three deterministic candidates on real graphs. Winner: concentric rings — ground centred, one ring per excitation level, circumference-aware radii, barycenter angular ordering (~2× shorter edges / node separation vs a single circle; the 462-node b5N11 case keeps visibly distinct rings, ~30 ms layout). Single-circle chords rejected (hairball ≥ 35 nodes); per-pattern rotation rejected (map would spin on pattern change — bad for the coming overlay). Cycle emphasis is render-level (bowed arcs). DESIGN §5 layout wording amended (owner-authorized; graph semantics untouched). Owner was offered the comparison renders before implementation.
+- Presentation deviations (flagged by builder, accepted): fixed 480-unit square viewport with adaptive node radius; wider margin when labels shown; on-cycle self-loop labels flip inward; perf smoke uses process.hrtime (core lint bans performance.* in test files too).
