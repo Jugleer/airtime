@@ -297,6 +297,46 @@ export function quinticHermite(
 }
 
 /**
+ * Well-conditioned quintic Hermite for SHORT segments: analytically identical
+ * to {@link quinticHermite}, but numerically far more careful.
+ *
+ * Two differences matter when T is small:
+ *   1. Residuals are formed difference-first ((p1 − p0) − v0·T − …), so
+ *      rounding stays at the segment-local scale (|Δp|, |v·T|, |a·T²|) instead
+ *      of the absolute position scale |p| — the latter, divided by T² when the
+ *      acceleration is evaluated, breaches the 1e-9 continuity budget.
+ *   2. The 3×3 system is solved in normalized time τ = s/T, where the matrix is
+ *      the constant [[1,1,1],[3,4,5],[6,12,20]] with the exact inverse applied
+ *      below — no Cramer's rule over powers of a tiny T.
+ *
+ * Used by the carry construction for its short absorb/wind-up/hold segments;
+ * longer segments keep {@link quinticHermite} so their output stays
+ * bit-for-bit identical to the original construction.
+ */
+function quinticHermiteConditioned(
+  p0: number,
+  v0: number,
+  a0: number,
+  p1: number,
+  v1: number,
+  a1: number,
+  T: number,
+): Polynomial {
+  const T2 = T * T;
+  // Normalized residuals: with q(τ) = p(τ·T), r0 = q(1) − (q0 + q1 + q2),
+  // r1 = q'(1) − (q1 + 2q2), r2 = q''(1) − 2q2 — assembled difference-first.
+  const r0 = p1 - p0 - v0 * T - 0.5 * a0 * T2;
+  const r1 = (v1 - v0 - a0 * T) * T;
+  const r2 = (a1 - a0) * T2;
+  // Exact inverse of [[1,1,1],[3,4,5],[6,12,20]] (determinant 2).
+  const q3 = 10 * r0 - 4 * r1 + 0.5 * r2;
+  const q4 = -15 * r0 + 7 * r1 - r2;
+  const q5 = 6 * r0 - 3 * r1 + 0.5 * r2;
+  const T3 = T2 * T;
+  return new Polynomial([p0, v0, 0.5 * a0, q3 / T3, q4 / (T3 * T), q5 / (T3 * T2)]);
+}
+
+/**
  * Cubic Hermite: the unique degree-3 polynomial matching p and p' at both ends
  * (velocity-matched only). Its endpoint acceleration is *not* free — generically
  * ≠ (0, −g, 0) — which is exactly why the cubic carry path shows an acceleration
@@ -351,6 +391,38 @@ function gravityVector(gravity: number): Vec3 {
 const MIN_ABSORB_DEPTH = 1e-3;
 
 /**
+ * Numerical-conditioning floor for the absorb/wind-up time: never shorter than
+ * verticalSpeed · ABSORB_TIME_PER_SPEED seconds, capping the absorb's internal
+ * acceleration scale (≈ v / t_absorb) at 1/K = 2·10⁴ m/s². Below that scale,
+ * double-precision rounding in the quintic's coefficients — divided by
+ * t_absorb² wherever acceleration is evaluated — would breach the 1e-9
+ * acceleration-continuity budget at the segment joints (the flaky-property
+ * regression: holdDepth just above MIN_ABSORB_DEPTH, or a fast catch into a
+ * shallow dip). When the floor binds, the dip is shallower than the catch speed
+ * can turn in and the absorb may slightly overshoot it — the deliberate corner
+ * trade for exact C² joints. On the scoop-shape test domain (holdDepth ≥ 0.02,
+ * vertical speeds ≤ 18 m/s) the floor never binds: 2·d/v ≥ 2.2 ms > v·K.
+ */
+const ABSORB_TIME_PER_SPEED = 5e-5;
+
+/**
+ * Segments shorter than this build their quintics via
+ * {@link quinticHermiteConditioned} and with EXACT evaluation-visible durations
+ * (see buildQuinticViaCarry); longer segments keep the original
+ * {@link quinticHermite} construction so their output is bit-for-bit unchanged.
+ * At 50 ms the legacy construction's worst joint error is ≲ 5e-11 — safely
+ * inside the 1e-9 budget — so the switchover is invisible.
+ */
+const SHORT_SEGMENT_TIME = 0.05;
+
+/**
+ * Level holds shorter than this are dropped (the absorb takes the half-carry
+ * instead): a micro-hold's residual rounding, divided by its tiny duration²
+ * at the acceleration level, would also breach the continuity budget.
+ */
+const MIN_HOLD_TIME = 1e-3;
+
+/**
  * Default carry path (DESIGN.md §4.3): a bounded-absorb scoop-and-hold — up to
  * three quintic Hermite segments (absorb: catch → dip, level hold at the dip,
  * wind-up: dip → throw) matching (0, −g, 0) acceleration at the carry endpoints
@@ -360,9 +432,11 @@ const MIN_ABSORB_DEPTH = 1e-3;
  * The dip sits exactly `holdDepth` below the catch–throw midline. The absorb
  * time comes from the constant-deceleration identity — cancelling a vertical
  * speed v over a stopping distance d takes 2·d/v seconds — sized by the larger
- * endpoint vertical speed so both flanks fit:
+ * endpoint vertical speed so both flanks fit, and floored for numerical
+ * conditioning (see {@link ABSORB_TIME_PER_SPEED}):
  *
- *   t_absorb = min(total/2, 2·holdDepth / max(|v_catch·ŷ|, |v_throw·ŷ|))
+ *   v_y      = max(|v_catch·ŷ|, |v_throw·ŷ|)
+ *   t_absorb = min(total/2, max(2·holdDepth / v_y, v_y·ABSORB_TIME_PER_SPEED))
  *
  * This keeps the descent monotone into the dip with no overshoot below it and
  * no mid-carry bump back up (the wavy-carry regression, pinned by the scoop
@@ -391,14 +465,19 @@ function buildQuinticViaCarry(spec: CarrySpec): PolySegment[] {
   const dipY = 0.5 * (catchPoint.y + throwPoint.y) - spec.holdDepth;
   const verticalSpeed = Math.max(Math.abs(startVelocity.y), Math.abs(endVelocity.y));
   // 2·d/v = +Infinity when verticalSpeed is 0 (both flights level out exactly at
-  // the endpoints); Math.min then falls back to the half-carry absorb.
+  // the endpoints); Math.min then falls back to the half-carry absorb. The
+  // ABSORB_TIME_PER_SPEED floor keeps the absorb numerically well-conditioned
+  // when the dip is much shallower than the catch speed can turn in.
   const boundedAbsorb =
     spec.holdDepth > MIN_ABSORB_DEPTH
-      ? Math.min(half, (2 * spec.holdDepth) / verticalSpeed)
+      ? Math.min(
+          half,
+          Math.max((2 * spec.holdDepth) / verticalSpeed, verticalSpeed * ABSORB_TIME_PER_SPEED),
+        )
       : half;
   // Emit the level hold only when it has real duration; otherwise the absorb and
   // wind-up meet at the dip (dipExit === dipEntry keeps that joint exact).
-  const hasHold = total - 2 * boundedAbsorb > 1e-9;
+  const hasHold = total - 2 * boundedAbsorb > MIN_HOLD_TIME;
   const absorbTime = hasHold ? boundedAbsorb : half;
   const dipEntryTime = startTime + absorbTime;
   const dipExitTime = hasHold ? endTime - absorbTime : dipEntryTime;
@@ -415,13 +494,27 @@ function buildQuinticViaCarry(spec: CarrySpec): PolySegment[] {
         throwPoint.z - chordVelocity.z * absorbTime,
       )
     : dipEntry;
+  // Short segments carry steep quintics (internal jerk up to ~v/t_absorb²), so
+  // two extra numerical precautions apply below SHORT_SEGMENT_TIME:
+  //  - build with the conditioned Hermite (segment-local residual scales);
+  //  - build each Hermite with the EXACT duration evaluation will see
+  //    (endTime − startTime of the stored segment, as doubles). Building with
+  //    the ideal absorbTime instead leaves a ~ε·|t| gap between the designed
+  //    duration and the evaluated local time at the joint, which the internal
+  //    jerk amplifies into a visible acceleration mismatch — the root cause of
+  //    the flaky continuity failure.
+  // Longer segments keep the original construction path bit-for-bit.
+  const short = absorbTime < SHORT_SEGMENT_TIME;
+  const hermite = short ? quinticHermiteConditioned : quinticHermite;
+  const absorbDuration = short ? dipEntryTime - startTime : absorbTime;
+  const windupDuration = short ? endTime - dipExitTime : absorbTime;
   const segments: PolySegment[] = [
     {
       startTime,
       endTime: dipEntryTime,
-      x: quinticHermite(catchPoint.x, startVelocity.x, g.x, dipEntry.x, dipVelocity.x, 0, absorbTime),
-      y: quinticHermite(catchPoint.y, startVelocity.y, g.y, dipEntry.y, dipVelocity.y, 0, absorbTime),
-      z: quinticHermite(catchPoint.z, startVelocity.z, g.z, dipEntry.z, dipVelocity.z, 0, absorbTime),
+      x: hermite(catchPoint.x, startVelocity.x, g.x, dipEntry.x, dipVelocity.x, 0, absorbDuration),
+      y: hermite(catchPoint.y, startVelocity.y, g.y, dipEntry.y, dipVelocity.y, 0, absorbDuration),
+      z: hermite(catchPoint.z, startVelocity.z, g.z, dipEntry.z, dipVelocity.z, 0, absorbDuration),
     },
   ];
   if (hasHold) {
@@ -433,17 +526,17 @@ function buildQuinticViaCarry(spec: CarrySpec): PolySegment[] {
     segments.push({
       startTime: dipEntryTime,
       endTime: dipExitTime,
-      x: quinticHermite(dipEntry.x, dipVelocity.x, 0, dipExit.x, dipVelocity.x, 0, holdDuration),
-      y: quinticHermite(dipEntry.y, dipVelocity.y, 0, dipExit.y, dipVelocity.y, 0, holdDuration),
-      z: quinticHermite(dipEntry.z, dipVelocity.z, 0, dipExit.z, dipVelocity.z, 0, holdDuration),
+      x: hermite(dipEntry.x, dipVelocity.x, 0, dipExit.x, dipVelocity.x, 0, holdDuration),
+      y: hermite(dipEntry.y, dipVelocity.y, 0, dipExit.y, dipVelocity.y, 0, holdDuration),
+      z: hermite(dipEntry.z, dipVelocity.z, 0, dipExit.z, dipVelocity.z, 0, holdDuration),
     });
   }
   segments.push({
     startTime: dipExitTime,
     endTime,
-    x: quinticHermite(dipExit.x, dipVelocity.x, 0, throwPoint.x, endVelocity.x, g.x, absorbTime),
-    y: quinticHermite(dipExit.y, dipVelocity.y, 0, throwPoint.y, endVelocity.y, g.y, absorbTime),
-    z: quinticHermite(dipExit.z, dipVelocity.z, 0, throwPoint.z, endVelocity.z, g.z, absorbTime),
+    x: hermite(dipExit.x, dipVelocity.x, 0, throwPoint.x, endVelocity.x, g.x, windupDuration),
+    y: hermite(dipExit.y, dipVelocity.y, 0, throwPoint.y, endVelocity.y, g.y, windupDuration),
+    z: hermite(dipExit.z, dipVelocity.z, 0, throwPoint.z, endVelocity.z, g.z, windupDuration),
   });
   return segments;
 }

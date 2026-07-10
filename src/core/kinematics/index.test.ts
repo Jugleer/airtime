@@ -412,6 +412,40 @@ describe('property: continuity at events (quintic path)', () => {
   });
 });
 
+describe('regression: near-threshold hold depth stays continuous (conditioning)', () => {
+  // Fixed counterexample shrunk by fast-check (seed -1446751901): holdDepth just
+  // above MIN_ABSORB_DEPTH gave a ~2.6 ms absorb whose internal jerk amplified
+  // the ε·|t| gap between the built duration and the evaluated local time into a
+  // 2.0e-9 acceleration mismatch at the absorb→hold joint. Pinned here verbatim
+  // so the conditioned short-segment construction never regresses silently. The
+  // g = 30 row drives the same carries through the ABSORB_TIME_PER_SPEED floor
+  // (fast catches into the same shallow dip).
+  const values = [13, 3, 3, 3, 3];
+  const handCount = 1;
+  const holdDepth = 0.0010000000000000002;
+
+  for (const gravity of [0.5, 30]) {
+    it(`joints stay continuous at g=${gravity}, holdDepth=1e-3+ulp, pattern 13333, n_h=1`, () => {
+      const timeline = buildTimeline(values, {
+        beatCount: 20,
+        params: { ...DEFAULT_PARAMS, handCount },
+      });
+      const kinematics = buildKinematics(timeline, { values, handCount, gravity, holdDepth });
+      const check = (segments: PolySegment[]): void => {
+        for (const { left, right } of jointStates(segments)) {
+          expect(vecDiff(left.position, right.position)).toBeLessThan(1e-10);
+          expect(vecDiff(left.velocity, right.velocity)).toBeLessThan(1e-10);
+          expect(vecDiff(left.acceleration, right.acceleration)).toBeLessThan(1e-9);
+        }
+      };
+      for (const ballId of kinematics.ballIds()) {
+        check(kinematics.ballSegments(ballId));
+      }
+      check(kinematics.handSegments(0));
+    });
+  }
+});
+
 describe('property: carry endpoints exert zero contact force (§4.3)', () => {
   it('carry acceleration equals (0, −g, 0) at catch and throw', () => {
     fc.assert(
