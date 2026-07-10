@@ -334,3 +334,22 @@ Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-o
 - Commit: fd0eb89 — Gate: same combined run.
 - Draft-based pattern entry (Enter/Go apply, Escape revert, dirty cue, external-change sync); per-control ↺ + section Reset-all (defaults single-sourced); wheel-scroll on all sliders; library grown to 35 validated entries grouped 2–7 balls; Settings no longer darkens the app (transparent capture layer, Esc closes); "Try …" hint removed.
 - Next: Track C (hands toggle, persistent hand paths, state-graph minimap) then Track D (external-tools review agent).
+
+## Round 2D — Render features (hands, hand paths, minimap)            DONE
+- Commit: fab8f14 — Gate: (2026-07-11, "npm run gate", green — 36 files / 446 tests; orchestrator-run)
+- showHands (default ON): translucent hemisphere cups following handState, ball nests in the bowl. showHandPaths (default OFF): per-hand closed period loops, resampled only on rebuild/epoch, pastel hues distinct from ball palette. State graph: always-visible 200 px ring minimap top-left (marker re-renders on beat hops only), expand to the full interactive overlay; graphMinimap toggle. Codec keys sh/hp/gm (round-trip property extended). Zero core changes.
+
+## Round 2E — Fresh-eyes review (field survey + wins)            DONE
+- Commit: 9146686 — Gate: (2026-07-11, "npm run gate", green — 37 files / 450 tests; orchestrator-run)
+- Review agent surveyed Juggling Lab, Gunswap, siteswap.org/JoePass and drove the whole app headlessly: NO real bugs found. Verdict: Airtime's live-physics + state-graph + kinematics/energy combination is unique among peers; gaps are notation breadth (sync/multiplex/passing), prop variety, and pattern discovery.
+- Implemented wins: Help closes on Escape + a Keyboard & mouse help section; amber unsupported-notation hint for sync/multiplex/passing characters in the pattern box.
+- RAISED FOR OWNER (ranked, sketches in the review agent's report): 1) siteswap generator/explorer (core machinery already exists), 2) sync & multiplex notation (the big deferred gap), 3) GIF/WebM export (determinism makes it exact), 4) time-bookmark URLs (&t=, near-trivial, needs seconds-vs-beats decision), 5) accessibility focus pass (:focus-visible rings + dialog focus traps), 6) prop types (rings cheap, clubs need a spin model), 7) difficulty metric readout, 8) bounce throws / causal diagram. Minor: library select doesn't reflect the current pattern; sub-1100 px layout cramping (desktop tool, low priority).
+- Operator visual checks pending (round 2, one sweep — dev server or Pages):
+  - [ ] Hand cups track carries/holds; toggle in Settings; hand paths draw closed loops when enabled.
+  - [ ] Normal carries sweep (no flat bottom); 531's zip wind-up has no backward snap; 522 hold still rests level.
+  - [ ] Vertical ladder reads well (time top→bottom; flip to upward is one change if preferred); H0/H1 labels consistent across ladder/timeline/charts (0-indexed — say if you want 1-indexed).
+  - [ ] Timeline: orange square playhead grip (top) / blue circle trail grip (bottom) both grabbable when coincident; lane tags + glyph legend; no marks outside the track.
+  - [ ] Pattern box: typing doesn't disturb the sim; Enter/Go applies; Esc reverts; sync-notation hint on (4,4).
+  - [ ] Space pauses/resumes (not while typing); wheel nudges sliders; per-control ↺ and section Reset-all work.
+  - [ ] Library grouped by ball count; Settings drawer doesn't darken the app; minimap always on (toggleable), expands to full graph.
+  - [ ] Charts dock no longer collapses at very wide windows (was ≥ ~2340 px).
