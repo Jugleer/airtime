@@ -142,12 +142,16 @@ The hand trajectory must be defined for **all** time (charts need it):
   everywhere and jerk finite everywhere (jerk may step at events; only a septic
   would smooth that — out of scope).
   - **Hold dip**: the carry scoops to depth `holdDepth` (m) below the
-    catch–throw line and holds there — a bounded absorb (catch → dip, sized by
-    the constant-deceleration time `2·holdDepth / v_vertical`), an exactly level
-    hold through the dip, and a wind-up (dip → throw): up to three quintic
-    segments stitched C² (the level hold vanishes when the absorb needs the
-    whole carry). This is the "hold vertical distance" control, and it keeps the
-    carry a single smooth scoop — no dip overshoot, no mid-carry bump.
+    catch–throw line. **Held 2s** rest there — a bounded absorb (catch → dip,
+    sized by the constant-deceleration time `2·holdDepth / v_vertical`), an
+    exactly level hold through the dip, and a wind-up (dip → throw). **Normal
+    single-beat carries** sweep a parabolic bottom through the dip instead (no
+    level segment — hands sweep, they don't park), with the dip entry/exit
+    placed per-axis so the wind-up has runway toward the release (no counter-
+    snap before fast rethrows); the construction degenerates to two half-carry
+    segments when the absorb needs the whole carry. All segments quintic,
+    stitched C²; no dip overshoot, no mid-carry bump. This is the "hold
+    vertical distance" control.
   - A cubic (4-point Bézier, velocity-matched only) is available behind a
     `CarryPath` interface as a comparison toggle — it produces jerk deltas at
     events by construction; the UI may note this when selected.

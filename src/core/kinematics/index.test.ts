@@ -488,12 +488,18 @@ describe('carry scoop shape — one smooth dip, no waviness (§4.3)', () => {
   // velocity = chord (vy = 0) AND via acceleration = (0, −g, 0) at the dip —
   // making the dip a local MAXIMUM of vertical motion — so every carry
   // double-dipped in a W shape, overshooting the dip line by ~10 mm (pattern 3
-  // at defaults) up to ~630 mm (522's held carry). The scoop-and-hold
-  // construction must keep the carry one smooth scoop:
+  // at defaults) up to ~630 mm (522's held carry). The scoop construction must
+  // keep the carry one smooth scoop:
   //   (a) the hand never drops below the dip line (dipY = midline − holdDepth),
-  //   (b) descent into the dip and ascent out of it are monotone,
-  //   (c) between first and last dip contact the hand STAYS at the dip (the
-  //       level hold) — no mid-carry bump back up.
+  //   (b) descent into the bottom and ascent out of it are monotone,
+  //   (c) between first and last bottom contact the hand STAYS at the bottom —
+  //       no mid-carry bump back up. (For held 2s the bottom is the level hold;
+  //       for normal carries it is a single parabolic-vertex touch.)
+  // Bottom contact is detected against the SAMPLED minimum, not dipY: a normal
+  // carry touches dipY only at the sweep's parabola vertex, and finite sampling
+  // cannot be guaranteed to land within tolerance of that instant. This is not
+  // a weakening — the (a) bound (min ≥ dipY − tol) is still asserted against
+  // dipY itself, and for level-hold/V carries the sampled minimum IS dipY.
   // Scope: holdDepth ≥ 0.02. At holdDepth ≈ 0 a hand arriving with vertical
   // momentum cannot turn around ON the line itself; that degenerate fallback
   // keeps continuity and finiteness (asserted separately below), not shape.
@@ -538,18 +544,19 @@ describe('carry scoop shape — one smooth dip, no waviness (§4.3)', () => {
                 if (minY < dipY - dipTolerance) {
                   failures.push(`${label}: overshoot below dip by ${(dipY - minY).toFixed(6)} m`);
                 }
-                // Dip contact range: first/last sample at the dip line (the
-                // carry must actually reach its dip).
+                // Bottom contact range: first/last sample at the sampled
+                // minimum (see the describe comment for why not dipY itself).
+                const contactBand = minY + dipTolerance;
                 let firstContact = -1;
                 let lastContact = -1;
                 for (let i = 0; i < heights.length; i++) {
-                  if ((heights[i] as number) <= dipY + dipTolerance) {
+                  if ((heights[i] as number) <= contactBand) {
                     if (firstContact < 0) firstContact = i;
                     lastContact = i;
                   }
                 }
                 if (firstContact < 0) {
-                  failures.push(`${label}: never reaches its dip line`);
+                  failures.push(`${label}: never reaches its own minimum (impossible)`);
                   continue;
                 }
                 // (b) Monotone descent before the dip, monotone ascent after it.
@@ -565,11 +572,11 @@ describe('carry scoop shape — one smooth dip, no waviness (§4.3)', () => {
                     break;
                   }
                 }
-                // (c) No mid-carry bump: between contacts the hand stays at the dip.
+                // (c) No mid-carry bump: between contacts the hand stays at the bottom.
                 for (let i = firstContact; i <= lastContact; i++) {
-                  if ((heights[i] as number) > dipY + dipTolerance) {
+                  if ((heights[i] as number) > contactBand) {
                     failures.push(
-                      `${label}: mid-carry bump ${((heights[i] as number) - dipY).toFixed(6)} m above dip`,
+                      `${label}: mid-carry bump ${((heights[i] as number) - minY).toFixed(6)} m above the bottom`,
                     );
                     break;
                   }
@@ -617,6 +624,143 @@ describe('carry scoop shape — one smooth dip, no waviness (§4.3)', () => {
         }
       }
     }
+  });
+});
+
+// --- Normal carries sweep; the level hold is reserved for held 2s ------------
+
+/** Fraction of a carry's samples resting within 1 µm of its lowest point. */
+function flatFraction(kinematics: Kinematics, carry: CarryMotion): number {
+  const heights = sampleCarryHeights(kinematics, carry, 600);
+  let minY = Infinity;
+  for (const y of heights) {
+    if (y < minY) minY = y;
+  }
+  return heights.filter((y) => y <= minY + 1e-6).length / heights.length;
+}
+
+describe('normal carries sweep through the dip; held 2s rest level at it', () => {
+  // Owner requirement: a NORMAL single-beat carry must not sit flat at the
+  // bottom (the old construction was exactly level for ~41% of the default
+  // cascade carry). The hand now sweeps through the dip on a parabolic bottom —
+  // only the sweep's vertex instant touches the minimum. Multi-beat HELD
+  // carries (2s) keep the exactly level hold (85–93% of the carry at the dip),
+  // which is where the owner wants it and what the 423 exact-dip test pins.
+  it('pattern 3 normal carry has no flat bottom (was 41% flat)', () => {
+    const { kinematics } = kinematicsFor('3', 20);
+    const carry = kinematics.carriesForHand(0).find((c) => c.startBeat >= 4 && c.startBeat <= 10);
+    expect(carry).toBeDefined();
+    if (!carry) return;
+    expect(carry.held).toBe(false);
+    expect(flatFraction(kinematics, carry)).toBeLessThan(0.02);
+  });
+
+  it('522 and 423 held carries keep the level hold', () => {
+    for (const pattern of ['522', '423']) {
+      const { kinematics } = kinematicsFor(pattern, 20);
+      const carry = kinematics.allCarries().find((c) => c.held && c.startBeat >= 3 && c.startBeat <= 10);
+      expect(carry).toBeDefined();
+      if (!carry) continue;
+      expect(flatFraction(kinematics, carry)).toBeGreaterThan(0.5);
+    }
+  });
+});
+
+// --- Zip (value-1 rethrow) carries: no counter-snap before release -----------
+
+describe('regression: zip wind-up has no counter-snap (531, 51)', () => {
+  // Owner report: the carry before a value-1 rethrow released at ~(∓6.4, 0.3)
+  // m/s, but the dip exit sat only chord·t_windup ≈ 29 mm from the throw point
+  // while the release demanded ~v·t/2 ≈ 138 mm of ramp runway — so the quintic
+  // swung 28.5 mm BACKWARD at up to +2.27 m/s against the release direction
+  // before whipping forward. The ramp-placed dip (sweep drift u, runway
+  // (v + u)/2·t_flank) gives the wind-up its runway; after the dip the hand
+  // must now make monotone progress toward the throw (small tolerances leave
+  // room for an honest natural backswing, not an aggressive snap).
+  for (const pattern of ['531', '51']) {
+    it(`${pattern}: post-dip motion toward the throw never counter-swings`, () => {
+      const values = parse(pattern);
+      const timeline = buildTimeline(values, { beatCount: 20, params: DEFAULT_PARAMS });
+      const kinematics = buildKinematics(timeline, { values, handCount: 2 });
+      const zipCarry = kinematics
+        .allCarries()
+        .find(
+          (c) =>
+            c.startBeat >= 4 &&
+            c.startBeat <= 10 &&
+            values[c.endBeat % values.length] === 1 &&
+            c.endTime > c.startTime,
+        );
+      expect(zipCarry).toBeDefined();
+      if (!zipCarry) return;
+      // The zip release is fast and mostly horizontal.
+      expect(Math.abs(zipCarry.endVelocity.x)).toBeGreaterThan(3);
+      const direction = Math.sign(zipCarry.endVelocity.x);
+      const samples = 600;
+      const duration = zipCarry.endTime - zipCarry.startTime;
+      const xs: number[] = [];
+      const vxs: number[] = [];
+      const ys: number[] = [];
+      for (let i = 0; i <= samples; i++) {
+        const state = kinematics.handState(zipCarry.hand, zipCarry.startTime + (i / samples) * duration);
+        xs.push(state.position.x);
+        vxs.push(state.velocity.x);
+        ys.push(state.position.y);
+      }
+      let minIndex = 0;
+      for (let i = 1; i <= samples; i++) {
+        if ((ys[i] as number) < (ys[minIndex] as number)) minIndex = i;
+      }
+      // After the dip: track the running max progress toward the throw; any
+      // retreat from it is a counter-swing (was 28.5 mm at up to +2.27 m/s).
+      let progress = (xs[minIndex] as number) * direction;
+      let counterDisplacement = 0;
+      let counterVelocity = 0;
+      for (let i = minIndex; i <= samples; i++) {
+        const p = (xs[i] as number) * direction;
+        if (p > progress) progress = p;
+        counterDisplacement = Math.max(counterDisplacement, progress - p);
+        counterVelocity = Math.max(counterVelocity, -(vxs[i] as number) * direction);
+      }
+      expect(counterDisplacement).toBeLessThan(0.001); // ≤ 1 mm (measured 0)
+      expect(counterVelocity).toBeLessThan(0.05); // ≤ 0.05 m/s (measured 0)
+    });
+  }
+});
+
+describe('scoop-sweep conditioning guard — extreme corner falls back to the level path', () => {
+  it('a violent catch into a short carry builds a continuous legacy carry', () => {
+    // The conditioning floor (t_flank ≥ v·ABSORB_TIME_PER_SPEED) can eat the
+    // whole sweep when the vertical speed is extreme relative to the carry
+    // duration; the smooth builder then returns null and the dispatcher falls
+    // back to the legacy level construction. Synthetic spec engineered to trip
+    // the guard (v_y = 900 m/s, T = 0.1 s — far beyond any slider domain).
+    const spec: CarrySpec = {
+      startTime: 10,
+      endTime: 10.1,
+      catchPoint: vec3(-0.3, 1, 0),
+      throwPoint: vec3(-0.1, 1, 0),
+      startVelocity: vec3(0.5, -900, 0),
+      endVelocity: vec3(0.5, 900, 0),
+      gravity: G,
+      holdDepth: 0.1,
+    };
+    const segments = quinticViaCarryPath.build(spec);
+    expect(segments.length).toBeGreaterThan(0);
+    expect((segments[0] as PolySegment).startTime).toBe(10);
+    expect((segments[segments.length - 1] as PolySegment).endTime).toBeCloseTo(10.1, 12);
+    for (const { left, right } of jointStates(segments)) {
+      expect(vecDiff(left.position, right.position)).toBeLessThan(1e-9);
+      expect(vecDiff(left.velocity, right.velocity)).toBeLessThan(1e-8);
+      expect(Number.isFinite(left.acceleration.y)).toBe(true);
+      expect(Number.isFinite(right.acceleration.y)).toBe(true);
+    }
+    // Endpoint states are exact regardless of the fallback.
+    const first = segments[0] as PolySegment;
+    const last = segments[segments.length - 1] as PolySegment;
+    expect(vecDiff(evalSeg(first, 10).position, spec.catchPoint)).toBeLessThan(1e-9);
+    expect(vecDiff(evalSeg(last, last.endTime).position, spec.throwPoint)).toBeLessThan(1e-6);
+    expect(vecDiff(evalSeg(first, 10).acceleration, vec3(0, -G, 0))).toBeLessThan(1e-6);
   });
 });
 

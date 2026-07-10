@@ -364,6 +364,13 @@ export interface CarrySpec {
   readonly endVelocity: Vec3;
   readonly gravity: number;
   readonly holdDepth: number;
+  /**
+   * True when this carry spans held `2` beats (a multi-beat hold, timeline
+   * `Carry.held`): the hand rests exactly level at the dip for the spare carry
+   * time. Normal single-beat carries sweep smoothly through the dip instead.
+   * Optional — synthetic specs that omit it are treated as normal carries.
+   */
+  readonly held?: boolean;
 }
 
 /**
@@ -423,33 +430,155 @@ const SHORT_SEGMENT_TIME = 0.05;
 const MIN_HOLD_TIME = 1e-3;
 
 /**
- * Default carry path (DESIGN.md §4.3): a bounded-absorb scoop-and-hold — up to
- * three quintic Hermite segments (absorb: catch → dip, level hold at the dip,
- * wind-up: dip → throw) matching (0, −g, 0) acceleration at the carry endpoints
- * (contact force ramps from zero at the catch and back to zero at the release)
- * and stitched C² at the internal joints (shared dip velocity/acceleration).
+ * Smooth scoop-sweep for NORMAL (single-beat) carries whose absorb leaves spare
+ * time — exactly the carries where the level-hold construction used to flatten
+ * the bottom (the owner's "often flat at the bottom of the hold"; the flat is
+ * reserved for held 2s). Three C²-stitched segments:
  *
- * The dip sits exactly `holdDepth` below the catch–throw midline. The absorb
- * time comes from the constant-deceleration identity — cancelling a vertical
- * speed v over a stopping distance d takes 2·d/v seconds — sized by the larger
- * endpoint vertical speed so both flanks fit, and floored for numerical
- * conditioning (see {@link ABSORB_TIME_PER_SPEED}):
+ *   absorb  (catch → dip entry)  quintic flank, endpoint accel (0, −g, 0)
+ *   sweep   (through the dip)    exact parabola-with-drift, vertex at dipY
+ *   wind-up (dip exit → throw)   quintic flank, endpoint accel (0, −g, 0)
+ *
+ * VERTICAL: the sweep is the parabola y = dipY + a_y/2·(s − t_sweep/2)² with
+ * entry/exit depth δ = holdDepth/4 above the vertex (entry vy = −w, exit +w,
+ * w = holdDepth/t_sweep, a_y = 2·w/t_sweep — all one family: δ = w·t_sweep/4).
+ * Each flank then decelerates the larger endpoint vertical speed v_y to w over
+ * the remaining depth 3d/4 by the constant-deceleration identity
+ * t_flank = 2·(3d/4)/(v_y + w); with t_sweep + 2·t_flank = T this collapses to
+ * the closed-form root of
+ *
+ *   v_y·t_sweep² + (4d − T·v_y)·t_sweep − T·d = 0
+ *
+ * evaluated in the numerically stable branch (t_sweep ∈ (T/4, T]; v_y = 0
+ * gives exactly T/4 with no special case). The bottom is a single smooth
+ * minimum at exactly dipY — no flat, no overshoot, monotone flanks (pinned by
+ * the scoop property test and the flat-fraction test).
+ *
+ * HORIZONTAL (x and z): the dip entry/exit are placed so each flank is a
+ * constant-acceleration-consistent velocity ramp from the endpoint velocity to
+ * the sweep drift u (runway = (v_end + u)/2 · t_flank), with the drift closing
+ * the chord exactly:
+ *
+ *   u = (Δ − (v_catch + v_throw)·t_flank/2) / (t_sweep + t_flank)
+ *
+ * This is what tames the zip counter-snap: a fast, mostly-horizontal release
+ * (a value-1 rethrow) pulls the dip exit toward the catch side, giving the
+ * wind-up the runway to accelerate monotonically into the release instead of
+ * swinging backward first (531 at defaults: 28.5 mm / +2.3 m/s of counter-swing
+ * before; none after — pinned by the zip regression test).
+ *
+ * Built with the conditioned Hermite and exact evaluation-visible durations
+ * throughout (the flanks are short by construction — the same conditioning
+ * rules as the legacy short branch). Returns null when the conditioning floor
+ * eats the sweep (extreme speed / short-carry corners); the caller falls back
+ * to the legacy construction.
+ */
+function buildScoopSweepCarry(spec: CarrySpec): PolySegment[] | null {
+  const { startTime, endTime, catchPoint, throwPoint, startVelocity, endVelocity } = spec;
+  const total = endTime - startTime;
+  const depth = spec.holdDepth;
+  const g = gravityVector(spec.gravity);
+  const dipY = 0.5 * (catchPoint.y + throwPoint.y) - depth;
+  const verticalSpeed = Math.max(Math.abs(startVelocity.y), Math.abs(endVelocity.y));
+  const q = 4 * depth - total * verticalSpeed;
+  const root = Math.sqrt(q * q + 4 * verticalSpeed * total * depth);
+  const sweepRaw = q > 0 ? (2 * total * depth) / (q + root) : (root - q) / (2 * verticalSpeed);
+  let flankTime = (total - sweepRaw) / 2;
+  const flankFloor = verticalSpeed * ABSORB_TIME_PER_SPEED;
+  if (flankTime < flankFloor) {
+    flankTime = Math.min(flankFloor, total / 2);
+  }
+  const sweepTime = total - 2 * flankTime;
+  if (sweepTime < Math.max(1e-3, total / 8)) {
+    return null;
+  }
+  const dipSpeed = depth / sweepTime; // w: |vy| entering/leaving the sweep
+  const sweepAccelY = (2 * dipSpeed) / sweepTime; // a_y: upward parabola curvature
+  const entryY = dipY + 0.25 * depth; // δ = d/4 above the vertex
+  const driftOf = (from: number, to: number, vFrom: number, vTo: number): number =>
+    (to - from - ((vFrom + vTo) * flankTime) / 2) / (sweepTime + flankTime);
+  const driftX = driftOf(catchPoint.x, throwPoint.x, startVelocity.x, endVelocity.x);
+  const driftZ = driftOf(catchPoint.z, throwPoint.z, startVelocity.z, endVelocity.z);
+  const dipEntry = vec3(
+    catchPoint.x + ((startVelocity.x + driftX) * flankTime) / 2,
+    entryY,
+    catchPoint.z + ((startVelocity.z + driftZ) * flankTime) / 2,
+  );
+  const dipExit = vec3(
+    throwPoint.x - ((endVelocity.x + driftX) * flankTime) / 2,
+    entryY,
+    throwPoint.z - ((endVelocity.z + driftZ) * flankTime) / 2,
+  );
+  const entryTime = startTime + flankTime;
+  const exitTime = endTime - flankTime;
+  // Exact evaluation-visible durations (see SHORT_SEGMENT_TIME notes): each
+  // Hermite is built with the double duration the evaluator will compute, so
+  // joints land exactly on the designed endpoint states.
+  const absorbDuration = entryTime - startTime;
+  const sweepDuration = exitTime - entryTime;
+  const windupDuration = endTime - exitTime;
+  return [
+    {
+      startTime,
+      endTime: entryTime,
+      x: quinticHermiteConditioned(catchPoint.x, startVelocity.x, g.x, dipEntry.x, driftX, 0, absorbDuration),
+      y: quinticHermiteConditioned(catchPoint.y, startVelocity.y, g.y, dipEntry.y, -dipSpeed, sweepAccelY, absorbDuration),
+      z: quinticHermiteConditioned(catchPoint.z, startVelocity.z, g.z, dipEntry.z, driftZ, 0, absorbDuration),
+    },
+    {
+      // Boundary states are exactly those of the parabola-with-drift, so the
+      // unique quintic through them IS that parabola: vertex (the carry's one
+      // minimum) at dipY, drift u in x/z.
+      startTime: entryTime,
+      endTime: exitTime,
+      x: quinticHermiteConditioned(dipEntry.x, driftX, 0, dipExit.x, driftX, 0, sweepDuration),
+      y: quinticHermiteConditioned(dipEntry.y, -dipSpeed, sweepAccelY, dipExit.y, dipSpeed, sweepAccelY, sweepDuration),
+      z: quinticHermiteConditioned(dipEntry.z, driftZ, 0, dipExit.z, driftZ, 0, sweepDuration),
+    },
+    {
+      startTime: exitTime,
+      endTime,
+      x: quinticHermiteConditioned(dipExit.x, driftX, 0, throwPoint.x, endVelocity.x, g.x, windupDuration),
+      y: quinticHermiteConditioned(dipExit.y, dipSpeed, sweepAccelY, throwPoint.y, endVelocity.y, g.y, windupDuration),
+      z: quinticHermiteConditioned(dipExit.z, driftZ, 0, throwPoint.z, endVelocity.z, g.z, windupDuration),
+    },
+  ];
+}
+
+/**
+ * Default carry path (DESIGN.md §4.3): a bounded-absorb scoop. Dispatch:
+ *
+ *  - HELD carries (multi-beat 2s, `spec.held`) — absorb, EXACTLY LEVEL hold at
+ *    the dip, wind-up: the ball visibly rests at the hold point (the owner
+ *    likes the flat here; the 423 exact-dip test pins it).
+ *  - NORMAL carries with spare time after the absorb — the smooth scoop-sweep
+ *    ({@link buildScoopSweepCarry}): one continuous dip, no flat.
+ *  - No spare time (deep/slow: 2·d/v_y ≥ total/2) or a vanishing hold depth —
+ *    two half-carry segments meeting at the dip (a natural V; there is no flat
+ *    in this regime to begin with).
+ *
+ * All variants match (0, −g, 0) acceleration at the carry endpoints (contact
+ * force ramps from zero at the catch and back to zero at the release) and are
+ * stitched C² at the internal joints. The absorb time comes from the
+ * constant-deceleration identity — cancelling a vertical speed v over a
+ * stopping distance d takes 2·d/v seconds — sized by the larger endpoint
+ * vertical speed so both flanks fit, and floored for numerical conditioning
+ * (see {@link ABSORB_TIME_PER_SPEED}):
  *
  *   v_y      = max(|v_catch·ŷ|, |v_throw·ŷ|)
  *   t_absorb = min(total/2, max(2·holdDepth / v_y, v_y·ABSORB_TIME_PER_SPEED))
  *
- * This keeps the descent monotone into the dip with no overshoot below it and
- * no mid-carry bump back up (the wavy-carry regression, pinned by the scoop
- * property test). Whatever carry time remains is an exactly level straight hold
- * through the dip, so a held 2 visibly rests at the hold point. The dip
- * acceleration is zero, NOT (0, −g, 0): with dip vertical velocity 0 an
- * acceleration of −g would make the dip a local MAXIMUM of vertical motion —
- * which is precisely what produced the old W-shaped double dip.
+ * The descent is monotone into the dip with no overshoot below it and no
+ * mid-carry bump back up (the wavy-carry regression, pinned by the scoop
+ * property test). The dip acceleration is never (0, −g, 0): with dip vertical
+ * velocity 0 an acceleration of −g would make the dip a local MAXIMUM of
+ * vertical motion — which is precisely what produced the old W-shaped double
+ * dip.
  *
  * Degenerate guard: a vanishing hold depth (or vertical speed) has no useful
  * finite absorb time; fall back to t_absorb = total/2 (two half-carry segments
- * meeting at the dip, no level hold) so no zero-duration segment is ever built
- * and holdDepth = 0 stays NaN-free.
+ * meeting at the dip) so no zero-duration segment is ever built and
+ * holdDepth = 0 stays NaN-free.
  */
 function buildQuinticViaCarry(spec: CarrySpec): PolySegment[] {
   const { startTime, endTime, catchPoint, throwPoint, startVelocity, endVelocity } = spec;
@@ -475,9 +604,17 @@ function buildQuinticViaCarry(spec: CarrySpec): PolySegment[] {
           Math.max((2 * spec.holdDepth) / verticalSpeed, verticalSpeed * ABSORB_TIME_PER_SPEED),
         )
       : half;
-  // Emit the level hold only when it has real duration; otherwise the absorb and
-  // wind-up meet at the dip (dipExit === dipEntry keeps that joint exact).
+  // Spare time after the absorb: HELD carries spend it resting exactly level at
+  // the dip (the visible hold); NORMAL carries sweep smoothly through the dip
+  // instead — no flat bottom (falls through to the level construction only if
+  // the sweep's conditioning guard trips in an extreme corner).
   const hasHold = total - 2 * boundedAbsorb > MIN_HOLD_TIME;
+  if (hasHold && spec.held !== true) {
+    const smooth = buildScoopSweepCarry(spec);
+    if (smooth) {
+      return smooth;
+    }
+  }
   const absorbTime = hasHold ? boundedAbsorb : half;
   const dipEntryTime = startTime + absorbTime;
   const dipExitTime = hasHold ? endTime - absorbTime : dipEntryTime;
@@ -829,6 +966,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
       endVelocity,
       gravity: p.gravity,
       holdDepth: p.holdDepth,
+      held: carry.held,
     });
     carryMotions.push({
       ballId: carry.ballId,
