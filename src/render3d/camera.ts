@@ -59,3 +59,78 @@ export function presetView(preset: CameraPreset): CameraView {
       return { position: [0, 1.05, -1.5], target: [0, 1.6, 0.8] };
   }
 }
+
+// --- Camera bounds ------------------------------------------------------------
+// The camera must never wander far from the juggling. Zoom distance is clamped
+// by OrbitControls' min/maxDistance, but a PAN moves the orbit TARGET, and the
+// distance limits are relative to the target — so an unclamped target lets the
+// camera drift arbitrarily far (or a shared URL place it there). The target is
+// therefore boxed around the pattern's working area (hands at y ≈ 1, extents
+// well under ±0.5 m for both geometry presets), with room to re-center on any
+// hand layout. Tall throws (a legal `z` at slow tempo apexes in the kilometers)
+// simply exit the top of frame; the bounds frame the action, not the apexes.
+
+/** Closest the eye may come to the orbit target (m); clears near plane + balls. */
+export const CAMERA_MIN_DISTANCE = 0.4;
+/** Farthest the eye may recede from the orbit target (m); frames tall patterns. */
+export const CAMERA_MAX_DISTANCE = 20;
+/** Orbit-target box, minimum corner [x, y, z] (m). y ≥ 0 keeps it above ground. */
+export const CAMERA_TARGET_MIN: readonly [number, number, number] = [-2, 0, -2];
+/** Orbit-target box, maximum corner [x, y, z] (m). Contains every preset target. */
+export const CAMERA_TARGET_MAX: readonly [number, number, number] = [2, 3, 2];
+
+function clampScalar(value: number, lo: number, hi: number): number {
+  return Math.min(Math.max(value, lo), hi);
+}
+
+/**
+ * Below this eye-to-target distance (m) the viewing direction is numerically
+ * meaningless (subnormal offsets normalize badly), so the pose is treated as
+ * degenerate and rebuilt on the front preset's +z axis at the min distance.
+ */
+const DEGENERATE_DISTANCE = 1e-6;
+
+/**
+ * Clamp a camera view to the scene bounds: the target into the
+ * {@link CAMERA_TARGET_MIN}/{@link CAMERA_TARGET_MAX} box, then the eye onto the
+ * same viewing ray at a distance within [{@link CAMERA_MIN_DISTANCE},
+ * {@link CAMERA_MAX_DISTANCE}] (direction preserved). A degenerate eye ≈ target
+ * falls back to the front preset's +z viewing axis at the min distance so the
+ * result is always a valid finite pose. In-bounds views (every preset) are
+ * returned unchanged, so applying a preset or a well-formed shared URL is
+ * exactly the identity.
+ */
+export function clampCameraView(view: CameraView): CameraView {
+  const target: readonly [number, number, number] = [
+    clampScalar(view.target[0], CAMERA_TARGET_MIN[0], CAMERA_TARGET_MAX[0]),
+    clampScalar(view.target[1], CAMERA_TARGET_MIN[1], CAMERA_TARGET_MAX[1]),
+    clampScalar(view.target[2], CAMERA_TARGET_MIN[2], CAMERA_TARGET_MAX[2]),
+  ];
+  const dx = view.position[0] - target[0];
+  const dy = view.position[1] - target[1];
+  const dz = view.position[2] - target[2];
+  const distance = Math.hypot(dx, dy, dz);
+  const targetUnchanged =
+    target[0] === view.target[0] && target[1] === view.target[1] && target[2] === view.target[2];
+  if (targetUnchanged && distance >= CAMERA_MIN_DISTANCE && distance <= CAMERA_MAX_DISTANCE) {
+    return view; // in bounds — exact identity (presets, well-formed URLs)
+  }
+  if (distance < DEGENERATE_DISTANCE) {
+    // Eye (nearly) on the target: no usable direction — front axis, min distance.
+    return { position: [target[0], target[1], target[2] + CAMERA_MIN_DISTANCE], target };
+  }
+  // Rescale via the normalized direction (never a raw scale factor, which
+  // overflows for subnormal distances): eye = target + unit · clampedDistance.
+  const clampedDistance = clampScalar(distance, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE);
+  const unitX = dx / distance;
+  const unitY = dy / distance;
+  const unitZ = dz / distance;
+  return {
+    position: [
+      target[0] + unitX * clampedDistance,
+      target[1] + unitY * clampedDistance,
+      target[2] + unitZ * clampedDistance,
+    ],
+    target,
+  };
+}

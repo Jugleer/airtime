@@ -29,8 +29,13 @@ import { useAppStore } from '../state';
 import { setCameraSampler, setCanvasElement } from '../state/sceneBridge';
 import type { CameraPose } from '../state/codec';
 import {
+  CAMERA_MAX_DISTANCE,
+  CAMERA_MIN_DISTANCE,
   CAMERA_PRESETS,
   CAMERA_PRESET_LABELS,
+  CAMERA_TARGET_MAX,
+  CAMERA_TARGET_MIN,
+  clampCameraView,
   presetView,
   type CameraPreset,
 } from './camera';
@@ -66,6 +71,12 @@ function webglAvailable(): boolean {
  * sampler so "Copy share link" captures wherever the user has orbited to. Runs
  * inside <Canvas>. Snapping on a pose change is intentional (an instant "jump to
  * view"); free orbit/zoom/pan in between.
+ *
+ * Bounds: the store pose is clamped through {@link clampCameraView} (identity on
+ * presets; an out-of-bounds shared-URL camera degrades gracefully), zoom distance
+ * through OrbitControls' min/maxDistance, and PANNING through the change handler
+ * below — a pan moves the orbit TARGET (distance limits are relative to it), so
+ * the target is boxed to keep the camera near the juggling (see camera.ts).
  */
 function CameraRig(): ReactElement {
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
@@ -73,15 +84,36 @@ function CameraRig(): ReactElement {
   const cameraView = useAppStore((state) => state.cameraView);
 
   useEffect(() => {
-    camera.position.set(cameraView.position[0], cameraView.position[1], cameraView.position[2]);
+    const view = clampCameraView(cameraView);
+    camera.position.set(view.position[0], view.position[1], view.position[2]);
     const orbit = controls.current;
     if (orbit) {
-      orbit.target.set(cameraView.target[0], cameraView.target[1], cameraView.target[2]);
+      orbit.target.set(view.target[0], view.target[1], view.target[2]);
       orbit.update();
     } else {
-      camera.lookAt(cameraView.target[0], cameraView.target[1], cameraView.target[2]);
+      camera.lookAt(view.target[0], view.target[1], view.target[2]);
     }
   }, [cameraView, camera]);
+
+  // Box the orbit target on every controls change (pan is the only unclamped way
+  // out of bounds). The guard makes the clamp idempotent: `update()` re-fires
+  // `change` → this handler, but an in-box target changes nothing, so the
+  // re-entrant call is a no-op and the recursion stops after one level. The
+  // eye follows on the next update (min/maxDistance re-clamp it to the target).
+  const clampControlsTarget = (): void => {
+    const orbit = controls.current;
+    if (!orbit) {
+      return;
+    }
+    const { target } = orbit;
+    const x = Math.min(Math.max(target.x, CAMERA_TARGET_MIN[0]), CAMERA_TARGET_MAX[0]);
+    const y = Math.min(Math.max(target.y, CAMERA_TARGET_MIN[1]), CAMERA_TARGET_MAX[1]);
+    const z = Math.min(Math.max(target.z, CAMERA_TARGET_MIN[2]), CAMERA_TARGET_MAX[2]);
+    if (x !== target.x || y !== target.y || z !== target.z) {
+      target.set(x, y, z);
+      orbit.update();
+    }
+  };
 
   // Sample the LIVE camera on demand for share links (the user free-orbits without
   // touching the store); cleared on unmount so a stale sampler never fires.
@@ -103,8 +135,9 @@ function CameraRig(): ReactElement {
       ref={controls}
       makeDefault
       enableDamping
-      minDistance={0.4}
-      maxDistance={20}
+      minDistance={CAMERA_MIN_DISTANCE}
+      maxDistance={CAMERA_MAX_DISTANCE}
+      onChange={clampControlsTarget}
     />
   );
 }
