@@ -254,3 +254,18 @@ Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-o
 - Commit: edd0d40
 - Gate: (2026-07-10, "npm run gate", green — 30 files / 369 tests; orchestrator-run)
 - Diagnosis: pan moves the OrbitControls target unboundedly (max distance is target-relative), and URL-applied poses skipped clamps. Fix: pure clampCameraView (target box ±2 m, y 0–3; distance 0.4–20), live pan boxed via onChange guard; polar angle untouched (Juggler POV preset looks upward); codec-level clamp deferred (share links sample the already-clamped live camera).
+
+## Fix 2 — Wavy hold path (scoop-and-hold carry)            DONE
+- Date: 2026-07-10
+- Commit: 84c0011
+- Gate: (2026-07-10, "npm run gate", green — 30 files / 376 tests incl. Fix 3; orchestrator-run on the committed tree)
+- Diagnosis (dedicated Opus agent, numeric probes): the carry via-point had vy=0 with accel (0,−g,0) — mathematically a local MAXIMUM — so every carry double-dipped (10 mm on pattern 3 up to 631 mm on 522's hold; 75/75 sampled carries wavy). Fix: absorb → exactly-level hold → wind-up (three quintics, absorb time 2·holdDepth/catch speed capped at T/2), endpoint accels/C² preserved. New shape property tests verified to fail pre-fix. Energy identity untouched; W⁺ figures drop honestly (522: −53%). DESIGN §4.3 wording amended (owner-authorized fix).
+- Review: adversarial reviewer — SOUND (endpoints, joints, level hold, shape, degenerates, energy identity independently verified; >7000 carries probed). LOW noted: unequal-height carries (unreachable via current geometries, all y=1) would undershoot the dip; old code was worse there. Revisit if the positions editor ever allows y edits with gaps > 2·holdDepth.
+
+## Fix 3 — Pattern instability (arrival-guard ratchet)            DONE
+- Date: 2026-07-10
+- Commit: a131302
+- Gate: same run as Fix 2.
+- Diagnosis (dedicated Opus agent): flightArrival aimed air time from the GUARD-STRETCHED period → h×-longer flights → bigger stretch h beats later → exponential runaway to Infinity/NaN on tempo speedups (744→0.15 overflowed ~beat 2400; sim froze). Constant-param core was proven exactly periodic (spread 0.0). Fix: aim air times from the pre-guard slewed period (aimPeriods); guard stretch lands in dwell (≥ 0); slew state advances from the previous AIM period (fixes a limit cycle the naive fix left — 0000a→0.08 stuck at 0.118 — caught by the new property test). Bit-identical whenever the guard is silent.
+- Review: adversarial reviewer — SOUND; extension invariance + epoch immutability re-verified on guard-active builds; splice-under-tempo-epoch sane; composition with Fix 2 safe.
+- Real-app verification (owner challenged the epoch-dependence): dedicated agent drove the UNFIXED app headlessly, zero interaction, 5 patterns × ~260 sim-s — apex envelope flat to ≤ 0.2 mm, matching closed-form predictions to 0.1 mm; epoch lists pinned at 0; control tempo-drag run detected crisply (2.2 m apex change). Constant-parameter operation positively cleared; observed drift attributed to tempo interaction (ratchet) + the wavy carry visual.
