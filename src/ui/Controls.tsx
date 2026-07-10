@@ -187,6 +187,14 @@ export function Controls(): ReactElement {
   const clampActive = dwellClampActive(sim.values, dwellTime, beatPeriod);
   const heldTwoWarning = handCount !== 2 && sim.values.includes(2);
 
+  // A friendly nudge when the draft uses notation Airtime v1 does not support:
+  // synchronous ( ), multiplex [ ], or passing < > (DESIGN.md §1 deferred list).
+  // These characters never occur in a valid vanilla siteswap (digits 0–9, letters
+  // a–z), so detecting them is unambiguous — it explains the "unrecognized
+  // character" error with the *why* and the supported subset. (x, p etc. are valid
+  // high throws, so they are deliberately not flagged.)
+  const looksLikeUnsupportedNotation = /[()[\],<>*!]/.test(draft);
+
   // Tempo & physics reset (owner requirement): each control has a ↺ (via the
   // widgets), and the whole group resets to the DEFAULT_* constants at once.
   const tempoDirty =
@@ -263,6 +271,13 @@ export function Controls(): ReactElement {
             {errorText(draftValidation.errors.map((error) => error.message))}
           </p>
         )}
+
+        {looksLikeUnsupportedNotation ? (
+          <p role="note" style={{ ...statusStyle, color: palette.amber }}>
+            Airtime v1 animates vanilla (asynchronous) siteswap only — synchronous ( ), multiplex [ ],
+            and passing &lt; &gt; notation aren&apos;t supported yet. Use digits 0–9 or letters a–z (10–35).
+          </p>
+        ) : null}
 
         {dirty ? (
           <p style={{ margin: 0, color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.35 }}>

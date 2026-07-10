@@ -102,6 +102,22 @@ describe('Controls (ui layer)', () => {
     expect(screen.getByLabelText('Hand 0 catch x')).toBeTruthy();
   });
 
+  it('hints that synchronous/multiplex/passing notation is unsupported', () => {
+    render(<Controls />);
+    const input = screen.getByLabelText('Pattern (siteswap)');
+    // A valid vanilla pattern: no unsupported-notation note.
+    expect(screen.queryByText(/aren.t supported yet/i)).toBeNull();
+    // Synchronous notation triggers the friendly nudge (alongside the parse error).
+    fireEvent.change(input, { target: { value: '(4,4)' } });
+    expect(screen.getByText(/aren.t supported yet/i)).toBeTruthy();
+    // Multiplex too.
+    fireEvent.change(input, { target: { value: '[33]' } });
+    expect(screen.getByText(/aren.t supported yet/i)).toBeTruthy();
+    // But a high vanilla throw using a letter (x = 33) is NOT flagged.
+    fireEvent.change(input, { target: { value: '3x' } });
+    expect(screen.queryByText(/aren.t supported yet/i)).toBeNull();
+  });
+
   it('shows the held-2 note only when a 2-pattern runs at a non-2 hand count', () => {
     render(<Controls />);
     // Default (3 at n_h = 2): no note.

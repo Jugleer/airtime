@@ -2,7 +2,7 @@
 // the header opens a modal explaining siteswap basics and the app's controls. Text
 // only (no images); self-contained so the SPA stays asset-free (CLAUDE.md).
 
-import { useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import { usePalette, type Palette } from './theme';
 
 interface Section {
@@ -68,6 +68,16 @@ const CONTROL_SECTIONS: readonly Section[] = [
       ['Save & share', 'Copy a link that reproduces the whole scene, save named presets, export/import JSON, grab a PNG, and toggle audio ticks.'],
     ],
   },
+  {
+    heading: 'Keyboard & mouse',
+    items: [
+      ['Space', 'Play or pause — works anywhere except while typing in a field or focused on a button.'],
+      ['Enter · Esc (pattern box)', 'Enter applies the typed pattern; Esc reverts it to the running one.'],
+      ['Esc (dialogs)', 'Closes the Settings drawer or this help.'],
+      ['Scroll wheel', 'Hover any slider and scroll to nudge it one fine step (no page scroll).'],
+      ['Drag · scroll (3D scene)', 'Drag to orbit the camera, scroll to zoom, right-drag to pan.'],
+    ],
+  },
 ];
 
 function SectionList({
@@ -102,6 +112,22 @@ function SectionList({
 export function Help(): ReactElement {
   const palette = usePalette();
   const [open, setOpen] = useState(false);
+
+  // Escape closes the modal, mirroring the Settings drawer (consistent dialog
+  // dismissal). Only listens while open, so it never competes with the global
+  // Space/other handlers otherwise.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
 
   return (
     <>
