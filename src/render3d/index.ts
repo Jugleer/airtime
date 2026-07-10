@@ -33,6 +33,15 @@ export {
   type FlightLike,
   type StaticHoldLike,
 } from './coloring';
+export {
+  GIZMO_HIT_RADIUS,
+  GIZMO_HOVER_SCALE,
+  GIZMO_LABEL_RENDER_ORDER,
+  GIZMO_MARKER_RADIUS,
+  GIZMO_RENDER_ORDER,
+  markerColorOf,
+  markerLabel,
+} from './gizmos';
 
 // Type-only smoke references kept from Phase 0 so a broken r3f + drei install
 // still surfaces at the module level (belt-and-suspenders alongside <Scene>).

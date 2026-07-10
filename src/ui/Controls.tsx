@@ -263,8 +263,10 @@ function HandPositionsTable(): ReactElement {
         <tbody>{rows}</tbody>
       </table>
       <p style={{ margin: '0.35rem 0 0', color: '#5b6472', fontSize: '0.8rem' }}>
-        Drag the green (catch) and orange (throw) markers in the 3D scene, or edit x/z here
-        (meters; height y stays 1.00 m). Edits apply to future throws only.
+        Drag the green (catch) and orange (throw) markers in the 3D scene (labeled per hand:
+        0C = hand 0 catch, 0T = hand 0 throw), or edit x/z here (meters; height y stays 1.00 m).
+        In-flight balls keep the path they were aimed with — edits affect future throws only;
+        the dashed ghost paths (always shown while this editor is open) preview the change.
       </p>
     </div>
   );

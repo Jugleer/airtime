@@ -1,29 +1,95 @@
 // src/render3d/HandGizmos — draggable per-hand catch/throw markers (DESIGN.md §6:
 // "hand catch/throw positions shown as draggable gizmos when the positions editor
-// is open"). Each hand shows two small markers — its catch point and its throw
-// point — that drag in the horizontal plane at hand height (x, z; y stays fixed).
+// is open"). Each hand shows two markers — its catch point and its throw point —
+// that drag in the horizontal plane at hand height (x, z; y stays fixed).
 //
 // A drag creates a future-only kinematics geometry epoch through the store
 // (setHandPoint), so it affects LATER throws only — an in-flight ball keeps the
 // parabola it was aimed with (DESIGN.md §4.6). This is exactly the acceptance
-// scenario "moving a catch point mid-flight affects only later throws".
+// scenario "moving a catch point mid-flight affects only later throws". The
+// marker itself and the dashed future ghost paths update live during the drag
+// (Tracers keeps ghosts visible while the editor is open), so the edit is never
+// silent even though the balls' current paths are — correctly — unchanged.
+//
+// Ergonomics (each marker):
+//   - an INVISIBLE enlarged hit sphere (GIZMO_HIT_RADIUS) owns the pointer
+//     handlers, so grabs don't demand pixel-precise aim; the raycaster's
+//     closest-hit ordering keeps adjacent markers separable (see ./gizmos);
+//   - hover/drag affordance: the visual marker scales up and brightens, and the
+//     document cursor shows grab/grabbing (restored on out/up/unmount);
+//   - the visual marker and its label render with depth testing off at a raised
+//     render order, so balls/trails/ghosts never occlude an editing target
+//     (editor-scoped — gizmos only exist while the editor is open);
+//   - a per-hand identity label ("0C" = hand 0 catch, "0T" = hand 0 throw)
+//     billboarded above each marker answers "which hand?" with no selector UI.
+//     The label is a synthesized canvas texture on a sprite, NOT drei <Text>:
+//     troika-three-text resolves fallback fonts from a CDN at runtime, and this
+//     app makes no external requests (CLAUDE.md).
 //
 // OrbitControls interplay: while a marker is being dragged we disable the default
 // controls (state.controls.enabled = false) so the camera does not orbit under the
 // pointer, and re-enable them on release. The drag position is the intersection of
 // the pointer ray with the y = HAND_Y plane (a plane-constrained pointer drag),
 // computed from the r3f event's ray — robust regardless of where the ray would hit
-// the small marker mesh itself.
+// the marker mesh itself.
 
-import { useMemo, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useThree, type ThreeEvent } from '@react-three/fiber';
-import { Plane, Vector3 } from 'three';
+import { CanvasTexture, Plane, SRGBColorSpace, Vector3 } from 'three';
 import { HAND_Y, useAppStore, type HandPointKind } from '../state';
+import {
+  GIZMO_HIT_RADIUS,
+  GIZMO_HOVER_SCALE,
+  GIZMO_LABEL_RENDER_ORDER,
+  GIZMO_MARKER_RADIUS,
+  GIZMO_RENDER_ORDER,
+  markerColorOf,
+  markerLabel,
+} from './gizmos';
 
-/** Marker size (m) and colors — small, high-contrast, unlit so they always read. */
-const MARKER_RADIUS = 0.03;
-const CATCH_COLOR = '#12a150'; // green — where a ball is caught
-const THROW_COLOR = '#e8710a'; // orange — where a ball is released
+// --- Label sprites (synthesized, self-contained — no external font fetch) ----
+
+/** Canvas pixel size for a two-character label (supersampled for crispness). */
+const LABEL_CANVAS_WIDTH = 96;
+const LABEL_CANVAS_HEIGHT = 56;
+/** World-space label size (m) and lift above the marker center (m). */
+const LABEL_WORLD_HEIGHT = 0.05;
+const LABEL_WORLD_WIDTH = (LABEL_CANVAS_WIDTH / LABEL_CANVAS_HEIGHT) * LABEL_WORLD_HEIGHT;
+const LABEL_LIFT = 0.085; // clears the hover-scaled marker (0.042) + half label height
+
+/** Draw `text` as a white-on-dark pill onto a fresh CanvasTexture. */
+function makeLabelTexture(text: string): CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = LABEL_CANVAS_WIDTH;
+  canvas.height = LABEL_CANVAS_HEIGHT;
+  const context = canvas.getContext('2d');
+  if (context) {
+    const radius = LABEL_CANVAS_HEIGHT / 2;
+    context.fillStyle = 'rgba(28, 34, 44, 0.85)';
+    if (typeof context.roundRect === 'function') {
+      context.beginPath();
+      context.roundRect(0, 0, LABEL_CANVAS_WIDTH, LABEL_CANVAS_HEIGHT, radius);
+      context.fill();
+    } else {
+      context.fillRect(0, 0, LABEL_CANVAS_WIDTH, LABEL_CANVAS_HEIGHT);
+    }
+    context.fillStyle = '#ffffff';
+    context.font = '600 32px system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(text, LABEL_CANVAS_WIDTH / 2, LABEL_CANVAS_HEIGHT / 2 + 1);
+  }
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
+
+/** Set/clear the page cursor (grab affordance); no-op outside a browser. */
+function setDocumentCursor(cursor: string): void {
+  if (typeof document !== 'undefined') {
+    document.body.style.cursor = cursor;
+  }
+}
 
 interface DragTarget {
   readonly hand: number;
@@ -38,54 +104,118 @@ interface ToggleableControls {
 /** One draggable marker; delegates the actual point update to the parent. */
 function Marker({
   position,
-  color,
+  hand,
+  kind,
   onDragStart,
   onDrag,
   onDragEnd,
 }: {
   readonly position: Vector3;
-  readonly color: string;
+  readonly hand: number;
+  readonly kind: HandPointKind;
   onDragStart(): void;
   onDrag(point: Vector3): void;
   onDragEnd(): void;
 }): ReactElement {
+  // Refs are what the pointer handlers consult; `hot` re-renders the affordance.
   const dragging = useRef(false);
+  const hovered = useRef(false);
+  const [hot, setHot] = useState(false);
+  const refreshHot = (): void => setHot(hovered.current || dragging.current);
+
   // A single reusable plane + hit vector (no per-move allocation).
   const plane = useMemo(() => new Plane(new Vector3(0, 1, 0), -HAND_Y), []);
   const hit = useMemo(() => new Vector3(), []);
 
+  const label = markerLabel(hand, kind);
+  const labelTexture = useMemo(() => makeLabelTexture(label), [label]);
+  useEffect(() => () => labelTexture.dispose(), [labelTexture]);
+
+  // Closing the editor mid-hover/drag unmounts us — never leave a stale cursor.
+  useEffect(
+    () => () => {
+      if (hovered.current || dragging.current) {
+        setDocumentCursor('');
+      }
+    },
+    [],
+  );
+
   return (
-    <mesh
-      position={position}
-      onPointerDown={(event: ThreeEvent<PointerEvent>) => {
-        event.stopPropagation();
-        dragging.current = true;
-        (event.target as Element | null)?.setPointerCapture?.(event.pointerId);
-        onDragStart();
-      }}
-      onPointerMove={(event: ThreeEvent<PointerEvent>) => {
-        if (!dragging.current) {
-          return;
-        }
-        event.stopPropagation();
-        // Constrain to the y = HAND_Y plane: intersect the pointer ray with it.
-        if (event.ray.intersectPlane(plane, hit)) {
-          onDrag(hit);
-        }
-      }}
-      onPointerUp={(event: ThreeEvent<PointerEvent>) => {
-        if (!dragging.current) {
-          return;
-        }
-        event.stopPropagation();
-        dragging.current = false;
-        (event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
-        onDragEnd();
-      }}
-    >
-      <sphereGeometry args={[MARKER_RADIUS, 16, 12]} />
-      <meshBasicMaterial color={color} transparent opacity={0.85} />
-    </mesh>
+    <group position={position}>
+      {/* Invisible enlarged hit sphere — owns ALL pointer handling. opacity 0 +
+          depthWrite off draws nothing and punches no holes; raycasting ignores
+          the material entirely, so it still grabs (that is its whole job). */}
+      <mesh
+        onPointerOver={() => {
+          hovered.current = true;
+          if (!dragging.current) {
+            setDocumentCursor('grab');
+          }
+          refreshHot();
+        }}
+        onPointerOut={() => {
+          hovered.current = false;
+          if (!dragging.current) {
+            setDocumentCursor('');
+          }
+          refreshHot();
+        }}
+        onPointerDown={(event: ThreeEvent<PointerEvent>) => {
+          event.stopPropagation();
+          dragging.current = true;
+          (event.target as Element | null)?.setPointerCapture?.(event.pointerId);
+          setDocumentCursor('grabbing');
+          refreshHot();
+          onDragStart();
+        }}
+        onPointerMove={(event: ThreeEvent<PointerEvent>) => {
+          if (!dragging.current) {
+            return;
+          }
+          event.stopPropagation();
+          // Constrain to the y = HAND_Y plane: intersect the pointer ray with it.
+          if (event.ray.intersectPlane(plane, hit)) {
+            onDrag(hit);
+          }
+        }}
+        onPointerUp={(event: ThreeEvent<PointerEvent>) => {
+          if (!dragging.current) {
+            return;
+          }
+          event.stopPropagation();
+          dragging.current = false;
+          (event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
+          setDocumentCursor(hovered.current ? 'grab' : '');
+          refreshHot();
+          onDragEnd();
+        }}
+      >
+        <sphereGeometry args={[GIZMO_HIT_RADIUS, 12, 8]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+
+      {/* Visual marker: depth test off + raised render order so balls, trails,
+          and ghosts never hide an editing target; grows + brightens when hot. */}
+      <mesh scale={hot ? GIZMO_HOVER_SCALE : 1} renderOrder={GIZMO_RENDER_ORDER}>
+        <sphereGeometry args={[GIZMO_MARKER_RADIUS, 16, 12]} />
+        <meshBasicMaterial
+          color={markerColorOf(kind, hot)}
+          transparent
+          opacity={hot ? 1 : 0.85}
+          depthTest={false}
+        />
+      </mesh>
+
+      {/* Per-hand identity label; sprites always face the camera. */}
+      <sprite
+        position={[0, LABEL_LIFT, 0]}
+        scale={[LABEL_WORLD_WIDTH, LABEL_WORLD_HEIGHT, 1]}
+        renderOrder={GIZMO_LABEL_RENDER_ORDER}
+      >
+        <spriteMaterial map={labelTexture} transparent depthTest={false} depthWrite={false} />
+      </sprite>
+    </group>
   );
 }
 
@@ -129,7 +259,8 @@ export function HandGizmos(): ReactElement | null {
         <Marker
           key={`catch-${hand}`}
           position={new Vector3(catchPoint.x, catchPoint.y, catchPoint.z)}
-          color={CATCH_COLOR}
+          hand={hand}
+          kind="catch"
           onDragStart={() => beginDrag({ hand, kind: 'catch' })}
           onDrag={(point) => update({ hand, kind: 'catch' }, point)}
           onDragEnd={endDrag}
@@ -141,7 +272,8 @@ export function HandGizmos(): ReactElement | null {
         <Marker
           key={`throw-${hand}`}
           position={new Vector3(throwPoint.x, throwPoint.y, throwPoint.z)}
-          color={THROW_COLOR}
+          hand={hand}
+          kind="throw"
           onDragStart={() => beginDrag({ hand, kind: 'throw' })}
           onDrag={(point) => update({ hand, kind: 'throw' }, point)}
           onDragEnd={endDrag}

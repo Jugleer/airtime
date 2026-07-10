@@ -95,8 +95,16 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
   );
 
   useFrame(() => {
-    const { simTime, trailLength, ghostsEnabled, sim } = useAppStore.getState();
+    const { simTime, trailLength, ghostsEnabled, positionsEditorOpen, sim } = useAppStore.getState();
     const k = sim.kinematics;
+
+    // Editor-scoped ghost override: while the hand-positions editor is open the
+    // dashed future paths are always drawn, even with the ghosts toggle off. A
+    // hand-point drag is future-only (DESIGN.md §4.6) — in-flight balls keep the
+    // parabola they were aimed with — so the ghost path is the only immediate
+    // ball-side feedback an edit produces; without it a drag can read as a no-op
+    // (especially paused). The toggle state itself is untouched.
+    const ghostsShown = ghostsEnabled || positionsEditorOpen;
 
     // --- Trail: [max(0, simTime − trailLength), simTime] ---
     const trailSpan = Math.min(trailLength, simTime); // never sample t < 0
@@ -117,7 +125,7 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
     trail.visible = trailCount > 0;
 
     // --- Ghost: [simTime, simTime + GHOST_SPAN_SECONDS], dashed ---
-    if (ghostsEnabled) {
+    if (ghostsShown) {
       const end = simTime + GHOST_SPAN_SECONDS;
       const ghostCount = trailPointCount(GHOST_SPAN_SECONDS, TRAIL_SAMPLE_DT, MAX_GHOST_POINTS);
       const pos = ghost.geometry.getAttribute('position') as BufferAttribute;
