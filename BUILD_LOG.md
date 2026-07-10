@@ -242,3 +242,15 @@ edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
   - [ ] Library dropdown: picking 441 while juggling 3 transitions smoothly; entries show ball counts.
   - [ ] Help overlay opens/closes; PNG capture downloads a correct frame.
   - [ ] Pages deploy: https://jugleer.github.io/airtime/ serves the app with working assets (relative base).
+
+---
+
+# Post-v1 fixes & improvements (owner feedback round 1, 2026-07-10)
+
+Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-only by a dedicated Opus agent, then implemented sequentially (one writer at a time), gated and committed per fix. Owner overrides recorded here: (a) orbit coloring → per-ball coloring matching the ladder (DESIGN §6 amendment authorized); (b) state-graph layout → concentric excitation rings (presentation only, §5 semantics untouched); (c) target window for the layout overhaul: landscape ≈ 2000×1300.
+
+## Fix 1 — Camera bounds            DONE
+- Date: 2026-07-10
+- Commit: edd0d40
+- Gate: (2026-07-10, "npm run gate", green — 30 files / 369 tests; orchestrator-run)
+- Diagnosis: pan moves the OrbitControls target unboundedly (max distance is target-relative), and URL-applied poses skipped clamps. Fix: pure clampCameraView (target box ±2 m, y 0–3; distance 0.4–20), live pan boxed via onChange guard; polar angle untouched (Juggler POV preset looks upward); codec-level clamp deferred (share links sample the already-clamped live camera).
