@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { validatePattern } from '../core/siteswap';
 import {
+  DEFAULT_BEAT_PERIOD,
+  DEFAULT_DWELL_TIME,
   DEFAULT_GRAVITY_VALUE,
   DEFAULT_HAND_COUNT,
   DEFAULT_HOLD_DEPTH_VALUE,
@@ -110,5 +112,89 @@ describe('Controls (ui layer)', () => {
       useAppStore.getState().setPattern('522');
     });
     expect(screen.getByText(/Held 2s are only physically meaningful/)).toBeTruthy();
+  });
+});
+
+// Draft pattern entry (redesign 2026-07-11): typing edits a local draft and the
+// running sim only changes on Enter or the Go button. Escape reverts; external
+// changes (library pick) re-seed the input.
+describe('Controls draft pattern entry', () => {
+  it('does not apply a typed pattern until Enter (the sim keeps running)', () => {
+    render(<Controls />);
+    const input = screen.getByLabelText('Pattern (siteswap)') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '531' } });
+    // Draft echoes the typed text but the sim is untouched.
+    expect(input.value).toBe('531');
+    expect(useAppStore.getState().sim.patternText).toBe('3');
+    // Enter applies it through navigation.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(useAppStore.getState().sim.patternText).toBe('531');
+  });
+
+  it('applies the draft when the Go button is clicked', () => {
+    render(<Controls />);
+    const input = screen.getByLabelText('Pattern (siteswap)');
+    fireEvent.change(input, { target: { value: '441' } });
+    expect(useAppStore.getState().sim.patternText).toBe('3'); // not yet applied
+    fireEvent.click(screen.getByRole('button', { name: 'Apply pattern' }));
+    expect(useAppStore.getState().sim.patternText).toBe('441');
+  });
+
+  it('reverts the draft to the running pattern on Escape', () => {
+    render(<Controls />);
+    const input = screen.getByLabelText('Pattern (siteswap)') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '52' } });
+    expect(input.value).toBe('52');
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input.value).toBe('3');
+    expect(useAppStore.getState().sim.patternText).toBe('3');
+  });
+
+  it('syncs the input when the pattern changes externally (library pick)', () => {
+    render(<Controls />);
+    const input = screen.getByLabelText('Pattern (siteswap)') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '52' } }); // a dirty, unapplied draft
+    fireEvent.change(screen.getByLabelText('Pattern library'), { target: { value: '441' } });
+    // The pick applies immediately and re-seeds the input.
+    expect(useAppStore.getState().sim.patternText).toBe('441');
+    expect(input.value).toBe('441');
+  });
+
+  it('groups the library dropdown by ball count', () => {
+    render(<Controls />);
+    const select = screen.getByLabelText('Pattern library');
+    const groups = select.querySelectorAll('optgroup');
+    const labels = [...groups].map((group) => group.getAttribute('label'));
+    expect(labels).toContain('2 balls');
+    expect(labels).toContain('7 balls');
+  });
+});
+
+// Reset-to-defaults (redesign 2026-07-11): per-control ↺ and a section "Reset all".
+describe('Controls reset-to-defaults', () => {
+  it('per-control ↺ restores a physics default and hides the affordance', () => {
+    render(<Controls />);
+    act(() => useAppStore.getState().setGravity(4));
+    expect(useAppStore.getState().gravity).toBeCloseTo(4, 9);
+    fireEvent.click(screen.getByLabelText('Reset Gravity'));
+    expect(useAppStore.getState().gravity).toBeCloseTo(DEFAULT_GRAVITY_VALUE, 9);
+    expect(screen.queryByLabelText('Reset Gravity')).toBeNull();
+  });
+
+  it('Reset all restores the whole Tempo & physics group', () => {
+    render(<Controls />);
+    act(() => {
+      useAppStore.getState().setBeatPeriod(0.5);
+      useAppStore.getState().setGravity(3);
+      useAppStore.getState().setHoldDepth(0.3);
+      useAppStore.getState().setCarryPathKind('cubic');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all tempo and physics' }));
+    const state = useAppStore.getState();
+    expect(state.beatPeriod).toBeCloseTo(DEFAULT_BEAT_PERIOD, 9);
+    expect(state.dwellTime).toBeCloseTo(DEFAULT_DWELL_TIME, 9);
+    expect(state.gravity).toBeCloseTo(DEFAULT_GRAVITY_VALUE, 9);
+    expect(state.holdDepth).toBeCloseTo(DEFAULT_HOLD_DEPTH_VALUE, 9);
+    expect(state.carryPathKind).toBe('quintic');
   });
 });

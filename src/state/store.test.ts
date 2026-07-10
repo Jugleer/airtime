@@ -5,6 +5,7 @@ import {
   DEFAULT_BALL_COLOR,
   DEFAULT_BALL_RADIUS,
   DEFAULT_BEAT_PERIOD,
+  DEFAULT_CARRY_PATH_KIND,
   DEFAULT_CHART_AXIS_MODE,
   DEFAULT_CHARTS_VISIBLE,
   DEFAULT_DWELL_TIME,
@@ -255,6 +256,11 @@ describe('runtime physics params (kinematics epochs, DESIGN.md §4.6)', () => {
     expect(useAppStore.getState().holdDepth).toBe(HOLD_DEPTH_MIN);
     useAppStore.getState().setHoldDepth(0.2);
     expect(useAppStore.getState().sim.kinematics.holdDepth).toBeCloseTo(0.2, 9);
+  });
+
+  it('exposes the carry-path default as the single source of truth (reset affordance)', () => {
+    expect(DEFAULT_CARRY_PATH_KIND).toBe('quintic');
+    expect(useAppStore.getState().carryPathKind).toBe(DEFAULT_CARRY_PATH_KIND);
   });
 
   it('carry-path toggle switches the kinematics carry path (quintic ↔ cubic)', () => {

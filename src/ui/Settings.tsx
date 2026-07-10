@@ -13,17 +13,27 @@
 // are never on the same panel and can't be confused (DESIGN.md §6). The relocated
 // view-control tests moved to Settings.test with these controls.
 
-import { useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import {
   BALL_RADIUS_MAX,
   BALL_RADIUS_MIN,
+  DEFAULT_BALL_COLOR,
+  DEFAULT_BALL_RADIUS,
+  DEFAULT_GHOSTS_ENABLED,
+  DEFAULT_ORBIT_COLORING,
+  DEFAULT_PLAYBACK_SPEED,
+  DEFAULT_TRAIL_LENGTH,
   PLAYBACK_MAX,
   PLAYBACK_MIN,
   TRAIL_LENGTH_MAX,
   TRAIL_LENGTH_MIN,
   useAppStore,
 } from '../state';
-import { TIMELINE_WINDOW_MAX, TIMELINE_WINDOW_MIN } from '../state/simulation';
+import {
+  DEFAULT_TIMELINE_WINDOW,
+  TIMELINE_WINDOW_MAX,
+  TIMELINE_WINDOW_MIN,
+} from '../state/simulation';
 import { SharePanel } from './SharePanel';
 import { usePalette, type Palette } from './theme';
 import { Button, CheckToggle, SectionLabel, Segmented, Slider } from './widgets';
@@ -42,14 +52,47 @@ function ViewSettings(): ReactElement {
   const setPlaybackSpeed = useAppStore((state) => state.setPlaybackSpeed);
   const setBallRadius = useAppStore((state) => state.setBallRadius);
   const toggleOrbitColoring = useAppStore((state) => state.toggleOrbitColoring);
+  const setOrbitColoring = useAppStore((state) => state.setOrbitColoring);
   const setBallColor = useAppStore((state) => state.setBallColor);
   const setTimelineWindow = useAppStore((state) => state.setTimelineWindow);
   const setTrailLength = useAppStore((state) => state.setTrailLength);
   const toggleGhosts = useAppStore((state) => state.toggleGhosts);
+  const setGhostsEnabled = useAppStore((state) => state.setGhostsEnabled);
+
+  // View-group reset (owner requirement): each control has a ↺ (via the widgets),
+  // and the whole View group resets to the DEFAULT_* constants at once.
+  const viewDirty =
+    playbackSpeed !== DEFAULT_PLAYBACK_SPEED ||
+    ballRadius !== DEFAULT_BALL_RADIUS ||
+    timelineWindow !== DEFAULT_TIMELINE_WINDOW ||
+    trailLength !== DEFAULT_TRAIL_LENGTH ||
+    orbitColoring !== DEFAULT_ORBIT_COLORING ||
+    ghostsEnabled !== DEFAULT_GHOSTS_ENABLED ||
+    ballColor !== DEFAULT_BALL_COLOR;
+  const resetView = (): void => {
+    setPlaybackSpeed(DEFAULT_PLAYBACK_SPEED);
+    setBallRadius(DEFAULT_BALL_RADIUS);
+    setTimelineWindow(DEFAULT_TIMELINE_WINDOW);
+    setTrailLength(DEFAULT_TRAIL_LENGTH);
+    setOrbitColoring(DEFAULT_ORBIT_COLORING);
+    setGhostsEnabled(DEFAULT_GHOSTS_ENABLED);
+    setBallColor(DEFAULT_BALL_COLOR);
+  };
 
   return (
     <section style={groupStyle(palette)}>
-      <SectionLabel>View</SectionLabel>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+        <SectionLabel>View</SectionLabel>
+        <Button
+          variant="ghost"
+          onClick={resetView}
+          disabled={!viewDirty}
+          ariaLabel="Reset all view settings"
+          style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem' }}
+        >
+          ↺ Reset all
+        </Button>
+      </div>
       <Slider
         label="Playback speed"
         value={playbackSpeed}
@@ -57,6 +100,7 @@ function ViewSettings(): ReactElement {
         max={PLAYBACK_MAX}
         scale="linear"
         readout={`${playbackSpeed.toFixed(2)}× (viewing)`}
+        defaultValue={DEFAULT_PLAYBACK_SPEED}
         onChange={setPlaybackSpeed}
       />
       <Slider
@@ -66,6 +110,7 @@ function ViewSettings(): ReactElement {
         max={BALL_RADIUS_MAX}
         scale="linear"
         readout={`${(ballRadius * 100).toFixed(1)} cm`}
+        defaultValue={DEFAULT_BALL_RADIUS}
         onChange={setBallRadius}
       />
       <Slider
@@ -75,6 +120,7 @@ function ViewSettings(): ReactElement {
         max={TIMELINE_WINDOW_MAX}
         scale="linear"
         readout={`${timelineWindow.toFixed(1)} s`}
+        defaultValue={DEFAULT_TIMELINE_WINDOW}
         onChange={setTimelineWindow}
       />
       <Slider
@@ -84,15 +130,22 @@ function ViewSettings(): ReactElement {
         max={TRAIL_LENGTH_MAX}
         scale="linear"
         readout={`${trailLength.toFixed(2)} s`}
+        defaultValue={DEFAULT_TRAIL_LENGTH}
         onChange={setTrailLength}
       />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem 1rem', alignItems: 'center' }}>
         <CheckToggle
           label="Colour balls individually"
           checked={orbitColoring}
+          defaultChecked={DEFAULT_ORBIT_COLORING}
           onChange={toggleOrbitColoring}
         />
-        <CheckToggle label="Future ghosts" checked={ghostsEnabled} onChange={toggleGhosts} />
+        <CheckToggle
+          label="Future ghosts"
+          checked={ghostsEnabled}
+          defaultChecked={DEFAULT_GHOSTS_ENABLED}
+          onChange={toggleGhosts}
+        />
         <label
           style={{
             display: 'flex',
@@ -125,6 +178,20 @@ export function Settings(): ReactElement {
   const toggleTheme = useAppStore((state) => state.toggleTheme);
   const [open, setOpen] = useState(false);
 
+  // Escape closes the drawer (owner: cheap keyboard close). Only while open.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   return (
     <>
       <Button onClick={() => setOpen(true)} ariaLabel="Open settings" title="Settings">
@@ -132,6 +199,10 @@ export function Settings(): ReactElement {
       </Button>
 
       {open ? (
+        // The overlay is a TRANSPARENT full-screen capture layer — it does NOT
+        // darken the app (owner requirement 2026-07-11): the main window stays fully
+        // lit with the drawer open. Clicking the layer (outside the opaque drawer)
+        // closes it; the drawer itself stops propagation so clicks inside stay open.
         <div
           role="dialog"
           aria-modal="true"
@@ -140,7 +211,7 @@ export function Settings(): ReactElement {
           style={{
             position: 'fixed',
             inset: 0,
-            background: palette.overlayBackdrop,
+            background: 'transparent',
             display: 'flex',
             justifyContent: 'flex-end',
             zIndex: 200,

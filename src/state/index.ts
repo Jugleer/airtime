@@ -116,6 +116,9 @@ export const HAND_Y = 1.0;
 
 /** Which carry path is active: the default quintic (hold dip) or the cubic comparison. */
 export type CarryPathKind = 'quintic' | 'cubic';
+/** The default carry path (DESIGN.md §7): the physical quintic (hold dip). Single
+ *  source of truth for the carry-path reset affordance in the sidebar. */
+export const DEFAULT_CARRY_PATH_KIND: CarryPathKind = 'quintic';
 /** Hand-geometry preset kind (DESIGN.md §6, §7). */
 export type HandPreset = 'line' | 'circle';
 /** Which of a hand's two editable points a UI edit targets. */
@@ -695,7 +698,7 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     gravity: DEFAULT_GRAVITY_VALUE,
     holdDepth: DEFAULT_HOLD_DEPTH_VALUE,
-    carryPathKind: 'quintic',
+    carryPathKind: DEFAULT_CARRY_PATH_KIND,
     handThrowPoints: startPoints.throwPoints,
     handCatchPoints: startPoints.catchPoints,
     handPreset: 'line',

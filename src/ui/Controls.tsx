@@ -13,10 +13,16 @@
 // (physics) stays here; playback speed (viewing) lives in Settings — the two are
 // never on the same panel, so they can't be confused (DESIGN.md §6).
 
-import type { CSSProperties, ReactElement } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
+import { spatialPeriodBeats, validatePattern } from '../core/siteswap';
 import {
   BEAT_PERIOD_MAX,
   BEAT_PERIOD_MIN,
+  DEFAULT_BEAT_PERIOD,
+  DEFAULT_CARRY_PATH_KIND,
+  DEFAULT_DWELL_TIME,
+  DEFAULT_GRAVITY_VALUE,
+  DEFAULT_HOLD_DEPTH_VALUE,
   DWELL_CLAMP_BETA,
   DWELL_MIN,
   GRAVITY_MAX,
@@ -31,9 +37,10 @@ import {
   type HandPreset,
   type HandPointKind,
 } from '../state';
-import { PATTERN_LIBRARY } from './library';
+import { PATTERN_LIBRARY, type LibraryEntry } from './library';
 import { usePalette, type Palette } from './theme';
 import {
+  Button,
   CheckToggle,
   SectionLabel,
   Segmented,
@@ -135,7 +142,6 @@ function HandPositionsTable(): ReactElement {
 export function Controls(): ReactElement {
   const palette = usePalette();
   const pattern = useAppStore((state) => state.pattern);
-  const validation = useAppStore((state) => state.validation);
   const beatPeriod = useAppStore((state) => state.beatPeriod);
   const dwellTime = useAppStore((state) => state.dwellTime);
   const gravity = useAppStore((state) => state.gravity);
@@ -156,47 +162,113 @@ export function Controls(): ReactElement {
   const setHandPreset = useAppStore((state) => state.setHandPreset);
   const togglePositionsEditor = useAppStore((state) => state.togglePositionsEditor);
 
-  const valid = validation.ok;
-  const repeatSeconds = sim.spatialPeriodBeats * beatPeriod;
+  // --- Draft pattern entry (redesign 2026-07-11, owner requirement) -----------
+  // Typing edits a LOCAL draft with live validation; the running sim only changes
+  // on Enter or the Go button (both route through setPattern → navigateToPattern,
+  // exactly as before). The store's `pattern` is the single source of the applied
+  // text; this effect re-seeds the input whenever it changes from OUTSIDE the box
+  // (library pick, graph click, hard reset, applied URL). It is a no-op right after
+  // our own apply (draft already equals pattern), and never fires mid-typing since
+  // typing does not touch the store.
+  const [draft, setDraft] = useState(pattern);
+  useEffect(() => {
+    setDraft(pattern);
+  }, [pattern]);
+
+  const draftValidation = validatePattern(draft);
+  const draftValid = draftValidation.ok;
+  const dirty = draft !== pattern;
+  const applyDraft = (): void => {
+    if (draft !== pattern) {
+      setPattern(draft);
+    }
+  };
+
   const clampActive = dwellClampActive(sim.values, dwellTime, beatPeriod);
   const heldTwoWarning = handCount !== 2 && sim.values.includes(2);
+
+  // Tempo & physics reset (owner requirement): each control has a ↺ (via the
+  // widgets), and the whole group resets to the DEFAULT_* constants at once.
+  const tempoDirty =
+    beatPeriod !== DEFAULT_BEAT_PERIOD ||
+    dwellTime !== DEFAULT_DWELL_TIME ||
+    gravity !== DEFAULT_GRAVITY_VALUE ||
+    holdDepth !== DEFAULT_HOLD_DEPTH_VALUE ||
+    carryPathKind !== DEFAULT_CARRY_PATH_KIND;
+  const resetTempo = (): void => {
+    setBeatPeriod(DEFAULT_BEAT_PERIOD); // re-clamps dwell against the fresh cap
+    setDwellTime(DEFAULT_DWELL_TIME);
+    setGravity(DEFAULT_GRAVITY_VALUE);
+    setHoldDepth(DEFAULT_HOLD_DEPTH_VALUE);
+    setCarryPathKind(DEFAULT_CARRY_PATH_KIND);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
       {/* Pattern group. */}
       <section style={groupStyle(palette)}>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
           <span style={{ fontWeight: 700, fontSize: '0.82rem', color: palette.textPrimary }}>
             Pattern (siteswap)
           </span>
-          <input
-            type="text"
-            value={pattern}
-            aria-label="Pattern (siteswap)"
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(event) => setPattern(event.target.value)}
-            style={{
-              font: '700 1.15rem ui-monospace, SFMono-Regular, Menlo, monospace',
-              padding: '0.45rem 0.55rem',
-              borderRadius: '0.45rem',
-              border: `1px solid ${valid ? palette.border : palette.red}`,
-              background: palette.inset,
-              color: palette.textPrimary,
-              outline: 'none',
-            }}
-          />
-        </label>
+          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}>
+            <input
+              type="text"
+              value={draft}
+              aria-label="Pattern (siteswap)"
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  applyDraft();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setDraft(pattern); // revert the draft to the running pattern
+                }
+              }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                font: '700 1.15rem ui-monospace, SFMono-Regular, Menlo, monospace',
+                padding: '0.45rem 0.55rem',
+                borderRadius: '0.45rem',
+                border: `1px solid ${
+                  !draftValid ? palette.red : dirty ? palette.accent : palette.border
+                }`,
+                background: palette.inset,
+                color: palette.textPrimary,
+                outline: 'none',
+              }}
+            />
+            <Button
+              variant={dirty ? 'primary' : 'default'}
+              onClick={applyDraft}
+              ariaLabel="Apply pattern"
+              title="Apply pattern (Enter)"
+            >
+              Go
+            </Button>
+          </div>
+        </div>
 
-        {valid ? (
+        {draftValid ? (
           <p style={{ ...statusStyle, color: palette.green }}>
-            Valid · {sim.ballCount} balls · repeats every {repeatSeconds.toFixed(2)} s
+            Valid · {draftValidation.ballCount} balls · repeats every{' '}
+            {(spatialPeriodBeats(draftValidation.values, handCount) * beatPeriod).toFixed(2)} s
           </p>
         ) : (
           <p role="alert" style={{ ...statusStyle, color: palette.red }}>
-            {errorText(validation.errors.map((error) => error.message))}
+            {errorText(draftValidation.errors.map((error) => error.message))}
           </p>
         )}
+
+        {dirty ? (
+          <p style={{ margin: 0, color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.35 }}>
+            Press Enter or Go to apply · Esc to revert.
+          </p>
+        ) : null}
 
         {heldTwoWarning ? (
           <p role="note" style={{ ...statusStyle, color: palette.amber }}>
@@ -224,10 +296,14 @@ export function Controls(): ReactElement {
             }}
           >
             <option value="">Choose a pattern…</option>
-            {PATTERN_LIBRARY.map((entry) => (
-              <option key={entry.pattern} value={entry.pattern}>
-                {entry.pattern} — {entry.name} ({entry.ballCount}-ball)
-              </option>
+            {groupByBallCount(PATTERN_LIBRARY).map(([count, entries]) => (
+              <optgroup key={count} label={`${count} balls`}>
+                {entries.map((entry) => (
+                  <option key={entry.pattern} value={entry.pattern}>
+                    {entry.pattern} — {entry.name}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>
@@ -235,7 +311,18 @@ export function Controls(): ReactElement {
 
       {/* Tempo & physics group (DESIGN.md §4). */}
       <section style={groupStyle(palette)}>
-        <SectionLabel>Tempo &amp; physics</SectionLabel>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+          <SectionLabel>Tempo &amp; physics</SectionLabel>
+          <Button
+            variant="ghost"
+            onClick={resetTempo}
+            disabled={!tempoDirty}
+            ariaLabel="Reset all tempo and physics"
+            style={resetAllStyle}
+          >
+            ↺ Reset all
+          </Button>
+        </div>
         <Slider
           label="Beat period (tempo)"
           value={beatPeriod}
@@ -243,6 +330,7 @@ export function Controls(): ReactElement {
           max={BEAT_PERIOD_MAX}
           scale="log"
           readout={`${beatPeriod.toFixed(3)} s`}
+          defaultValue={DEFAULT_BEAT_PERIOD}
           onChange={setBeatPeriod}
         />
         <Slider
@@ -253,6 +341,7 @@ export function Controls(): ReactElement {
           scale="linear"
           readout={clampActive ? `${dwellTime.toFixed(3)} s · clamped` : `${dwellTime.toFixed(3)} s`}
           readoutColor={clampActive ? palette.amber : undefined}
+          defaultValue={DEFAULT_DWELL_TIME}
           onChange={setDwellTime}
         />
         <Slider
@@ -262,6 +351,7 @@ export function Controls(): ReactElement {
           max={GRAVITY_MAX}
           scale="linear"
           readout={`${gravity.toFixed(2)} m/s²`}
+          defaultValue={DEFAULT_GRAVITY_VALUE}
           onChange={setGravity}
         />
         <Slider
@@ -271,6 +361,7 @@ export function Controls(): ReactElement {
           max={HOLD_DEPTH_MAX}
           scale="linear"
           readout={`${(holdDepth * 100).toFixed(1)} cm`}
+          defaultValue={DEFAULT_HOLD_DEPTH_VALUE}
           onChange={setHoldDepth}
         />
         <Segmented<CarryPathKind>
@@ -280,6 +371,7 @@ export function Controls(): ReactElement {
             { value: 'quintic', label: 'Quintic' },
             { value: 'cubic', label: 'Cubic' },
           ]}
+          defaultValue={DEFAULT_CARRY_PATH_KIND}
           onChange={setCarryPathKind}
         />
         {carryPathKind === 'cubic' ? (
@@ -318,40 +410,26 @@ export function Controls(): ReactElement {
         />
         {positionsEditorOpen ? <HandPositionsTable /> : null}
       </section>
-
-      {/* A hint the pattern-input tests rely on: keep an example patterns line. */}
-      <p style={{ margin: '0 0.2rem', color: palette.textMuted, fontSize: '0.72rem' }}>
-        Try{' '}
-        <Ex onPick={setPattern} pattern="3" />, <Ex onPick={setPattern} pattern="441" />,{' '}
-        <Ex onPick={setPattern} pattern="531" />, <Ex onPick={setPattern} pattern="40" />,{' '}
-        <Ex onPick={setPattern} pattern="522" />.
-      </p>
     </div>
   );
 }
 
-/** A clickable example-pattern chip (also keeps a `3` literal in App's textContent). */
-function Ex({ pattern, onPick }: { readonly pattern: string; onPick(p: string): void }): ReactElement {
-  const palette = usePalette();
-  return (
-    <button
-      type="button"
-      onClick={() => onPick(pattern)}
-      style={{
-        font: '600 0.72rem ui-monospace, monospace',
-        color: palette.accent,
-        background: 'transparent',
-        border: 'none',
-        padding: 0,
-        cursor: 'pointer',
-      }}
-    >
-      {pattern}
-    </button>
-  );
+/** Group library entries by (parser-derived) ball count, ascending — one
+ *  <optgroup> per count in the sidebar dropdown. */
+function groupByBallCount(entries: readonly LibraryEntry[]): [number, LibraryEntry[]][] {
+  const groups = new Map<number, LibraryEntry[]>();
+  for (const entry of entries) {
+    const list = groups.get(entry.ballCount) ?? [];
+    list.push(entry);
+    groups.set(entry.ballCount, list);
+  }
+  return [...groups.entries()].sort((a, b) => a[0] - b[0]);
 }
 
 // --- Styling -----------------------------------------------------------------
+
+/** The small "Reset all" section button (Tempo & physics header). */
+const resetAllStyle: CSSProperties = { fontSize: '0.7rem', padding: '0.15rem 0.4rem' };
 
 function groupStyle(palette: Palette): CSSProperties {
   return {

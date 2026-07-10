@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { useAppStore } from '../state';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import {
+  DEFAULT_BALL_RADIUS,
+  DEFAULT_PLAYBACK_SPEED,
+  DEFAULT_TRAIL_LENGTH,
+  useAppStore,
+} from '../state';
 import { Settings } from './Settings';
 
 // The 3D view controls (ball radius, ball color, per-ball coloring) and playback
@@ -49,5 +54,51 @@ describe('Settings drawer (ui layer)', () => {
     expect(useAppStore.getState().theme).toBe('light');
     fireEvent.click(screen.getByRole('button', { name: 'Theme: Dark' }));
     expect(useAppStore.getState().theme).toBe('dark');
+  });
+
+  // Owner requirement 2026-07-11: the drawer must not darken the app. The overlay
+  // is a transparent full-screen capture layer (click-outside still closes).
+  it('does not darken the app: the overlay is transparent, click-outside closes', () => {
+    render(<Settings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.style.background).toBe('transparent');
+    fireEvent.click(dialog); // clicking the capture layer (outside the drawer) closes
+    expect(screen.queryByLabelText('Ball radius')).toBeNull();
+  });
+
+  it('closes on the Escape key', () => {
+    render(<Settings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    expect(screen.getByLabelText('Ball radius')).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByLabelText('Ball radius')).toBeNull();
+  });
+});
+
+// Reset-to-defaults for the View group (redesign 2026-07-11).
+describe('Settings reset-to-defaults', () => {
+  it('per-control ↺ restores a view default and hides the affordance', () => {
+    render(<Settings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    act(() => useAppStore.getState().setBallRadius(0.08));
+    fireEvent.click(screen.getByLabelText('Reset Ball radius'));
+    expect(useAppStore.getState().ballRadius).toBeCloseTo(DEFAULT_BALL_RADIUS, 9);
+    expect(screen.queryByLabelText('Reset Ball radius')).toBeNull();
+  });
+
+  it('Reset all restores the whole View group', () => {
+    render(<Settings />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    act(() => {
+      useAppStore.getState().setBallRadius(0.08);
+      useAppStore.getState().setPlaybackSpeed(1.5);
+      useAppStore.getState().setTrailLength(3);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all view settings' }));
+    const state = useAppStore.getState();
+    expect(state.ballRadius).toBeCloseTo(DEFAULT_BALL_RADIUS, 9);
+    expect(state.playbackSpeed).toBeCloseTo(DEFAULT_PLAYBACK_SPEED, 9);
+    expect(state.trailLength).toBeCloseTo(DEFAULT_TRAIL_LENGTH, 9);
   });
 });
