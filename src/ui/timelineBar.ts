@@ -89,3 +89,32 @@ export function trailHandlePlacement(
 export function clampSimTime(time: number): number {
   return Math.max(0, time);
 }
+
+/** Which endpoints of one flight fall inside the visible window (DESIGN.md §6). */
+export interface FlightMarksInWindow {
+  /** Draw the throw tick (its time is inside the window). */
+  readonly showThrow: boolean;
+  /** Draw the catch ring (its time is inside the window). */
+  readonly showCatch: boolean;
+}
+
+/**
+ * Decide, per endpoint, whether a flight's throw tick / catch ring lies inside the
+ * visible window `[windowStart, windowEnd]` (inclusive). This is the fix for the
+ * mini-ladder clipping bug: the old code kept a flight whenever ANY part of it
+ * overlapped the window and then drew BOTH marks unconditionally, so a throw tick
+ * could render before the track's left edge and a catch ring could linger past the
+ * right edge. Testing each endpoint independently drops the out-of-range mark and
+ * keeps the in-range one. Pure — no React/DOM — so it is unit-testable.
+ */
+export function flightMarksInWindow(
+  throwTime: number,
+  arrivalTime: number,
+  windowStart: number,
+  windowEnd: number,
+): FlightMarksInWindow {
+  return {
+    showThrow: throwTime >= windowStart && throwTime <= windowEnd,
+    showCatch: arrivalTime >= windowStart && arrivalTime <= windowEnd,
+  };
+}

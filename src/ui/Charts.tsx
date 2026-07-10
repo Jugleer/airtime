@@ -260,7 +260,7 @@ function ChartsBody(): ReactElement {
   }, [sim, simTime, handCount, timelineWindow, chartAxisMode, buffers, palette]);
 
   return (
-    <div style={{ display: 'flex', flex: 1, minWidth: 0, gap: '0.5rem' }}>
+    <div style={{ display: 'flex', flex: '2 1 0%', minWidth: 0, gap: '0.5rem' }}>
       <canvas ref={velocityRef} aria-label="Hand speed chart" style={canvasStyle} />
       <canvas ref={accelerationRef} aria-label="Hand acceleration chart" style={canvasStyle} />
       <canvas ref={jerkRef} aria-label="Hand jerk chart" style={canvasStyle} />
@@ -374,7 +374,9 @@ export function Charts(): ReactElement {
       {chartsVisible ? (
         <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'stretch', flexWrap: 'wrap' }}>
           <ChartsBody />
-          <div style={{ minWidth: '30rem', flexShrink: 0 }}>
+          {/* Real basis + shrink allowed: a max-content basis here starves the
+              chart canvases at very wide viewports (owner-reported collapse). */}
+          <div style={{ flex: '1 1 30rem', minWidth: 0 }}>
             <EnergyPanel />
           </div>
         </div>

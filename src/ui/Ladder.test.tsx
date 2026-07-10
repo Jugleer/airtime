@@ -13,18 +13,36 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Ladder (ui layer)', () => {
-  it('renders an SVG with one labeled lane per hand', () => {
+  it('renders an SVG with one labeled column per hand', () => {
     render(<Ladder />);
     expect(screen.getByRole('img')).toBeTruthy();
-    // n_h = 2 → two hand lanes, labeled with full words.
+    // n_h = 2 → two hand columns, labeled with full words (compact HN above n_h=4).
     expect(screen.getByText('Hand 0')).toBeTruthy();
     expect(screen.getByText('Hand 1')).toBeTruthy();
   });
 
-  it('renders beat-index labels along the axis', () => {
+  it('renders beat-index labels along the (left) axis', () => {
     render(<Ladder />);
     // Beat 0 is at t = 0, inside the startup window.
     expect(screen.getByText('0')).toBeTruthy();
+  });
+
+  it('is laid out VERTICALLY: hand columns run top→bottom, the cursor is horizontal', () => {
+    // Transposed geometry (owner override 2026-07-11): time is the vertical axis and
+    // hands are columns, so the full-height lane lines are VERTICAL (x1 === x2 over
+    // the whole plot band) and the shared simTime cursor is a HORIZONTAL line — the
+    // opposite of the previous horizontal ladder.
+    const { container } = render(<Ladder />);
+    const lines = [...container.querySelectorAll('line')];
+    const isVertical = (l: SVGLineElement): boolean => l.getAttribute('x1') === l.getAttribute('x2');
+    const isHorizontal = (l: SVGLineElement): boolean => l.getAttribute('y1') === l.getAttribute('y2');
+    // One full-height column line per hand (PLOT_TOP=30 → PLOT_BOTTOM=790).
+    const handColumns = lines.filter(
+      (l) => isVertical(l) && l.getAttribute('y1') === '30' && l.getAttribute('y2') === '790',
+    );
+    expect(handColumns.length).toBe(2);
+    // At least one horizontal line exists (beat rows and/or the cursor).
+    expect(lines.some(isHorizontal)).toBe(true);
   });
 });
 

@@ -1,16 +1,23 @@
 // src/ui/Ladder — the ladder diagram (DESIGN.md §6), the engine's debug view.
 //
-// Time runs left→right; one horizontal lane per hand. A flight is an arc that
-// leaves its throwing hand's lane and lands on the catching hand's lane (bow
-// height grows with the throw value). A carry is a segment along a lane from a
-// catch to the next throw (held 2s make a long multi-beat carry). Throw/catch
-// dots mark the events, and a single vertical cursor marks the shared simTime.
-// The window scrolls with the playhead. SVG (not canvas) for crisp text/vectors
-// and simple declarative React re-render — no chart library (DESIGN.md §6).
+// ORIENTATION (owner override 2026-07-11, decided by the orchestrator): the ladder
+// is VERTICAL. TIME flows TOP→BOTTOM; there is one COLUMN per hand (header label at
+// the top of each column). A flight is an arc that leaves its throwing hand's column
+// and lands on the catching hand's column (the bow grows sideways with the throw
+// value). A carry is a vertical segment down a column from a catch to the next throw
+// (held 2s make a long multi-beat carry). Throw/catch dots mark the events, and a
+// single HORIZONTAL cursor line marks the shared simTime at CURSOR_FRACTION of the
+// plot height (the window scrolls with the playhead, same `timelineWindow` as the
+// timeline bar). The SVG fills the right column's height.
 //
-// Redesign 2026-07-10: theme-aware colors (dark-first). Ball-colored arcs/carries
-// keep the exact `resolveBallColor` stroke (the ladder ↔ 3D color-agreement test
-// reads the `stroke` attribute directly); only the frame/lane/grid colors change.
+// To flip back to horizontal, swap the two axis maps in `makeFrame` (time↔one axis,
+// hand↔the other) and the header/gutter placement; everything else is expressed via
+// `yOf(time)` / `laneX(hand)` so the geometry follows.
+//
+// SVG (not canvas) for crisp text/vectors and simple declarative React re-render —
+// no chart library (DESIGN.md §6). Ball-colored arcs/carries keep the exact
+// `resolveBallColor` stroke (the ladder ↔ 3D color-agreement test reads the `stroke`
+// attribute directly); only the frame/lane/grid colors are theme-aware (dark-first).
 
 import type { ReactElement } from 'react';
 import { useAppStore } from '../state';
@@ -18,14 +25,17 @@ import { resolveBallColor } from '../state/ballColors';
 import { firstBeatAtOrAfter, windowSpans, type Simulation } from '../state/simulation';
 import { usePalette, type Palette } from './theme';
 
-// Logical SVG coordinate space (scaled to the container width via viewBox).
-const W = 1000;
-const LANE_HEIGHT = 72;
-const PLOT_LEFT = 104;
-const PLOT_RIGHT = W - 20;
-const PLOT_TOP = 58;
-const PLOT_W = PLOT_RIGHT - PLOT_LEFT;
-const AXIS_ROW = 40;
+// Logical SVG coordinate space (scaled to fit the container via viewBox). Time is
+// the VERTICAL axis; hands are the horizontal COLUMNS.
+const AXIS_COL = 56; // left gutter for beat-index labels
+const LANE_WIDTH = 118; // width of one hand column
+const HEADER_H = 30; // top strip for the column (hand) labels
+const PLOT_TOP = HEADER_H;
+const PLOT_H = 760; // tall plot so height is the limiting dimension → fills height
+const PLOT_BOTTOM = PLOT_TOP + PLOT_H;
+const PLOT_LEFT = AXIS_COL;
+const RIGHT_MARGIN = 16;
+const BOTTOM_MARGIN = 22;
 
 /** `(ballId) => cssColor`, threaded from the store's coloring settings. */
 type BallColorOf = (ballId: number) => string;
@@ -34,39 +44,48 @@ interface Frame {
   readonly windowStart: number;
   readonly windowEnd: number;
   readonly timelineWindow: number;
-  readonly plotBottom: number;
+  readonly plotRight: number;
+  readonly width: number;
   readonly height: number;
   readonly handCount: number;
-  xOf(time: number): number;
-  laneY(hand: number): number;
+  /** y (vertical) for a sim time — earlier at the top, later at the bottom. */
+  yOf(time: number): number;
+  /** x (column center) for a hand. */
+  laneX(hand: number): number;
 }
 
 function makeFrame(simTime: number, handCount: number, timelineWindow: number): Frame {
   const { pastSpan, futureSpan } = windowSpans(timelineWindow);
   const windowStart = simTime - pastSpan;
   const windowEnd = simTime + futureSpan;
-  const plotBottom = PLOT_TOP + handCount * LANE_HEIGHT;
+  const plotRight = PLOT_LEFT + handCount * LANE_WIDTH;
   return {
     windowStart,
     windowEnd,
     timelineWindow,
-    plotBottom,
-    height: plotBottom + AXIS_ROW,
+    plotRight,
+    width: plotRight + RIGHT_MARGIN,
+    height: PLOT_BOTTOM + BOTTOM_MARGIN,
     handCount,
-    xOf: (time) => PLOT_LEFT + ((time - windowStart) / timelineWindow) * PLOT_W,
-    laneY: (hand) => PLOT_TOP + (hand + 0.5) * LANE_HEIGHT,
+    yOf: (time) => PLOT_TOP + ((time - windowStart) / timelineWindow) * PLOT_H,
+    laneX: (hand) => PLOT_LEFT + (hand + 0.5) * LANE_WIDTH,
   };
+}
+
+/** Full words for a few hands; compact HN tags once the columns get crowded. */
+function handLabel(hand: number, handCount: number): string {
+  return handCount > 4 ? `H${hand}` : `Hand ${hand}`;
 }
 
 function LaneBackground({ frame, palette }: { frame: Frame; palette: Palette }): ReactElement {
   const lanes: ReactElement[] = [];
   for (let hand = 0; hand < frame.handCount; hand += 1) {
-    const y = frame.laneY(hand);
+    const x = frame.laneX(hand);
     lanes.push(
       <g key={hand}>
-        <line x1={PLOT_LEFT} y1={y} x2={PLOT_RIGHT} y2={y} stroke={palette.laneLine} strokeWidth={1} />
-        <text x={PLOT_LEFT - 12} y={y + 4} textAnchor="end" fontSize={15} fill={palette.textSecondary}>
-          Hand {hand}
+        <line x1={x} y1={PLOT_TOP} x2={x} y2={PLOT_BOTTOM} stroke={palette.laneLine} strokeWidth={1} />
+        <text x={x} y={PLOT_TOP - 11} textAnchor="middle" fontSize={15} fontWeight={600} fill={palette.textSecondary}>
+          {handLabel(hand, frame.handCount)}
         </text>
       </g>,
     );
@@ -82,11 +101,11 @@ function BeatGrid({ sim, frame, palette }: { sim: Simulation; frame: Frame; pale
     if (time > frame.windowEnd) {
       break;
     }
-    const x = frame.xOf(time);
+    const y = frame.yOf(time);
     marks.push(
       <g key={beat}>
-        <line x1={x} y1={PLOT_TOP} x2={x} y2={frame.plotBottom} stroke={palette.gridLine} strokeWidth={1} />
-        <text x={x} y={frame.plotBottom + 22} textAnchor="middle" fontSize={13} fill={palette.textMuted}>
+        <line x1={PLOT_LEFT} y1={y} x2={frame.plotRight} y2={y} stroke={palette.gridLine} strokeWidth={1} />
+        <text x={PLOT_LEFT - 8} y={y + 4} textAnchor="end" fontSize={13} fill={palette.textMuted}>
           {beat}
         </text>
       </g>,
@@ -112,15 +131,15 @@ function Carries({
     if (carry.endTime < frame.windowStart || carry.startTime > frame.windowEnd) {
       continue;
     }
-    const y = frame.laneY(carry.hand);
+    const x = frame.laneX(carry.hand);
     segments.push(
       <line
         key={`carry-${carry.ballId}-${carry.startBeat}`}
         data-ball-id={carry.ballId}
-        x1={frame.xOf(carry.startTime)}
-        y1={y}
-        x2={frame.xOf(carry.endTime)}
-        y2={y}
+        x1={x}
+        y1={frame.yOf(carry.startTime)}
+        x2={x}
+        y2={frame.yOf(carry.endTime)}
         stroke={colorOf(carry.ballId)}
         strokeWidth={carry.held ? 11 : 7}
         strokeLinecap="round"
@@ -152,17 +171,29 @@ function Flights({
       continue;
     }
     const color = colorOf(flight.ballId);
-    const x0 = frame.xOf(flight.throwTime);
-    const y0 = frame.laneY(flight.throwHand);
-    const x1 = frame.xOf(flight.arrivalTime);
-    const y1 = frame.laneY(flight.landingHand);
-    const cx = frame.xOf((flight.throwTime + flight.arrivalTime) / 2);
-    const controlY = Math.max(4, Math.min(y0, y1) - (12 + flight.value * 8));
+    const x0 = frame.laneX(flight.throwHand);
+    const y0 = frame.yOf(flight.throwTime);
+    const x1 = frame.laneX(flight.landingHand);
+    const y1 = frame.yOf(flight.arrivalTime);
+    const midY = frame.yOf((flight.throwTime + flight.arrivalTime) / 2);
+    // Bow sideways (the non-time axis), growing with the throw value. Cross throws
+    // bow toward the landing side; self-throws bow into the plot (away from an edge
+    // column) so the loop stays visible. Clamp so the control point stays on-canvas.
+    const bow = 14 + flight.value * 8;
+    const direction =
+      flight.landingHand === flight.throwHand
+        ? flight.throwHand === frame.handCount - 1 && frame.handCount > 1
+          ? -1
+          : 1
+        : flight.landingHand > flight.throwHand
+          ? 1
+          : -1;
+    const controlX = Math.max(8, Math.min(frame.width - 8, (x0 + x1) / 2 + direction * bow));
     arcs.push(
       <path
         key={`arc-${flight.ballId}-${flight.throwBeat}`}
         data-ball-id={flight.ballId}
-        d={`M ${x0} ${y0} Q ${cx} ${controlY} ${x1} ${y1}`}
+        d={`M ${x0} ${y0} Q ${controlX} ${midY} ${x1} ${y1}`}
         fill="none"
         stroke={color}
         strokeWidth={2}
@@ -170,13 +201,7 @@ function Flights({
       />,
     );
     dots.push(
-      <circle
-        key={`throw-${flight.ballId}-${flight.throwBeat}`}
-        cx={x0}
-        cy={y0}
-        r={5}
-        fill={color}
-      />,
+      <circle key={`throw-${flight.ballId}-${flight.throwBeat}`} cx={x0} cy={y0} r={5} fill={color} />,
       <circle
         key={`catch-${flight.ballId}-${flight.throwBeat}`}
         cx={x1}
@@ -205,8 +230,8 @@ function Idles({ sim, frame, palette }: { sim: Simulation; frame: Frame; palette
     if (event.time < frame.windowStart || event.time > frame.windowEnd) {
       continue;
     }
-    const x = frame.xOf(event.time);
-    const y = frame.laneY(event.hand);
+    const x = frame.laneX(event.hand);
+    const y = frame.yOf(event.time);
     marks.push(
       <g key={`idle-${event.beat}`} stroke={palette.textMuted} strokeWidth={1.5}>
         <line x1={x - 4} y1={y - 4} x2={x + 4} y2={y + 4} />
@@ -228,7 +253,7 @@ function Cursor({
   simTime: number;
   palette: Palette;
 }): ReactElement {
-  const x = frame.xOf(simTime);
+  const y = frame.yOf(simTime);
   const atOrAfter = firstBeatAtOrAfter(sim.timeline, simTime);
   const currentBeat =
     atOrAfter < sim.beatCount && sim.timeline.beatTime(atOrAfter) <= simTime + 1e-9
@@ -237,14 +262,14 @@ function Cursor({
   return (
     <g>
       <line
-        x1={x}
-        y1={PLOT_TOP - 10}
-        x2={x}
-        y2={frame.plotBottom + 4}
+        x1={PLOT_LEFT - 6}
+        y1={y}
+        x2={frame.plotRight + 4}
+        y2={y}
         stroke={palette.playhead}
         strokeWidth={2}
       />
-      <text x={x} y={PLOT_TOP - 16} textAnchor="middle" fontSize={13} fill={palette.playhead}>
+      <text x={PLOT_LEFT + 2} y={y - 6} fontSize={13} fill={palette.playhead}>
         t = {simTime.toFixed(2)} s · beat {currentBeat}
       </text>
     </g>
@@ -266,31 +291,35 @@ export function Ladder(): ReactElement {
   return (
     <svg
       role="img"
-      aria-label="Ladder diagram: time horizontal, one lane per hand"
-      viewBox={`0 0 ${W} ${frame.height}`}
-      width="100%"
+      aria-label="Ladder diagram: time vertical (top→bottom), one column per hand"
+      viewBox={`0 0 ${frame.width} ${frame.height}`}
       preserveAspectRatio="xMidYMid meet"
-      style={{ display: 'block', maxWidth: '100%', width: '100%', height: 'auto', maxHeight: '100%' }}
+      style={{ display: 'block', width: '100%', height: '100%' }}
     >
       <defs>
+        {/* Clip the scrolling content to the time band so nothing paints before the
+            window start (above) or after the window end (below). */}
         <clipPath id="ladder-plot-clip">
-          <rect x={PLOT_LEFT} y={0} width={PLOT_W} height={frame.height} />
+          <rect x={0} y={PLOT_TOP} width={frame.width} height={PLOT_H} />
         </clipPath>
       </defs>
 
-      {/* Static frame (unclipped): lanes, labels, plot border. */}
+      {/* Static frame (unclipped): plot well, columns, hand labels. */}
       <rect
         x={PLOT_LEFT}
         y={PLOT_TOP}
-        width={PLOT_W}
-        height={frame.plotBottom - PLOT_TOP}
+        width={frame.plotRight - PLOT_LEFT}
+        height={PLOT_H}
         fill={palette.chartPlotBg}
         stroke={palette.border}
         strokeWidth={1}
       />
       <LaneBackground frame={frame} palette={palette} />
+      <text x={AXIS_COL / 2} y={PLOT_TOP - 11} textAnchor="middle" fontSize={12} fill={palette.textMuted}>
+        t ↓
+      </text>
 
-      {/* Scrolling content (clipped to the plot band). */}
+      {/* Scrolling content (clipped to the time band). */}
       <g clipPath="url(#ladder-plot-clip)">
         <BeatGrid sim={sim} frame={frame} palette={palette} />
         <Carries sim={sim} frame={frame} colorOf={colorOf} />
@@ -300,8 +329,8 @@ export function Ladder(): ReactElement {
       </g>
 
       {/* Axis caption. */}
-      <text x={PLOT_LEFT} y={frame.height - 8} fontSize={13} fill={palette.textMuted}>
-        time → (beat index below the axis; window = {frame.timelineWindow.toFixed(1)} s)
+      <text x={PLOT_LEFT} y={frame.height - 7} fontSize={12} fill={palette.textMuted}>
+        beat index at left · window = {frame.timelineWindow.toFixed(1)} s
       </text>
     </svg>
   );

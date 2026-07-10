@@ -55,6 +55,44 @@ function useThemeChrome(): void {
   }, [theme]);
 }
 
+/**
+ * Global Space = play/pause (owner requirement 2026-07-11). The guard skips typing
+ * contexts — a focused <input>, <textarea>, <select>, or any contentEditable element
+ * — so Space keeps its normal meaning while editing the pattern or a numeric field.
+ * A focused <button> (or role=button) is also skipped so its native Space activation
+ * runs once instead of double-toggling (the Space-triggered click fires on keyup,
+ * which preventDefault on keydown cannot cancel). Modifier chords and auto-repeat are
+ * ignored; when we DO handle it we preventDefault so the page never also scrolls.
+ */
+function useSpacebarPlayPause(): void {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== 'Space' && event.key !== ' ') {
+        return;
+      }
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const interactive =
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        tag === 'BUTTON' ||
+        target?.getAttribute('role') === 'button' ||
+        (target?.isContentEditable ?? false);
+      if (interactive) {
+        return;
+      }
+      event.preventDefault(); // stop page scroll
+      useAppStore.getState().togglePlaying();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+}
+
 /** The thin top bar: product title + the Settings and Help entry points. */
 function TopBar(): ReactElement {
   const palette = usePalette();
@@ -131,12 +169,23 @@ function LadderColumn(): ReactElement {
         <h2 style={{ margin: 0, fontSize: '0.8rem', color: palette.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
           Ladder diagram
         </h2>
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'stretch', justifyContent: 'flex-start', overflow: 'hidden' }}>
-          <div style={{ background: palette.chartPlotBg, border: `1px solid ${palette.border}`, borderRadius: '0.4rem', padding: '0.3rem' }}>
+        {/* The ladder box takes all remaining height so the (vertical) SVG fills it. */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: 'hidden' }}>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              background: palette.chartPlotBg,
+              border: `1px solid ${palette.border}`,
+              borderRadius: '0.4rem',
+              padding: '0.3rem',
+            }}
+          >
             <Ladder />
           </div>
-          <p style={{ margin: '0.6rem 0 0', color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.45 }}>
-            Time runs left→right, one lane per hand. Arcs are flights (bow grows with the throw),
+          <p style={{ margin: 0, color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.45 }}>
+            Time runs top→bottom, one column per hand. Arcs are flights (bow grows with the throw),
             thick segments are carries; each ball keeps the color it has in the 3D scene. The red
             cursor is the shared playhead — scrub the timeline to move it here too.
           </p>
@@ -152,6 +201,7 @@ export function App(): ReactElement {
   useClock();
   useAudio();
   useThemeChrome();
+  useSpacebarPlayPause();
   const palette = usePalette();
 
   return (

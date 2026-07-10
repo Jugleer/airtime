@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CURSOR_FRACTION, windowSpans } from '../state/simulation';
 import {
   clampSimTime,
+  flightMarksInWindow,
   timeFromPointer,
   timeOfX,
   trailHandlePlacement,
@@ -90,5 +91,34 @@ describe('clampSimTime', () => {
     expect(clampSimTime(-2)).toBe(0);
     expect(clampSimTime(0)).toBe(0);
     expect(clampSimTime(4.2)).toBe(4.2);
+  });
+});
+
+describe('flightMarksInWindow (mini-ladder clipping fix)', () => {
+  // A visible window [5.0, 8.0] (windowStart 5, windowEnd 8).
+  const start = 5.0;
+  const end = 8.0;
+
+  it('draws both marks when both endpoints are inside the window', () => {
+    expect(flightMarksInWindow(5.5, 7.5, start, end)).toEqual({ showThrow: true, showCatch: true });
+  });
+
+  it('drops a throw tick thrown before the track start (no dots before the start)', () => {
+    // Thrown at 4.6 (before windowStart), lands at 6.0 (inside): only the catch shows.
+    expect(flightMarksInWindow(4.6, 6.0, start, end)).toEqual({ showThrow: false, showCatch: true });
+  });
+
+  it('drops a catch ring landing after the track end (no dots persisting past the end)', () => {
+    // Thrown at 7.8 (inside), lands at 8.6 (after windowEnd): only the throw shows.
+    expect(flightMarksInWindow(7.8, 8.6, start, end)).toEqual({ showThrow: true, showCatch: false });
+  });
+
+  it('drops both marks for a flight entirely outside the window', () => {
+    expect(flightMarksInWindow(3.0, 4.0, start, end)).toEqual({ showThrow: false, showCatch: false });
+    expect(flightMarksInWindow(9.0, 10.0, start, end)).toEqual({ showThrow: false, showCatch: false });
+  });
+
+  it('treats the window edges as inclusive', () => {
+    expect(flightMarksInWindow(start, end, start, end)).toEqual({ showThrow: true, showCatch: true });
   });
 });
