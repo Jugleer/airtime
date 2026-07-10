@@ -296,7 +296,7 @@ clicks (oscillator + envelope) to keep the app asset-free.
 | `holdDepth` | 0.10 m | 0–0.4 m |
 | Timeline window | 3 s | 1–15 s |
 | Ball radius | 0.035 m | 0.01–0.1 m |
-| Ball color | single color (configurable); orbit palette on toggle | — |
+| Ball color | per-ball palette (matches ladder); single configurable color on toggle off | — |
 | `N` (graph) | 7 | 3–11 (warn ≥ 9) |
 
 Defaults must make the startup cascade look natural without touching anything.

@@ -269,3 +269,21 @@ Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-o
 - Diagnosis (dedicated Opus agent): flightArrival aimed air time from the GUARD-STRETCHED period → h×-longer flights → bigger stretch h beats later → exponential runaway to Infinity/NaN on tempo speedups (744→0.15 overflowed ~beat 2400; sim froze). Constant-param core was proven exactly periodic (spread 0.0). Fix: aim air times from the pre-guard slewed period (aimPeriods); guard stretch lands in dwell (≥ 0); slew state advances from the previous AIM period (fixes a limit cycle the naive fix left — 0000a→0.08 stuck at 0.118 — caught by the new property test). Bit-identical whenever the guard is silent.
 - Review: adversarial reviewer — SOUND; extension invariance + epoch immutability re-verified on guard-active builds; splice-under-tempo-epoch sane; composition with Fix 2 safe.
 - Real-app verification (owner challenged the epoch-dependence): dedicated agent drove the UNFIXED app headlessly, zero interaction, 5 patterns × ~260 sim-s — apex envelope flat to ≤ 0.2 mm, matching closed-form predictions to 0.1 mm; epoch lists pinned at 0; control tempo-drag run detected crisply (2.2 m apex change). Constant-parameter operation positively cleared; observed drift attributed to tempo interaction (ratchet) + the wavy carry visual.
+
+## Fix 3b — Scoop short-segment conditioning            DONE
+- Date: 2026-07-10
+- Commit: 1be509c
+- Gate: (2026-07-10, "npm run gate", green — 31 files / 386 tests; plus 13 consecutive fresh-seed green runs of the kinematics suite)
+- A fresh fast-check seed exposed 2e-9 joint-continuity error at holdDepth just above the degenerate cutoff (flaky 1-in-6 gate). Mechanism: internal jerk × the float gap between built duration and evaluation-visible fl(t0+tA)−t0. Structural fix (no tolerance touched): exact evaluation-visible durations for short segments, conditioned Hermite solve, absorb-time floor v·5e-5, 1 ms min hold. Counterexample 2.21e-9 → 4.94e-12; shrunk case pinned as a deterministic regression.
+
+## Fix 4 — Hand gizmo editing UX            DONE
+- Date: 2026-07-10
+- Commit: 359a56e
+- Gate: (2026-07-10, "npm run gate", green — 31 files / 382 tests; orchestrator-run)
+- Diagnosis: drag mechanics verified working headlessly; failures were ergonomic (5–7 px hit radius, no affordances, identical markers, occlusion, future-only edits reading as no-ops while paused). Fix: 0.07 m invisible hit spheres (~12–13 px effective), hover scale/brighten + grab cursors, depthTest-off markers, per-hand canvas-sprite labels (deliberately NOT drei Text — troika fetches fonts from a CDN, violating the no-external-requests rule), editor-scoped ghost preview + explanatory note. Future-only semantics unchanged. The user's remembered "selector for which hand" never existed — labels remove the felt need. Below-the-fold discoverability deferred to the UI redesign.
+
+## Fix 5 — Per-ball coloring (owner override of DESIGN §6)            DONE
+- Date: 2026-07-10
+- Commit: d09c778
+- Gate: (2026-07-10, "npm run gate", green — 31 files / 386 tests; orchestrator-run)
+- Original report ("orbit colouring does nothing") diagnosed as working-as-designed (pixel-probe proof) with two perception factors: 1-orbit patterns legitimately single-colored, and the palette's first color identical to the default blue. Owner then overrode the design: per-BALL colors matching the ladder. Implemented as a shared resolver (state/ballColors.ts) used identically by ladder/balls/tracers; both views follow the toggle (closes the Phase 4 deferred item); default ON; label "Colour balls individually"; colors stable across extensions/splices (Phase 8 anchoring). Per-orbit machinery deleted. DESIGN §3/§6/§7 amended to record the override.
