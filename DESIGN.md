@@ -213,8 +213,8 @@ land where their parabola was aimed).
   entry transitions smoothly by default; a "hard reset" button restarts clean.
 - If an entered pattern's max `h` exceeds `N`, auto-expand `N` (cap 11, warn ≥ 9 —
   C(N,b) explodes and force layouts turn to hairballs; default `N = 7`).
-- Layout: group nodes by excitation level (distance from ground state) rather than
-  hoping force-directed layout stays readable.
+- Layout: concentric rings by excitation level (distance from ground state), ground
+  state centred — deterministic, not force-directed.
 
 ---
 

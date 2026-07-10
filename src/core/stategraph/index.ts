@@ -509,40 +509,113 @@ export function stateAtBits(values: readonly number[], beat: number, maxHeight: 
   return bits >>> 0;
 }
 
-// --- Layout (excitation-level columns, deterministic ordering) ---------------
+// --- Layout (concentric excitation rings, deterministic ordering) ------------
 
-/** One laid-out node: its excitation level column and normalized coordinates. */
+const TAU = Math.PI * 2;
+
+/** One laid-out node: its excitation ring and normalized coordinates. */
 export interface GraphLayoutNode {
   readonly bits: StateBits;
   readonly level: number;
-  /** 0-based index within the node's level (ascending by bitmask). */
+  /** 0-based angular slot within the node's ring (barycenter order). */
   readonly indexInLevel: number;
-  /** Normalized x in [0, 1] = level / maxLevel (0.5 when there is one level). */
+  /** Normalized x in [0, 1]; 0.5 is the disc center, where the ground state sits. */
   readonly x: number;
-  /** Normalized y in [0, 1], evenly spaced within the level (0.5 when alone). */
+  /** Normalized y in [0, 1]; 0.5 is the disc center. */
   readonly y: number;
+  /** Ring angle in radians (outward direction for label anchoring; −π/2 = up). */
+  readonly angle: number;
+  /** Normalized ring radius in [0, 0.5]; 0 = the ground state at the center. */
+  readonly radius: number;
   /** Compact label (bit 0 leftmost). */
   readonly label: string;
 }
 
-/** The deterministic excitation-level layout of a graph (DESIGN.md §5). */
+/** The deterministic concentric-ring layout of a graph (DESIGN.md §5). */
 export interface GraphLayout {
   readonly nodes: readonly GraphLayoutNode[];
-  /** Number of excitation levels (columns). */
+  /** Number of excitation levels (rings, counting the center). */
   readonly levelCount: number;
-  /** The most nodes in any single level. */
+  /** The most nodes in any single ring. */
   readonly maxNodesPerLevel: number;
   /** Normalized coordinates keyed by state, for marker / edge placement. */
   readonly coordOf: Map<StateBits, { readonly x: number; readonly y: number }>;
 }
 
+/** Tunables for {@link layoutStateGraph}; the defaults suit the (b, N) range. */
+export interface GraphLayoutOptions {
+  /** Arc length reserved per node on a ring, in pre-normalization radius units. */
+  readonly gapMin?: number;
+  /** Minimum radial step between consecutive rings, pre-normalization. */
+  readonly radialStep?: number;
+  /** Barycenter sweep count (fixed, so the layout is deterministic). */
+  readonly sweeps?: number;
+}
+
+/** Wrap an angle into [−π, π) — a canonical sort key for ring ordering. */
+function wrapAngle(angle: number): number {
+  return ((((angle + Math.PI) % TAU) + TAU) % TAU) - Math.PI;
+}
+
 /**
- * Lay the graph out by excitation level (DESIGN.md §5): one column per level
- * (BFS distance from ground), nodes ordered by bitmask within a level. Coordinates
- * are normalized to [0, 1] so the UI can scale them to any SVG viewport; ordering
- * is fully deterministic (a stable layout across renders). Not force-directed.
+ * Circular mean of a set of angles, or `null` when the unit vectors cancel (the
+ * mean is undefined). Closed form (atan2 of the vector sum) — deterministic.
  */
-export function layoutStateGraph(graph: StateGraph): GraphLayout {
+function circularMean(angles: readonly number[]): number | null {
+  let x = 0;
+  let y = 0;
+  for (const a of angles) {
+    x += Math.cos(a);
+    y += Math.sin(a);
+  }
+  if (Math.abs(x) < 1e-9 && Math.abs(y) < 1e-9) {
+    return null;
+  }
+  return Math.atan2(y, x);
+}
+
+/** Undirected adjacency (self-loops dropped), for angular barycenter ordering. */
+function undirectedAdjacency(graph: StateGraph): Map<StateBits, Set<StateBits>> {
+  const adjacency = new Map<StateBits, Set<StateBits>>();
+  for (const node of graph.nodes) {
+    adjacency.set(node, new Set());
+  }
+  for (const node of graph.nodes) {
+    for (const edge of graph.edgesFrom(node)) {
+      if (edge.to === node) {
+        continue;
+      }
+      const mine = adjacency.get(node);
+      const theirs = adjacency.get(edge.to);
+      if (mine === undefined || theirs === undefined) {
+        continue;
+      }
+      mine.add(edge.to);
+      theirs.add(node);
+    }
+  }
+  return adjacency;
+}
+
+/**
+ * Lay the graph out as concentric rings by excitation level (DESIGN.md §5): the
+ * ground state at the disc center (0.5, 0.5), one ring per BFS level, radius
+ * growing with excitation. Ring radii are circumference-aware — each ring is
+ * pushed out by at least `radialStep`, or further when its population needs the
+ * arc length (`count · gapMin` of circumference) — then normalized so the outer
+ * ring sits at radius 0.5 of the [0, 1] box. Angular order within a ring seeds
+ * from ascending bitmask and is refined by a fixed number of barycenter sweeps
+ * (sort by the circular mean of neighbor angles, ties broken by bitmask); each
+ * ring's rotation offset is the closed-form circular-mean alignment against the
+ * rings already placed. Fully deterministic (no randomness, no iteration-order
+ * dependence), a pure function of `(graph, options)` — a stable layout across
+ * renders. Not force-directed.
+ */
+export function layoutStateGraph(graph: StateGraph, options?: GraphLayoutOptions): GraphLayout {
+  const gapMin = options?.gapMin ?? 0.06;
+  const radialStep = options?.radialStep ?? 0.16;
+  const sweeps = options?.sweeps ?? 8;
+
   const byLevel = new Map<number, StateBits[]>();
   for (const node of graph.nodes) {
     const lvl = graph.level(node);
@@ -554,23 +627,111 @@ export function layoutStateGraph(graph: StateGraph): GraphLayout {
     }
   }
   const levels = [...byLevel.keys()].sort((a, b) => a - b);
-  const maxLevel = levels.length > 0 ? (levels[levels.length - 1] as number) : 0;
+
+  // Ring radii (circumference-aware), normalized so the outer ring is 0.5.
+  const rawRadiusOf = new Map<number, number>();
+  let previousRaw = 0;
+  for (let i = 0; i < levels.length; i++) {
+    const lvl = levels[i] as number;
+    const count = (byLevel.get(lvl) as StateBits[]).length;
+    const needed = (count * gapMin) / TAU;
+    const raw = i === 0 ? (count > 1 ? needed : 0) : Math.max(previousRaw + radialStep, needed);
+    rawRadiusOf.set(lvl, raw);
+    previousRaw = raw;
+  }
+  const maxRaw = previousRaw;
+  const radiusOf = new Map<number, number>();
+  for (const lvl of levels) {
+    const raw = rawRadiusOf.get(lvl) as number;
+    radiusOf.set(lvl, maxRaw > 0 ? (0.5 * raw) / maxRaw : 0);
+  }
+
+  // Angular order: seed ascending by bitmask, refine with barycenter sweeps.
+  const adjacency = undirectedAdjacency(graph);
+  const order = new Map<number, StateBits[]>();
+  for (const lvl of levels) {
+    order.set(lvl, (byLevel.get(lvl) as StateBits[]).slice().sort((a, b) => a - b));
+  }
+  const angleOf = new Map<StateBits, number>();
+
+  // Assign angles ring by ring (inner → outer): slot i of a k-ring sits at
+  // offset + τ·i/k, where the ring's rotation offset is the circular mean of
+  // (placed neighbor angle − slot angle) — aligning the ring against the rings
+  // already placed. A ring with no placed neighbor starts at the top (−π/2);
+  // a single center node is pinned there (its angle only anchors its label).
+  const assignAngles = (): void => {
+    for (const lvl of levels) {
+      const ring = order.get(lvl) as StateBits[];
+      const count = ring.length;
+      if (lvl === levels[0] && count === 1) {
+        angleOf.set(ring[0] as StateBits, -Math.PI / 2);
+        continue;
+      }
+      const diffs: number[] = [];
+      for (let i = 0; i < count; i++) {
+        const slotAngle = (TAU * i) / count;
+        for (const neighbor of adjacency.get(ring[i] as StateBits) ?? []) {
+          const neighborAngle = angleOf.get(neighbor);
+          if (neighborAngle !== undefined) {
+            diffs.push(neighborAngle - slotAngle);
+          }
+        }
+      }
+      const offset = diffs.length > 0 ? (circularMean(diffs) ?? -Math.PI / 2) : -Math.PI / 2;
+      for (let i = 0; i < count; i++) {
+        angleOf.set(ring[i] as StateBits, offset + (TAU * i) / count);
+      }
+    }
+  };
+  assignAngles();
+  for (let pass = 0; pass < sweeps; pass++) {
+    const direction = pass % 2 === 0 ? levels : [...levels].reverse();
+    for (const lvl of direction) {
+      const ring = order.get(lvl) as StateBits[];
+      if (ring.length <= 1) {
+        continue;
+      }
+      const keyed = ring.map((bits) => {
+        const neighborAngles: number[] = [];
+        for (const neighbor of adjacency.get(bits) ?? []) {
+          const neighborAngle = angleOf.get(neighbor);
+          if (neighborAngle !== undefined) {
+            neighborAngles.push(neighborAngle);
+          }
+        }
+        const mean = circularMean(neighborAngles);
+        return { bits, key: mean ?? wrapAngle(angleOf.get(bits) ?? 0) };
+      });
+      keyed.sort((p, q) => p.key - q.key || p.bits - q.bits);
+      order.set(
+        lvl,
+        keyed.map((k) => k.bits),
+      );
+      assignAngles();
+    }
+  }
+
+  // Emit normalized coordinates (disc center 0.5, 0.5; radius ≤ 0.5).
   let maxNodesPerLevel = 0;
   const nodes: GraphLayoutNode[] = [];
   const coordOf = new Map<StateBits, { x: number; y: number }>();
   for (const lvl of levels) {
-    const bucket = (byLevel.get(lvl) as StateBits[]).slice().sort((a, b) => a - b);
-    maxNodesPerLevel = Math.max(maxNodesPerLevel, bucket.length);
-    for (let i = 0; i < bucket.length; i++) {
-      const bits = bucket[i] as StateBits;
-      const x = maxLevel > 0 ? lvl / maxLevel : 0.5;
-      const y = bucket.length > 1 ? i / (bucket.length - 1) : 0.5;
+    const ring = order.get(lvl) as StateBits[];
+    maxNodesPerLevel = Math.max(maxNodesPerLevel, ring.length);
+    const radius = radiusOf.get(lvl) as number;
+    for (let i = 0; i < ring.length; i++) {
+      const bits = ring[i] as StateBits;
+      const angle = angleOf.get(bits) as number;
+      const x = 0.5 + radius * Math.cos(angle);
+      const y = 0.5 + radius * Math.sin(angle);
       nodes.push({
         bits,
         level: lvl,
         indexInLevel: i,
         x,
         y,
+        angle,
+        radius,
         label: formatState(bits, graph.maxHeight),
       });
       coordOf.set(bits, { x, y });

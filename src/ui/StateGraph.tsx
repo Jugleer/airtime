@@ -1,8 +1,9 @@
 // src/ui/StateGraph — the state-graph panel (DESIGN.md §5).
 //
 // SVG rendering of the (b, N) siteswap state graph: nodes are landing-schedule
-// states (C(N, b) of them), edges are beat advances, laid out in excitation-level
-// columns (BFS distance from the ground state — deterministic, NOT force-directed).
+// states (C(N, b) of them), edges are beat advances, laid out as concentric
+// excitation rings — ground state at the disc center, ring radius = BFS distance
+// from ground (deterministic, NOT force-directed).
 // The current pattern's cycle is highlighted; a small ball marker hops states every
 // beat (derived from the ONE global clock — DESIGN.md §2); clicking any node
 // navigates there through the store's BFS machinery (the running timeline is
@@ -38,33 +39,60 @@ const EDGE_STROKE = '#e2e6ec';
 const CYCLE_COLOR = '#2f6fed';
 const MARKER_COLOR = '#e8710a';
 
-// SVG geometry (viewBox units). The layout's normalized [0, 1] coordinates are
-// mapped into a margin-inset plot area; height grows with the densest level so
-// nodes never overlap (the panel scrolls vertically for large N).
-const MARGIN_X = 34;
-const MARGIN_Y = 22;
-const LEVEL_WIDTH = 96;
-const ROW_HEIGHT = 30;
-const NODE_RADIUS = 8;
-const MARKER_RADIUS = 4.5;
-/** Show bit-string labels under nodes only while the graph is small enough. */
+// SVG geometry (viewBox units). The ring layout's normalized [0, 1] disc maps
+// into a fixed square viewport; node/marker radii shrink with the smallest
+// adjacent-node arc gap so dense rings stay distinct without scrolling.
+const VIEW_SIZE = 480;
+const MARGIN_PLAIN = 30;
+/** Wider inset when bit-string labels are shown (they anchor radially outward). */
+const MARGIN_LABELED = 60;
+const MAX_NODE_RADIUS = 8;
+const MIN_NODE_RADIUS = 1.6;
+const TAU = Math.PI * 2;
+/** Show bit-string labels next to nodes only while the graph is small enough. */
 const LABEL_NODE_LIMIT = 42;
 
 interface GraphGeometry {
   readonly width: number;
   readonly height: number;
+  /** Node circle radius, shrunk on dense rings so ring neighbors stay distinct. */
+  readonly nodeRadius: number;
+  /** Current-state marker radius (scales with the node radius). */
+  readonly markerRadius: number;
   toX(x: number): number;
   toY(y: number): number;
 }
 
 function geometryOf(layout: GraphLayout): GraphGeometry {
-  const width = Math.max(320, MARGIN_X * 2 + (layout.levelCount - 1) * LEVEL_WIDTH);
-  const height = Math.max(160, MARGIN_Y * 2 + (layout.maxNodesPerLevel - 1) * ROW_HEIGHT);
+  const margin = layout.nodes.length <= LABEL_NODE_LIMIT ? MARGIN_LABELED : MARGIN_PLAIN;
+  const span = VIEW_SIZE - 2 * margin;
+  // The smallest arc gap between ring neighbors, in viewBox units. All nodes of
+  // a level share one radius, so one (count, radius) pair per level suffices.
+  const rings = new Map<number, { count: number; radius: number }>();
+  for (const node of layout.nodes) {
+    const ring = rings.get(node.level);
+    if (ring === undefined) {
+      rings.set(node.level, { count: 1, radius: node.radius });
+    } else {
+      ring.count += 1;
+    }
+  }
+  let minArcGap = Infinity;
+  for (const { count, radius } of rings.values()) {
+    if (count > 1 && radius > 0) {
+      minArcGap = Math.min(minArcGap, (TAU * radius * span) / count);
+    }
+  }
+  const nodeRadius = Number.isFinite(minArcGap)
+    ? Math.min(MAX_NODE_RADIUS, Math.max(MIN_NODE_RADIUS, minArcGap * 0.42))
+    : MAX_NODE_RADIUS;
   return {
-    width,
-    height,
-    toX: (x) => MARGIN_X + x * (width - 2 * MARGIN_X),
-    toY: (y) => MARGIN_Y + y * (height - 2 * MARGIN_Y),
+    width: VIEW_SIZE,
+    height: VIEW_SIZE,
+    nodeRadius,
+    markerRadius: Math.max(1.2, nodeRadius * 0.56),
+    toX: (x) => margin + x * span,
+    toY: (y) => margin + y * span,
   };
 }
 
@@ -82,8 +110,10 @@ const GraphPicture = memo(function GraphPicture({
   readonly geometry: GraphGeometry;
   onNodeClick(bits: number): void;
 }): ReactElement {
-  const { toX, toY } = geometry;
+  const { toX, toY, nodeRadius } = geometry;
   const cycleEdgeKeys = new Set(cycle.edges.map((edge) => `${edge.from}:${edge.to}`));
+  const centerX = toX(0.5);
+  const centerY = toY(0.5);
 
   const baseEdges: ReactElement[] = [];
   const cycleEdges: ReactElement[] = [];
@@ -96,15 +126,18 @@ const GraphPicture = memo(function GraphPicture({
       const key = `${node.bits}:${edge.to}`;
       const onCycle = cycleEdgeKeys.has(key);
       if (edge.to === node.bits) {
-        // Self-loop (e.g. the ground state's cascade throw): a small loop above
-        // the node — drawn only when on the cycle (visual noise otherwise).
+        // Self-loop (e.g. the ground state's cascade throw): a small loop
+        // radially outward from the node — drawn only when on the cycle
+        // (visual noise otherwise). The center node's loop points up (−π/2).
         if (onCycle) {
+          const loopRadius = Math.max(3, nodeRadius * 0.7);
+          const loopDistance = nodeRadius + loopRadius - 1;
           cycleEdges.push(
             <circle
               key={`loop-${key}`}
-              cx={toX(from.x)}
-              cy={toY(from.y) - NODE_RADIUS - 4}
-              r={5}
+              cx={toX(from.x) + Math.cos(node.angle) * loopDistance}
+              cy={toY(from.y) + Math.sin(node.angle) * loopDistance}
+              r={loopRadius}
               fill="none"
               stroke={CYCLE_COLOR}
               strokeWidth={1.8}
@@ -117,25 +150,65 @@ const GraphPicture = memo(function GraphPicture({
       if (!to) {
         continue;
       }
-      const line = (
-        <line
-          key={`edge-${key}`}
-          x1={toX(from.x)}
-          y1={toY(from.y)}
-          x2={toX(to.x)}
-          y2={toY(to.y)}
-          stroke={onCycle ? CYCLE_COLOR : EDGE_STROKE}
-          strokeWidth={onCycle ? 1.8 : 1}
-          markerEnd={onCycle ? 'url(#stategraph-arrow)' : undefined}
-        />
-      );
-      (onCycle ? cycleEdges : baseEdges).push(line);
+      const x1 = toX(from.x);
+      const y1 = toY(from.y);
+      const x2 = toX(to.x);
+      const y2 = toY(to.y);
+      if (onCycle) {
+        // Cycle edges bow away from the disc center as quadratic arcs, so the
+        // highlighted loop lifts off the straight background chords.
+        const midX = (x1 + x2) / 2;
+        const midY = (y1 + y2) / 2;
+        const chordLength = Math.hypot(x2 - x1, y2 - y1);
+        let dirX = midX - centerX;
+        let dirY = midY - centerY;
+        const dirLength = Math.hypot(dirX, dirY);
+        if (dirLength > 1e-6) {
+          dirX /= dirLength;
+          dirY /= dirLength;
+        } else {
+          // Chord through the center: bow perpendicular to it (deterministic).
+          dirX = -(y2 - y1) / (chordLength || 1);
+          dirY = (x2 - x1) / (chordLength || 1);
+        }
+        const bow = Math.min(26, chordLength * 0.22);
+        cycleEdges.push(
+          <path
+            key={`edge-${key}`}
+            d={`M ${x1} ${y1} Q ${midX + dirX * bow} ${midY + dirY * bow} ${x2} ${y2}`}
+            fill="none"
+            stroke={CYCLE_COLOR}
+            strokeWidth={1.8}
+            markerEnd="url(#stategraph-arrow)"
+          />,
+        );
+      } else {
+        baseEdges.push(
+          <line
+            key={`edge-${key}`}
+            x1={x1}
+            y1={y1}
+            x2={x2}
+            y2={y2}
+            stroke={EDGE_STROKE}
+            strokeWidth={1}
+          />,
+        );
+      }
     }
   }
 
   const showLabels = layout.nodes.length <= LABEL_NODE_LIMIT;
   const nodes: ReactElement[] = layout.nodes.map((node) => {
     const onCycle = cycle.nodeSet.has(node.bits);
+    // Labels anchor radially outward from the ring; a node whose self-loop is
+    // highlighted flips its label inward so text and loop don't collide.
+    const labelAngle = cycleEdgeKeys.has(`${node.bits}:${node.bits}`)
+      ? node.angle + Math.PI
+      : node.angle;
+    const labelCos = Math.cos(labelAngle);
+    const labelDistance = nodeRadius + 7;
+    const labelAnchor = labelCos > 0.35 ? 'start' : labelCos < -0.35 ? 'end' : 'middle';
     return (
       <g key={`node-${node.bits}`}>
         <circle
@@ -143,7 +216,7 @@ const GraphPicture = memo(function GraphPicture({
           aria-label={`State ${node.label}`}
           cx={toX(node.x)}
           cy={toY(node.y)}
-          r={NODE_RADIUS}
+          r={nodeRadius}
           fill={onCycle ? CYCLE_COLOR : NODE_FILL}
           stroke={onCycle ? CYCLE_COLOR : NODE_STROKE}
           strokeWidth={1.2}
@@ -154,9 +227,9 @@ const GraphPicture = memo(function GraphPicture({
         </circle>
         {showLabels ? (
           <text
-            x={toX(node.x)}
-            y={toY(node.y) + NODE_RADIUS + 9}
-            textAnchor="middle"
+            x={toX(node.x) + labelCos * labelDistance}
+            y={toY(node.y) + Math.sin(labelAngle) * labelDistance + 3}
+            textAnchor={labelAnchor}
             fontSize={8}
             fill={NOTE_COLOR}
             style={{ pointerEvents: 'none', fontFamily: 'ui-monospace, monospace' }}
@@ -174,7 +247,7 @@ const GraphPicture = memo(function GraphPicture({
         <marker
           id="stategraph-arrow"
           viewBox="0 0 8 8"
-          refX={8 + NODE_RADIUS / 1.8}
+          refX={8 + nodeRadius / 1.8}
           refY={4}
           markerWidth={7}
           markerHeight={7}
@@ -219,7 +292,7 @@ function CurrentStateMarker({
       aria-label="Current state marker"
       cx={geometry.toX(coord.x)}
       cy={geometry.toY(coord.y)}
-      r={MARKER_RADIUS}
+      r={geometry.markerRadius}
       fill={MARKER_COLOR}
       stroke="#ffffff"
       strokeWidth={1.2}
@@ -314,9 +387,9 @@ function StateGraphBody(): ReactElement {
         </svg>
       </div>
       <p style={{ ...statusStyle, fontSize: '0.75rem' }}>
-        {graph.nodes.length} states (b = {ballCount}, N = {graphMaxHeight}), grouped by excitation
-        level. Click a state to transition to it — the shortest cycle through a bare state becomes
-        the running pattern.
+        {graph.nodes.length} states (b = {ballCount}, N = {graphMaxHeight}), arranged in rings by
+        excitation level (ground at centre). Click a state to transition to it — the shortest
+        cycle through a bare state becomes the running pattern.
       </p>
     </div>
   );

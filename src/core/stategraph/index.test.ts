@@ -524,28 +524,133 @@ describe('degenerate inputs', () => {
 
 // --- Layout -----------------------------------------------------------------
 
-describe('layoutStateGraph', () => {
-  it('columns nodes by excitation level, ordered by bitmask, normalized', () => {
-    const graph = buildStateGraph(3, 5);
-    const layout = layoutStateGraph(graph);
-    expect(layout.nodes).toHaveLength(graph.nodes.length);
-    // The ground state sits in the level-0 column at x = 0.
-    const groundNode = layout.nodes.find((node) => node.bits === graph.ground);
-    expect(groundNode?.level).toBe(0);
-    expect(groundNode?.x).toBe(0);
-    // Coordinates are all within [0, 1].
-    for (const node of layout.nodes) {
-      expect(node.x).toBeGreaterThanOrEqual(0);
-      expect(node.x).toBeLessThanOrEqual(1);
-      expect(node.y).toBeGreaterThanOrEqual(0);
-      expect(node.y).toBeLessThanOrEqual(1);
-      expect(layout.coordOf.get(node.bits)).toEqual({ x: node.x, y: node.y });
+describe('layoutStateGraph (concentric excitation rings)', () => {
+  it('lays out every node exactly once with finite, in-box coordinates', () => {
+    for (const [ballCount, maxHeight] of [
+      [3, 5],
+      [3, 7],
+      [4, 9],
+    ] as const) {
+      const graph = buildStateGraph(ballCount, maxHeight);
+      const layout = layoutStateGraph(graph);
+      expect(layout.nodes).toHaveLength(graph.nodes.length);
+      expect(new Set(layout.nodes.map((node) => node.bits)).size).toBe(graph.nodes.length);
+      for (const node of layout.nodes) {
+        expect(Number.isFinite(node.x)).toBe(true);
+        expect(Number.isFinite(node.y)).toBe(true);
+        expect(Number.isFinite(node.angle)).toBe(true);
+        expect(Number.isFinite(node.radius)).toBe(true);
+        expect(node.x).toBeGreaterThanOrEqual(0);
+        expect(node.x).toBeLessThanOrEqual(1);
+        expect(node.y).toBeGreaterThanOrEqual(0);
+        expect(node.y).toBeLessThanOrEqual(1);
+        expect(layout.coordOf.get(node.bits)).toEqual({ x: node.x, y: node.y });
+      }
     }
   });
 
-  it('is deterministic across builds', () => {
+  it('pins the ground state at the disc center', () => {
+    const graph = buildStateGraph(3, 7);
+    const layout = layoutStateGraph(graph);
+    const groundNode = layout.nodes.find((node) => node.bits === graph.ground);
+    expect(groundNode?.level).toBe(0);
+    expect(groundNode?.radius).toBe(0);
+    expect(groundNode?.x).toBe(0.5);
+    expect(groundNode?.y).toBe(0.5);
+  });
+
+  it('gives each level one shared radius, strictly increasing with level', () => {
+    for (const [ballCount, maxHeight] of [
+      [3, 7],
+      [4, 7],
+    ] as const) {
+      const layout = layoutStateGraph(buildStateGraph(ballCount, maxHeight));
+      const radiusOfLevel = new Map<number, number>();
+      for (const node of layout.nodes) {
+        const shared = radiusOfLevel.get(node.level);
+        if (shared === undefined) {
+          radiusOfLevel.set(node.level, node.radius);
+        } else {
+          expect(node.radius).toBe(shared);
+        }
+      }
+      const levels = [...radiusOfLevel.keys()].sort((a, b) => a - b);
+      for (let i = 1; i < levels.length; i++) {
+        const inner = radiusOfLevel.get(levels[i - 1] as number) as number;
+        const outer = radiusOfLevel.get(levels[i] as number) as number;
+        expect(outer).toBeGreaterThan(inner);
+      }
+      // The outermost ring sits at the disc edge (radius 0.5 of the [0, 1] box).
+      expect(radiusOfLevel.get(levels[levels.length - 1] as number)).toBeCloseTo(0.5, 12);
+    }
+  });
+
+  it('ring populations equal the excitation-level histogram', () => {
+    const graph = buildStateGraph(3, 7);
+    const layout = layoutStateGraph(graph);
+    const histogram = new Map<number, number>();
+    for (const node of graph.nodes) {
+      histogram.set(graph.level(node), (histogram.get(graph.level(node)) ?? 0) + 1);
+    }
+    const ringCounts = new Map<number, number>();
+    for (const node of layout.nodes) {
+      ringCounts.set(node.level, (ringCounts.get(node.level) ?? 0) + 1);
+    }
+    expect(ringCounts).toEqual(histogram);
+    expect(layout.levelCount).toBe(histogram.size);
+    expect(layout.maxNodesPerLevel).toBe(Math.max(...histogram.values()));
+  });
+
+  it('is deterministic across builds (coordinates, angles, radii, ring order)', () => {
     const a = layoutStateGraph(buildStateGraph(3, 6));
     const b = layoutStateGraph(buildStateGraph(3, 6));
-    expect(a.nodes.map((n) => [n.bits, n.x, n.y])).toEqual(b.nodes.map((n) => [n.bits, n.x, n.y]));
+    expect(a.nodes.map((n) => [n.bits, n.x, n.y, n.angle, n.radius, n.indexInLevel])).toEqual(
+      b.nodes.map((n) => [n.bits, n.x, n.y, n.angle, n.radius, n.indexInLevel]),
+    );
+  });
+
+  it('keeps the 531 cycle local: mean cycle-edge chord stays short', () => {
+    // The barycenter ordering must keep a pattern's cycle reading as a compact
+    // loop (short hops between angularly-near nodes), not cross-disc chords.
+    // Measured 0.108 at implementation time; 0.25 guards ordering regressions
+    // (the single-circle strawman layout measured ~0.27 mean on this cycle).
+    const graph = buildStateGraph(3, 7);
+    const layout = layoutStateGraph(graph);
+    const cycle = patternCycle([5, 3, 1], 7);
+    const chords = cycle.edges
+      .filter((edge) => edge.from !== edge.to)
+      .map((edge) => {
+        const from = layout.coordOf.get(edge.from);
+        const to = layout.coordOf.get(edge.to);
+        expect(from).toBeDefined();
+        expect(to).toBeDefined();
+        return Math.hypot((from?.x ?? 0) - (to?.x ?? 0), (from?.y ?? 0) - (to?.y ?? 0));
+      });
+    expect(chords.length).toBeGreaterThan(0);
+    const meanChord = chords.reduce((sum, value) => sum + value, 0) / chords.length;
+    expect(meanChord).toBeLessThan(0.25);
+  });
+
+  it('handles the C(11,5) worst case: 462 finite nodes, well under budget', () => {
+    const graph = buildStateGraph(5, 11);
+    expect(graph.nodes).toHaveLength(462);
+    const startNs = process.hrtime.bigint();
+    const layout = layoutStateGraph(graph);
+    const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1e6;
+    expect(layout.nodes).toHaveLength(462);
+    for (const node of layout.nodes) {
+      expect(Number.isFinite(node.x)).toBe(true);
+      expect(Number.isFinite(node.y)).toBe(true);
+    }
+    // Measured ~30 ms on the reference machine; 200 ms is the generous ceiling.
+    expect(elapsedMs).toBeLessThan(200);
+  });
+
+  it('centers a degenerate single-node graph', () => {
+    const layout = layoutStateGraph(buildStateGraph(4, 4));
+    expect(layout.nodes).toHaveLength(1);
+    expect(layout.nodes[0]?.x).toBe(0.5);
+    expect(layout.nodes[0]?.y).toBe(0.5);
+    expect(layout.nodes[0]?.radius).toBe(0);
   });
 });
