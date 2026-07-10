@@ -294,3 +294,22 @@ Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-o
 - Gate: (2026-07-10, "npm run gate", green — 31 files / 392 tests; orchestrator-run)
 - Owner disliked the neural-net column layout. Research agent surveyed conventional siteswap state diagrams (Lundmark's ground-anchored compact polygons; graphviz-based generators) and prototyped three deterministic candidates on real graphs. Winner: concentric rings — ground centred, one ring per excitation level, circumference-aware radii, barycenter angular ordering (~2× shorter edges / node separation vs a single circle; the 462-node b5N11 case keeps visibly distinct rings, ~30 ms layout). Single-circle chords rejected (hairball ≥ 35 nodes); per-pattern rotation rejected (map would spin on pattern change — bad for the coming overlay). Cycle emphasis is render-level (bowed arcs). DESIGN §5 layout wording amended (owner-authorized; graph semantics untouched). Owner was offered the comparison renders before implementation.
 - Presentation deviations (flagged by builder, accepted): fixed 480-unit square viewport with adaptive node radius; wider margin when labels shown; on-cycle self-loop labels flip inward; perf smoke uses process.hrtime (core lint bans performance.* in test files too).
+
+## Redesign — single-window dark UI            DONE
+- Date: 2026-07-10
+- Commit: 29fee68
+- Gate: (2026-07-10, "npm run gate", green — 33 files / 395 tests; orchestrator-run; fit asserted headlessly at 2000×1300 in six panel states, scrollHeight/Width ≤ viewport in all)
+- Owner-specified layout (overrides DESIGN §6 *placement* only; view content/behavior specs unchanged): dark default (+light toggle, session-only); left sidebar = pattern/library/tempo-physics/hands-geometry; center = 3D stage with camera presets top-right, State-graph translucent overlay toggled top-left (default off), transport + timeline docked at the stage bottom; right = ladder; bottom = QTM-style collapsible charts/energy dock (default collapsed); Settings drawer = save/share, audio, playback speed, view settings, theme. Jugglebot GUI used as density/style reference.
+- Codec: no structural change/version bump; chartsVisible + graphVisible defaults flipped to false; theme deliberately not encoded.
+- Deviations (accepted): ladder sits top-aligned in its tall column (a time-horizontal chart can't fill it without distortion — whitespace below is intentional); theme not persisted across reloads (cheap future add).
+- Also resolved here: gizmo-diagnosis item E (scene was below the fold — controls and scene are now side-by-side).
+- Operator visual checks pending (fresh sweep of the whole round — dev server or the Pages deploy after this push):
+  - [ ] Fits your ~2000×1300 window with no scrollbars; dark theme reads well; light toggle works (Settings).
+  - [ ] Wavy hold gone: pattern 522 — held ball absorbs, rests LEVEL at the dip, winds up to throw (no mid-hold bounce); pattern 3 carries are single smooth scoops.
+  - [ ] Stability: drag tempo hard (e.g. 744 to near-minimum beat period) — pattern rises then settles at the new tempo; no runaway growth, no freeze, dwell visually absorbs the slack.
+  - [ ] Camera: pan/zoom can no longer get lost far from the pattern; presets all still frame correctly; shared URLs with odd cameras land sanely.
+  - [ ] Gizmos: enable Edit hand positions — markers have hover grow + grab cursor, labels (0C/0T…), easy grabbing, ghosts preview edits even when paused/ghosts-off.
+  - [ ] Colors: balls individually colored matching the ladder by default; toggle off in Settings → single color everywhere; picker works.
+  - [ ] State graph overlay: button top-left; rings with ground centred; cycle reads as a loop; click-to-navigate works from the overlay; N stepper + hard reset present; overlay off by default.
+  - [ ] Charts dock: expands/collapses; charts sample only when open; energy figures show the new lower hold work (522 W⁺ ≈ 11.9 J/kg).
+  - [ ] Settings drawer: playback speed, ball radius/color, trails/window/ghosts, share link, presets, JSON, PNG, audio all reachable and functional.
