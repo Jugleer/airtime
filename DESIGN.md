@@ -141,9 +141,13 @@ The hand trajectory must be defined for **all** time (charts need it):
   from zero at catch and to zero at release. This keeps acceleration continuous
   everywhere and jerk finite everywhere (jerk may step at events; only a septic
   would smooth that — out of scope).
-  - **Hold dip**: the carry passes through a via-point at depth `holdDepth` (m)
-    below the catch–throw line (two quintic segments stitched C²). This is the
-    "hold vertical distance" control.
+  - **Hold dip**: the carry scoops to depth `holdDepth` (m) below the
+    catch–throw line and holds there — a bounded absorb (catch → dip, sized by
+    the constant-deceleration time `2·holdDepth / v_vertical`), an exactly level
+    hold through the dip, and a wind-up (dip → throw): up to three quintic
+    segments stitched C² (the level hold vanishes when the absorb needs the
+    whole carry). This is the "hold vertical distance" control, and it keeps the
+    carry a single smooth scoop — no dip overshoot, no mid-carry bump.
   - A cubic (4-point Bézier, velocity-matched only) is available behind a
     `CarryPath` interface as a comparison toggle — it produces jerk deltas at
     events by construction; the UI may note this when selected.
@@ -151,7 +155,7 @@ The hand trajectory must be defined for **all** time (charts need it):
   junctions (endpoint accelerations match the adjoining carry ends, i.e. `−g`).
 - **Idle** (`0` beats / startup): hand eases to and rests at its catch point.
 - **Held 2s**: the carry simply spans the extra beats through the same spline
-  machinery (via-point at the dip; do not generate a throw/catch pair).
+  machinery (level hold at the dip; do not generate a throw/catch pair).
 
 `CarryPath` is a pluggable interface; quintic-with-via-point is the default.
 

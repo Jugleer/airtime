@@ -139,8 +139,8 @@ export interface MotionState {
 /**
  * A motion segment: per-axis position polynomials in *local* time s = t −
  * startTime, valid over [startTime, endTime). Velocity/acceleration/jerk are the
- * analytic derivatives. Flights are quadratics; quintic carry/return halves are
- * degree-5; cubic carries are degree-3.
+ * analytic derivatives. Flights are quadratics; quintic carry/return segments
+ * are degree-5; cubic carries are degree-3.
  */
 export interface PolySegment {
   readonly startTime: number;
@@ -327,10 +327,10 @@ export interface CarrySpec {
 }
 
 /**
- * A pluggable catch→throw hand path (DESIGN.md §4.3). The default is quintic +
- * hold-dip via-point; the cubic Bézier alternative is provided for the
- * acceleration-jump comparison. Each `build` returns one or more contiguous
- * segments tiling [startTime, endTime].
+ * A pluggable catch→throw hand path (DESIGN.md §4.3). The default is the
+ * quintic scoop-and-hold through the dip; the cubic Bézier alternative is
+ * provided for the acceleration-jump comparison. Each `build` returns one or
+ * more contiguous segments tiling [startTime, endTime].
  */
 export interface CarryPath {
   readonly name: string;
@@ -343,12 +343,39 @@ function gravityVector(gravity: number): Vec3 {
 }
 
 /**
- * Default carry path: two quintic Hermite segments through a hold-dip via-point
- * `holdDepth` below the catch–throw midpoint, stitched C² at the via-point and
- * matching (0, −g, 0) acceleration at both endpoints. Position, velocity, and
- * acceleration are continuous at the catch/throw events and at the stitch; the
- * contact force ramps from zero at the catch, through zero at the dip, to zero at
- * the release (§4.3, §4.5).
+ * Minimum hold depth (m) for a bounded absorb. Below this the dip is visually
+ * flat, and the constant-deceleration absorb time 2·holdDepth/v would shrink
+ * toward zero — whose enormous internal accelerations would leave float dust at
+ * the stitches — so the carry degenerates to two half-carry segments instead.
+ */
+const MIN_ABSORB_DEPTH = 1e-3;
+
+/**
+ * Default carry path (DESIGN.md §4.3): a bounded-absorb scoop-and-hold — up to
+ * three quintic Hermite segments (absorb: catch → dip, level hold at the dip,
+ * wind-up: dip → throw) matching (0, −g, 0) acceleration at the carry endpoints
+ * (contact force ramps from zero at the catch and back to zero at the release)
+ * and stitched C² at the internal joints (shared dip velocity/acceleration).
+ *
+ * The dip sits exactly `holdDepth` below the catch–throw midline. The absorb
+ * time comes from the constant-deceleration identity — cancelling a vertical
+ * speed v over a stopping distance d takes 2·d/v seconds — sized by the larger
+ * endpoint vertical speed so both flanks fit:
+ *
+ *   t_absorb = min(total/2, 2·holdDepth / max(|v_catch·ŷ|, |v_throw·ŷ|))
+ *
+ * This keeps the descent monotone into the dip with no overshoot below it and
+ * no mid-carry bump back up (the wavy-carry regression, pinned by the scoop
+ * property test). Whatever carry time remains is an exactly level straight hold
+ * through the dip, so a held 2 visibly rests at the hold point. The dip
+ * acceleration is zero, NOT (0, −g, 0): with dip vertical velocity 0 an
+ * acceleration of −g would make the dip a local MAXIMUM of vertical motion —
+ * which is precisely what produced the old W-shaped double dip.
+ *
+ * Degenerate guard: a vanishing hold depth (or vertical speed) has no useful
+ * finite absorb time; fall back to t_absorb = total/2 (two half-carry segments
+ * meeting at the dip, no level hold) so no zero-duration segment is ever built
+ * and holdDepth = 0 stays NaN-free.
  */
 function buildQuinticViaCarry(spec: CarrySpec): PolySegment[] {
   const { startTime, endTime, catchPoint, throwPoint, startVelocity, endVelocity } = spec;
@@ -357,28 +384,68 @@ function buildQuinticViaCarry(spec: CarrySpec): PolySegment[] {
     return [staticSegment(startTime, endTime, catchPoint)];
   }
   const half = total / 2;
-  const midTime = startTime + half;
-  const via = subtract(midpoint(catchPoint, throwPoint), vec3(0, spec.holdDepth, 0));
-  // Via-point derivatives: chord velocity (for equal-height ends this is the true
-  // turning point, vy=0) and free-fall-matched acceleration, shared by both
-  // halves so the stitch is C² (equal a_mid ⇒ acceleration continuous).
-  const vMid = scale(subtract(throwPoint, catchPoint), 1 / total);
   const g = gravityVector(spec.gravity);
-  const segmentA: PolySegment = {
-    startTime,
-    endTime: midTime,
-    x: quinticHermite(catchPoint.x, startVelocity.x, g.x, via.x, vMid.x, g.x, half),
-    y: quinticHermite(catchPoint.y, startVelocity.y, g.y, via.y, vMid.y, g.y, half),
-    z: quinticHermite(catchPoint.z, startVelocity.z, g.z, via.z, vMid.z, g.z, half),
-  };
-  const segmentB: PolySegment = {
-    startTime: midTime,
+  // Average catch→throw drift (per second); the dip is traversed level in y at
+  // exactly this rate (a horizontal sweep through the low point).
+  const chordVelocity = scale(subtract(throwPoint, catchPoint), 1 / total);
+  const dipY = 0.5 * (catchPoint.y + throwPoint.y) - spec.holdDepth;
+  const verticalSpeed = Math.max(Math.abs(startVelocity.y), Math.abs(endVelocity.y));
+  // 2·d/v = +Infinity when verticalSpeed is 0 (both flights level out exactly at
+  // the endpoints); Math.min then falls back to the half-carry absorb.
+  const boundedAbsorb =
+    spec.holdDepth > MIN_ABSORB_DEPTH
+      ? Math.min(half, (2 * spec.holdDepth) / verticalSpeed)
+      : half;
+  // Emit the level hold only when it has real duration; otherwise the absorb and
+  // wind-up meet at the dip (dipExit === dipEntry keeps that joint exact).
+  const hasHold = total - 2 * boundedAbsorb > 1e-9;
+  const absorbTime = hasHold ? boundedAbsorb : half;
+  const dipEntryTime = startTime + absorbTime;
+  const dipExitTime = hasHold ? endTime - absorbTime : dipEntryTime;
+  const dipVelocity = vec3(chordVelocity.x, 0, chordVelocity.z);
+  const dipEntry = vec3(
+    catchPoint.x + chordVelocity.x * absorbTime,
+    dipY,
+    catchPoint.z + chordVelocity.z * absorbTime,
+  );
+  const dipExit = hasHold
+    ? vec3(
+        throwPoint.x - chordVelocity.x * absorbTime,
+        dipY,
+        throwPoint.z - chordVelocity.z * absorbTime,
+      )
+    : dipEntry;
+  const segments: PolySegment[] = [
+    {
+      startTime,
+      endTime: dipEntryTime,
+      x: quinticHermite(catchPoint.x, startVelocity.x, g.x, dipEntry.x, dipVelocity.x, 0, absorbTime),
+      y: quinticHermite(catchPoint.y, startVelocity.y, g.y, dipEntry.y, dipVelocity.y, 0, absorbTime),
+      z: quinticHermite(catchPoint.z, startVelocity.z, g.z, dipEntry.z, dipVelocity.z, 0, absorbTime),
+    },
+  ];
+  if (hasHold) {
+    // Boundary states match a uniform drift exactly (dipExit − dipEntry =
+    // dipVelocity·duration, equal end velocities, zero accelerations), so the
+    // Hermite residuals vanish and this segment IS the straight level line —
+    // y ≡ dipY through the whole hold.
+    const holdDuration = dipExitTime - dipEntryTime;
+    segments.push({
+      startTime: dipEntryTime,
+      endTime: dipExitTime,
+      x: quinticHermite(dipEntry.x, dipVelocity.x, 0, dipExit.x, dipVelocity.x, 0, holdDuration),
+      y: quinticHermite(dipEntry.y, dipVelocity.y, 0, dipExit.y, dipVelocity.y, 0, holdDuration),
+      z: quinticHermite(dipEntry.z, dipVelocity.z, 0, dipExit.z, dipVelocity.z, 0, holdDuration),
+    });
+  }
+  segments.push({
+    startTime: dipExitTime,
     endTime,
-    x: quinticHermite(via.x, vMid.x, g.x, throwPoint.x, endVelocity.x, g.x, half),
-    y: quinticHermite(via.y, vMid.y, g.y, throwPoint.y, endVelocity.y, g.y, half),
-    z: quinticHermite(via.z, vMid.z, g.z, throwPoint.z, endVelocity.z, g.z, half),
-  };
-  return [segmentA, segmentB];
+    x: quinticHermite(dipExit.x, dipVelocity.x, 0, throwPoint.x, endVelocity.x, g.x, absorbTime),
+    y: quinticHermite(dipExit.y, dipVelocity.y, 0, throwPoint.y, endVelocity.y, g.y, absorbTime),
+    z: quinticHermite(dipExit.z, dipVelocity.z, 0, throwPoint.z, endVelocity.z, g.z, absorbTime),
+  });
+  return segments;
 }
 
 /**
@@ -415,7 +482,7 @@ function staticSegment(startTime: number, endTime: number, position: Vec3): Poly
   };
 }
 
-/** The default carry path (DESIGN.md §4.3): quintic Hermite + hold-dip via-point. */
+/** The default carry path (DESIGN.md §4.3): quintic scoop-and-hold via the dip. */
 export const quinticViaCarryPath: CarryPath = { name: 'quintic-via', build: buildQuinticViaCarry };
 
 /** The comparison carry path: velocity-matched cubic Hermite (acceleration jumps). */

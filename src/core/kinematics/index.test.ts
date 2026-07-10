@@ -24,6 +24,7 @@ import {
   quinticViaCarryPath,
   solveFlight,
   vec3,
+  type CarryMotion,
   type CarrySpec,
   type Kinematics,
   type KinematicsEpoch,
@@ -433,6 +434,158 @@ describe('property: carry endpoints exert zero contact force (§4.3)', () => {
   });
 });
 
+// --- Carry scoop shape: no waviness (§4.3) -----------------------------------
+
+/**
+ * Sample the hand height across a carry at a fine uniform step (test-only
+ * sampling; core motion itself stays closed-form). Includes both endpoints.
+ */
+function sampleCarryHeights(kinematics: Kinematics, carry: CarryMotion, samples = 400): number[] {
+  const heights: number[] = [];
+  for (let i = 0; i <= samples; i++) {
+    const t = carry.startTime + (i / samples) * (carry.endTime - carry.startTime);
+    heights.push(kinematics.handState(carry.hand, t).position.y);
+  }
+  return heights;
+}
+
+describe('carry scoop shape — one smooth dip, no waviness (§4.3)', () => {
+  // Regression pin for the wavy-carry bug: the old construction imposed via
+  // velocity = chord (vy = 0) AND via acceleration = (0, −g, 0) at the dip —
+  // making the dip a local MAXIMUM of vertical motion — so every carry
+  // double-dipped in a W shape, overshooting the dip line by ~10 mm (pattern 3
+  // at defaults) up to ~630 mm (522's held carry). The scoop-and-hold
+  // construction must keep the carry one smooth scoop:
+  //   (a) the hand never drops below the dip line (dipY = midline − holdDepth),
+  //   (b) descent into the dip and ascent out of it are monotone,
+  //   (c) between first and last dip contact the hand STAYS at the dip (the
+  //       level hold) — no mid-carry bump back up.
+  // Scope: holdDepth ≥ 0.02. At holdDepth ≈ 0 a hand arriving with vertical
+  // momentum cannot turn around ON the line itself; that degenerate fallback
+  // keeps continuity and finiteness (asserted separately below), not shape.
+  const patterns = ['3', '531', '423', '522', '441', '345'];
+  const gravities = [0.5, G, 30];
+  const holdDepths = [0.02, 0.1, 0.4];
+  const dwellTimes = [0.05, 0.3, 0.45];
+
+  it(
+    'descends, holds at the dip, ascends — across patterns × g × holdDepth × dwell',
+    () => {
+      const monotoneTolerance = 1e-9;
+      const dipTolerance = 1e-6;
+      let carriesChecked = 0;
+      const failures: string[] = [];
+      for (const pattern of patterns) {
+        const values = parse(pattern);
+        for (const dwellTime of dwellTimes) {
+          const timeline = buildTimeline(values, {
+            beatCount: 20,
+            params: { ...DEFAULT_PARAMS, dwellTime },
+          });
+          for (const gravity of gravities) {
+            for (const holdDepth of holdDepths) {
+              const kinematics = buildKinematics(timeline, {
+                values,
+                handCount: 2,
+                gravity,
+                holdDepth,
+              });
+              for (const carry of kinematics.allCarries()) {
+                if (carry.startBeat < 2 || carry.startBeat > 14) continue;
+                if (carry.endTime - carry.startTime <= 0) continue;
+                const dipY = 0.5 * (carry.catchPoint.y + carry.throwPoint.y) - holdDepth;
+                const heights = sampleCarryHeights(kinematics, carry);
+                const label = `${pattern} g=${gravity} d=${holdDepth} t_d=${dwellTime} beat=${carry.startBeat}`;
+                // (a) No overshoot below the dip line.
+                let minY = Infinity;
+                for (const y of heights) {
+                  if (y < minY) minY = y;
+                }
+                if (minY < dipY - dipTolerance) {
+                  failures.push(`${label}: overshoot below dip by ${(dipY - minY).toFixed(6)} m`);
+                }
+                // Dip contact range: first/last sample at the dip line (the
+                // carry must actually reach its dip).
+                let firstContact = -1;
+                let lastContact = -1;
+                for (let i = 0; i < heights.length; i++) {
+                  if ((heights[i] as number) <= dipY + dipTolerance) {
+                    if (firstContact < 0) firstContact = i;
+                    lastContact = i;
+                  }
+                }
+                if (firstContact < 0) {
+                  failures.push(`${label}: never reaches its dip line`);
+                  continue;
+                }
+                // (b) Monotone descent before the dip, monotone ascent after it.
+                for (let i = 0; i < firstContact; i++) {
+                  if ((heights[i + 1] as number) > (heights[i] as number) + monotoneTolerance) {
+                    failures.push(`${label}: non-monotone descent at sample ${i}`);
+                    break;
+                  }
+                }
+                for (let i = lastContact; i + 1 < heights.length; i++) {
+                  if ((heights[i + 1] as number) < (heights[i] as number) - monotoneTolerance) {
+                    failures.push(`${label}: non-monotone ascent at sample ${i}`);
+                    break;
+                  }
+                }
+                // (c) No mid-carry bump: between contacts the hand stays at the dip.
+                for (let i = firstContact; i <= lastContact; i++) {
+                  if ((heights[i] as number) > dipY + dipTolerance) {
+                    failures.push(
+                      `${label}: mid-carry bump ${((heights[i] as number) - dipY).toFixed(6)} m above dip`,
+                    );
+                    break;
+                  }
+                }
+                carriesChecked += 1;
+              }
+            }
+          }
+        }
+      }
+      expect(failures).toEqual([]);
+      expect(carriesChecked).toBeGreaterThan(500);
+    },
+    120_000,
+  );
+
+  it('holdDepth = 0 degenerates safely: finite motion and continuous joints', () => {
+    for (const pattern of ['3', '522']) {
+      const values = parse(pattern);
+      const timeline = buildTimeline(values, { beatCount: 20, params: DEFAULT_PARAMS });
+      for (const gravity of [0.5, G, 30]) {
+        const kinematics = buildKinematics(timeline, {
+          values,
+          handCount: 2,
+          gravity,
+          holdDepth: 0,
+        });
+        for (const ballId of kinematics.ballIds()) {
+          for (const { left, right } of jointStates(kinematics.ballSegments(ballId))) {
+            expect(Number.isFinite(left.position.y)).toBe(true);
+            expect(Number.isFinite(right.position.y)).toBe(true);
+            expect(vecDiff(left.position, right.position)).toBeLessThan(1e-10);
+            expect(vecDiff(left.velocity, right.velocity)).toBeLessThan(1e-10);
+            expect(vecDiff(left.acceleration, right.acceleration)).toBeLessThan(1e-9);
+          }
+        }
+        for (let hand = 0; hand < 2; hand++) {
+          for (const t of [0.3, 1.1, 2.4, 3.7, 4.6]) {
+            const state = kinematics.handState(hand, t);
+            expect(Number.isFinite(state.position.x)).toBe(true);
+            expect(Number.isFinite(state.position.y)).toBe(true);
+            expect(Number.isFinite(state.velocity.y)).toBe(true);
+            expect(Number.isFinite(state.acceleration.y)).toBe(true);
+          }
+        }
+      }
+    }
+  });
+});
+
 // --- Cubic comparison: acceleration jump (§4.3) -----------------------------
 
 describe('cubicBezierCarryPath — exhibits the acceleration jump at events', () => {
@@ -574,7 +727,7 @@ describe('idle and held-forever hands', () => {
 // --- Multi-beat held carry and multi-hand -----------------------------------
 
 describe('held carries and multi-hand patterns', () => {
-  it('carries a held 2 through a single dipping segment pair (423)', () => {
+  it('holds a held 2 level at the dip through the carry (423)', () => {
     const { kinematics } = kinematicsFor('423', 18);
     const held = kinematics.allCarries().find((c) => c.held && c.startBeat >= 3 && c.startBeat <= 12);
     expect(held).toBeDefined();
