@@ -11,7 +11,14 @@
 
 import { create } from 'zustand';
 import { DWELL_CAP_FRACTION, effectiveDwell } from '../core/timing';
-import { formatPattern, validatePattern, type ValidationResult } from '../core/siteswap';
+import {
+  formatPattern,
+  validateNotation,
+  validatePattern,
+  type CompiledPattern,
+  type NotationResult,
+  type ValidationResult,
+} from '../core/siteswap';
 import {
   periodicSchedule,
   spliceSchedule,
@@ -662,6 +669,7 @@ export const useAppStore = create<AppStore>((set, get) => {
       state.sim.beatCount,
       kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       state.sim.schedule,
+      state.sim.compiled,
     );
     return { baseParams, epochs, sim: nextSim };
   }
@@ -693,6 +701,7 @@ export const useAppStore = create<AppStore>((set, get) => {
       state.sim.beatCount,
       kinematicsConfigOf(baseKinematics, kinematicsEpochs),
       state.sim.schedule,
+      state.sim.compiled,
     );
     return { baseKinematics, kinematicsEpochs, sim: nextSim };
   }
@@ -729,6 +738,122 @@ export const useAppStore = create<AppStore>((set, get) => {
       sim: nextSim,
       transition: null,
       graphNotice: notice,
+      graphMaxHeight,
+    };
+  }
+
+  /**
+   * Convert a {@link NotationResult} (which may be extended sync/multiplex) into the
+   * store's `validation` field. Only `.ok` (and, on failure, the message) is consumed
+   * downstream, so extended errors are wrapped in the ValidationError-compatible
+   * average shape rather than reproduced structurally.
+   */
+  function notationValidation(analysis: NotationResult): ValidationResult {
+    if (analysis.ok) {
+      return { ok: true, values: analysis.values ?? [], ballCount: analysis.ballCount };
+    }
+    return {
+      ok: false,
+      errors: analysis.errors.map((error) => ({
+        kind: 'average' as const,
+        sum: 0,
+        length: 1,
+        message: error.message,
+      })),
+    };
+  }
+
+  /**
+   * Clean restart into an EXTENDED (sync / multiplex) pattern (orchestrator ruling 2):
+   * a fresh sim at t = 0 with the compiled pattern, current sliders folded into the
+   * base params, epochs/transition cleared. Sync notation forces n_h = 2 (ruling 1) —
+   * re-deriving the preset geometry for two hands and noting it. No transition/splice
+   * (the graph is vanilla-only, ruling 3), so `schedule` is undefined here.
+   */
+  function cleanRestartCompiled(compiled: CompiledPattern, text: string, ballCount: number): Partial<AppStore> {
+    const state = get();
+    let handCount = state.handCount;
+    let throwPoints = state.handThrowPoints;
+    let catchPoints = state.handCatchPoints;
+    const notes: string[] = [];
+    if (compiled.sync && handCount !== 2) {
+      handCount = 2;
+      const sampled = sampleHandPoints(presetGeometry(state.handPreset, 2), 2);
+      throwPoints = sampled.throwPoints;
+      catchPoints = sampled.catchPoints;
+      notes.push('hand count set to 2');
+    }
+    const dwellTime = clamp(state.dwellTime, DWELL_MIN, dwellCap(handCount, state.beatPeriod));
+    const baseParams: TimelineParams = { beatPeriod: state.beatPeriod, dwellTime, handCount };
+    const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
+      gravity: state.gravity,
+      holdDepth: state.holdDepth,
+      carryPath: carryPathOf(state.carryPathKind),
+      geometry: makeHandGeometry(throwPoints, catchPoints),
+    };
+    const sim = buildSimulation(
+      [],
+      text,
+      baseParams,
+      [],
+      INITIAL_BEATS,
+      kinematicsConfigOf(baseKinematics, []),
+      undefined,
+      compiled,
+    );
+    const kind = compiled.sync ? (compiled.multiplex ? 'sync + multiplex' : 'sync') : 'multiplex';
+    const suffix = notes.length > 0 ? ` (${notes.join(', ')})` : '';
+    return {
+      pattern: text,
+      validation: { ok: true, values: [], ballCount },
+      simTime: 0,
+      handCount,
+      dwellTime,
+      handThrowPoints: throwPoints,
+      handCatchPoints: catchPoints,
+      baseParams,
+      epochs: [],
+      baseKinematics,
+      kinematicsEpochs: [],
+      sim,
+      transition: null,
+      graphNotice: `Entered ${kind} pattern ${text} — clean restart${suffix}.`,
+    };
+  }
+
+  /**
+   * Clean restart into a VANILLA pattern when the CURRENT pattern is extended
+   * (leaving sync/multiplex is a clean restart too, ruling 2): a fresh vanilla sim at
+   * t = 0, sliders folded in, epochs/transition cleared, N auto-expanded to fit.
+   */
+  function cleanRestartVanilla(values: number[], text: string, validation: ValidationResult): Partial<AppStore> {
+    const state = get();
+    const baseParams: TimelineParams = {
+      beatPeriod: state.beatPeriod,
+      dwellTime: state.dwellTime,
+      handCount: state.handCount,
+    };
+    const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
+      gravity: state.gravity,
+      holdDepth: state.holdDepth,
+      carryPath: carryPathOf(state.carryPathKind),
+      geometry: makeHandGeometry(state.handThrowPoints, state.handCatchPoints),
+    };
+    const sim = buildSimulation(values, text, baseParams, [], INITIAL_BEATS, kinematicsConfigOf(baseKinematics, []));
+    const newMax = maxThrowOf(values);
+    const graphMaxHeight =
+      newMax <= GRAPH_MAX_N ? Math.max(state.graphMaxHeight, newMax) : state.graphMaxHeight;
+    return {
+      pattern: text,
+      validation,
+      simTime: 0,
+      baseParams,
+      epochs: [],
+      baseKinematics,
+      kinematicsEpochs: [],
+      sim,
+      transition: null,
+      graphNotice: `Left sync/multiplex — clean restart to ${text}.`,
       graphMaxHeight,
     };
   }
@@ -866,9 +991,30 @@ export const useAppStore = create<AppStore>((set, get) => {
     sim,
 
     navigateToPattern: (text) => {
+      // Route ANY notation (sync / multiplex / vanilla). Extended patterns — and any
+      // move INTO or OUT OF one — do a CLEAN RESTART (orchestrator ruling 2); the
+      // graph-planned smooth transition below stays vanilla→vanilla only.
+      const analysis = validateNotation(text);
+      if (!analysis.ok) {
+        // Invalid input: surface the error but keep the last valid sim running.
+        set({ pattern: text, validation: notationValidation(analysis) });
+        return;
+      }
+      const leavingExtended = get().sim.compiled !== undefined;
+      if (!analysis.vanilla) {
+        // Entering a sync / multiplex pattern: clean restart (sync forces n_h = 2).
+        set(cleanRestartCompiled(analysis.compiled, analysis.compiled.text, analysis.ballCount));
+        return;
+      }
+      if (leavingExtended) {
+        // Leaving a sync / multiplex pattern for a vanilla one: clean restart.
+        const values = analysis.values ?? [];
+        set(cleanRestartVanilla(values, formatPattern(values), notationValidation(analysis)));
+        return;
+      }
+      // Vanilla → vanilla: the existing graph-planned smooth transition (unchanged).
       const nextValidation = validatePattern(text);
       if (!nextValidation.ok) {
-        // Invalid input: surface the error but keep the last valid sim running.
         set({ pattern: text, validation: nextValidation });
         return;
       }
@@ -955,6 +1101,9 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     navigateToState: (stateBits) => {
       const state = get();
+      if (state.sim.compiled !== undefined) {
+        return; // the state graph is vanilla-only (ruling 3); nothing to navigate
+      }
       const currentMax = maxThrowOf(state.sim.values);
       if (currentMax > GRAPH_MAX_N) {
         return; // graph unavailable for the running pattern; nothing to click
@@ -1031,11 +1180,15 @@ export const useAppStore = create<AppStore>((set, get) => {
         [],
         INITIAL_BEATS,
         kinematicsConfigOf(baseKinematics, []),
+        undefined,
+        state.sim.compiled,
       );
       set({
         simTime: 0,
         pattern: state.sim.patternText,
-        validation: validatePattern(state.sim.patternText),
+        validation: state.sim.compiled
+          ? { ok: true, values: [], ballCount: state.sim.ballCount }
+          : validatePattern(state.sim.patternText),
         baseParams,
         epochs: [],
         baseKinematics,
@@ -1164,6 +1317,14 @@ export const useAppStore = create<AppStore>((set, get) => {
       if (handCount === state.handCount) {
         return;
       }
+      // A running SYNC pattern is pinned to n_h = 2 (sync forces 2 on entry): rebuilding
+      // the sim at any other count would break the sync geometry. The Controls stepper is
+      // disabled under sync, but other paths (applyConfig, shared links) also reach here,
+      // so refuse the change outright — belt and braces. Leaving/entering sync is the
+      // clean restart that changes the count.
+      if (state.sim.compiled?.sync === true) {
+        return;
+      }
       const preset = presetGeometry(state.handPreset, handCount);
       const sampled = sampleHandPoints(preset, handCount);
       let throwPoints: Vec3[];
@@ -1194,6 +1355,8 @@ export const useAppStore = create<AppStore>((set, get) => {
         state.epochs,
         state.sim.beatCount,
         kinematicsConfigOf(baseKinematics, []),
+        state.sim.schedule,
+        state.sim.compiled,
       );
       set({
         handCount,
@@ -1223,6 +1386,8 @@ export const useAppStore = create<AppStore>((set, get) => {
         state.epochs,
         state.sim.beatCount,
         kinematicsConfigOf(baseKinematics, []),
+        state.sim.schedule,
+        state.sim.compiled,
       );
       set({
         handPreset: preset,
@@ -1420,13 +1585,29 @@ export const useAppStore = create<AppStore>((set, get) => {
     },
 
     applyConfig: (config) => {
-      // Pattern: fall back to the default if the shared text is invalid (never crash).
-      const parsed = validatePattern(config.pattern);
-      const values = parsed.ok ? parsed.values : [3];
-      const patternText = parsed.ok ? config.pattern : DEFAULT_PATTERN;
-      const validation = parsed.ok ? parsed : validatePattern(DEFAULT_PATTERN);
+      // Pattern: accept ANY notation; fall back to the default if invalid (never crash,
+      // DESIGN.md §6, ruling 9). Extended sync/multiplex patterns thread a compiled
+      // form through the build and (for sync) force n_h = 2.
+      const analysis = validateNotation(config.pattern);
+      let values: number[] = [3];
+      let patternText = DEFAULT_PATTERN;
+      let validation: ValidationResult = validatePattern(DEFAULT_PATTERN);
+      let compiled: CompiledPattern | undefined;
+      if (analysis.ok && analysis.vanilla) {
+        values = analysis.values ?? [3];
+        patternText = config.pattern;
+        validation = { ok: true, values, ballCount: analysis.ballCount };
+      } else if (analysis.ok) {
+        compiled = analysis.compiled;
+        patternText = analysis.compiled.text;
+        values = [];
+        validation = { ok: true, values: [], ballCount: analysis.ballCount };
+      }
 
-      const handCount = clamp(Math.round(config.handCount), HAND_COUNT_MIN, HAND_COUNT_MAX);
+      let handCount = clamp(Math.round(config.handCount), HAND_COUNT_MIN, HAND_COUNT_MAX);
+      if (compiled?.sync) {
+        handCount = 2; // sync notation needs exactly 2 hands (ruling 1)
+      }
       const handPreset: HandPreset = config.handPreset === 'circle' ? 'circle' : 'line';
 
       // Hand points: use the config's if they match the hand count, else re-derive
@@ -1466,6 +1647,8 @@ export const useAppStore = create<AppStore>((set, get) => {
         [],
         INITIAL_BEATS,
         kinematicsConfigOf(baseKinematics, []),
+        undefined,
+        compiled,
       );
 
       const timelineWindow = clamp(config.timelineWindow, TIMELINE_WINDOW_MIN, TIMELINE_WINDOW_MAX);

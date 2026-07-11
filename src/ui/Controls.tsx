@@ -15,7 +15,12 @@
 // audio moved to the right column beneath the ladder (see App / SharePanel).
 
 import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
-import { spatialPeriodBeats, validatePattern } from '../core/siteswap';
+import {
+  compiledSpatialPeriodBeats,
+  spatialPeriodBeats,
+  validateNotation,
+} from '../core/siteswap';
+import type { Simulation } from '../state/simulation';
 import {
   BALL_RADIUS_MAX,
   BALL_RADIUS_MIN,
@@ -93,6 +98,24 @@ function dwellClampActive(values: readonly number[], dwellTime: number, beatPeri
     return false;
   }
   return dwellTime > DWELL_CLAMP_BETA * hMin * beatPeriod;
+}
+
+/**
+ * Every throw value in the running pattern (vanilla `values` or, for sync/multiplex,
+ * flattened from the compiled beats). Feeds the dwell-clamp and held-2 readouts, which
+ * need to see all values a beat may throw — not just one per beat.
+ */
+function patternThrowValues(sim: Simulation): number[] {
+  if (sim.compiled) {
+    const values: number[] = [];
+    for (const beat of sim.compiled.beats) {
+      for (const toss of beat) {
+        values.push(toss.value);
+      }
+    }
+    return values;
+  }
+  return [...sim.values];
 }
 
 /**
@@ -397,8 +420,22 @@ export function Controls(): ReactElement {
     setDraft(pattern);
   }, [pattern]);
 
-  const draftValidation = validatePattern(draft);
+  // Validate ANY notation (vanilla async, sync `(l,r)`, multiplex `[...]`). Vanilla
+  // text still routes through the untouched validator (identical messages), so the
+  // first-line error contract is preserved; extended notation is now supported (the
+  // old amber "unsupported notation" hint is removed, ruling 7).
+  const draftValidation = validateNotation(draft);
   const draftValid = draftValidation.ok;
+  const draftBallCount = draftValidation.ok ? draftValidation.ballCount : 0;
+  const draftPeriodBeats = draftValidation.ok
+    ? draftValidation.vanilla
+      ? spatialPeriodBeats(draftValidation.values ?? [], handCount)
+      : compiledSpatialPeriodBeats(draftValidation.compiled, handCount)
+    : 0;
+  // Sync notation needs exactly 2 hands (ruling 1): preview that the hand count will
+  // switch when a sync draft is applied at a different count.
+  const draftSyncWillSwitchHands =
+    draftValidation.ok && draftValidation.sync && handCount !== 2;
   const dirty = draft !== pattern;
   const applyDraft = (): void => {
     if (draft !== pattern) {
@@ -406,16 +443,9 @@ export function Controls(): ReactElement {
     }
   };
 
-  const clampActive = dwellClampActive(sim.values, dwellTime, beatPeriod);
-  const heldTwoWarning = handCount !== 2 && sim.values.includes(2);
-
-  // A friendly nudge when the draft uses notation Airtime v1 does not support:
-  // synchronous ( ), multiplex [ ], or passing < > (DESIGN.md §1 deferred list).
-  // These characters never occur in a valid vanilla siteswap (digits 0–9, letters
-  // a–z), so detecting them is unambiguous — it explains the "unrecognized
-  // character" error with the *why* and the supported subset. (x, p etc. are valid
-  // high throws, so they are deliberately not flagged.)
-  const looksLikeUnsupportedNotation = /[()[\],<>*!]/.test(draft);
+  const patternValues = patternThrowValues(sim);
+  const clampActive = dwellClampActive(patternValues, dwellTime, beatPeriod);
+  const heldTwoWarning = handCount !== 2 && patternValues.includes(2);
 
   // Tempo & physics reset (owner requirement): each control has a ↺ (via the
   // widgets), and the whole group resets to the DEFAULT_* constants at once.
@@ -485,8 +515,7 @@ export function Controls(): ReactElement {
 
         {draftValid ? (
           <p style={{ ...statusStyle, color: palette.green }}>
-            Valid · {draftValidation.ballCount} balls · repeats every{' '}
-            {(spatialPeriodBeats(draftValidation.values, handCount) * beatPeriod).toFixed(2)} s
+            Valid · {draftBallCount} balls · repeats every {(draftPeriodBeats * beatPeriod).toFixed(2)} s
           </p>
         ) : (
           <p role="alert" style={{ ...statusStyle, color: palette.red }}>
@@ -494,16 +523,21 @@ export function Controls(): ReactElement {
           </p>
         )}
 
-        {looksLikeUnsupportedNotation ? (
+        {draftSyncWillSwitchHands ? (
           <p role="note" style={{ ...statusStyle, color: palette.amber }}>
-            Airtime v1 animates vanilla (asynchronous) siteswap only — synchronous ( ), multiplex [ ],
-            and passing &lt; &gt; notation aren&apos;t supported yet. Use digits 0–9 or letters a–z (10–35).
+            Synchronous notation uses 2 hands — applying this pattern sets the hand count to 2.
           </p>
         ) : null}
 
         {dirty ? (
           <p style={{ margin: 0, color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.35 }}>
             Press Enter or Go to apply · Esc to revert.
+          </p>
+        ) : null}
+
+        {sim.compiled?.sync ? (
+          <p role="note" style={{ margin: 0, color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.35 }}>
+            Synchronous pattern — using 2 hands.
           </p>
         ) : null}
 
@@ -533,15 +567,24 @@ export function Controls(): ReactElement {
             }}
           >
             <option value="">Choose a pattern…</option>
-            {groupByBallCount(PATTERN_LIBRARY).map(([count, entries]) => (
-              <optgroup key={count} label={`${count} balls`}>
-                {entries.map((entry) => (
-                  <option key={entry.pattern} value={entry.pattern}>
-                    {entry.pattern} — {entry.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
+            {groupByBallCount(PATTERN_LIBRARY.filter((entry) => entry.kind === 'vanilla')).map(
+              ([count, entries]) => (
+                <optgroup key={count} label={`${count} balls`}>
+                  {entries.map((entry) => (
+                    <option key={entry.pattern} value={entry.pattern}>
+                      {entry.pattern} — {entry.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ),
+            )}
+            <optgroup label="Sync & multiplex">
+              {PATTERN_LIBRARY.filter((entry) => entry.kind === 'sync-multiplex').map((entry) => (
+                <option key={entry.pattern} value={entry.pattern}>
+                  {entry.pattern} — {entry.name} ({entry.ballCount})
+                </option>
+              ))}
+            </optgroup>
           </select>
         </label>
       </section>
@@ -629,6 +672,15 @@ export function Controls(): ReactElement {
             min={HAND_COUNT_MIN}
             max={HAND_COUNT_MAX}
             onChange={setHandCount}
+            // A synchronous pattern forces n_h = 2; changing the hand count under it
+            // would rebuild the sim at the wrong count and break the sync geometry, so
+            // the stepper is locked while a sync pattern runs (the store guards it too).
+            disabled={sim.compiled?.sync === true}
+            title={
+              sim.compiled?.sync === true
+                ? 'Synchronous patterns always use 2 hands — clear the sync pattern to change the hand count.'
+                : undefined
+            }
           />
           <Segmented<HandPreset>
             label="Preset"

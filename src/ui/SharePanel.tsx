@@ -21,6 +21,7 @@ import { encodeConfig, isShareConfigLike } from '../state/codec';
 import { getCanvasElement } from '../state/sceneBridge';
 import { usePalette, type Palette } from './theme';
 import { Button, SectionLabel } from './widgets';
+import { ExportPanel } from './ExportPanel';
 
 /** Trigger a browser download of a Blob (a client-side download, not server output). */
 function downloadBlob(blob: Blob, filename: string): void {
@@ -144,10 +145,11 @@ export function SharePanel(): ReactElement {
     <section style={panelStyle(palette)} aria-label="Save, share and audio">
       <SectionLabel>Save, share &amp; audio</SectionLabel>
 
-      {/* Share / capture actions. */}
+      {/* Link + data (JSON) actions, then the visual-capture pair. "Export GIF…" is
+          grouped next to "Save PNG" (both capture the scene) and kept away from
+          "Export JSON" so the two "Export" buttons don't read as siblings. */}
       <div style={rowStyle}>
         <Button onClick={copyLink}>Copy share link</Button>
-        <Button onClick={savePng}>Save PNG</Button>
         <Button onClick={exportJson}>Export JSON</Button>
         <Button onClick={() => fileInputRef.current?.click()}>Import JSON</Button>
         <input
@@ -164,6 +166,9 @@ export function SharePanel(): ReactElement {
             event.target.value = '';
           }}
         />
+        {/* Visual-capture actions, adjacent. */}
+        <Button onClick={savePng}>Save PNG</Button>
+        <ExportPanel />
       </div>
 
       {shareUrl !== null ? (

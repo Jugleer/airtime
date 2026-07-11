@@ -16,7 +16,7 @@
 //
 // Pure and deterministic: no Date.now / Math.random / performance.
 
-import { spatialPeriodBeats } from '../siteswap';
+import { compiledSpatialPeriodBeats, spatialPeriodBeats, type CompiledPattern } from '../siteswap';
 import type { Flight, Timeline } from '../timeline';
 import { Polynomial } from './poly';
 import { midpoint, scale, subtract, vec3, ZERO, type Vec3 } from './vec3';
@@ -39,6 +39,24 @@ export {
 export const DEFAULT_GRAVITY = 9.81;
 /** Default hold-dip depth in meters (DESIGN.md §7 `holdDepth`). */
 export const DEFAULT_HOLD_DEPTH = 0.1;
+/**
+ * Radius (m) of the multiplex in-cup offset circle (orchestrator ruling 4): balls
+ * co-thrown/co-held in a multiplex are nudged onto this small horizontal ring by
+ * ballId so they don't z-fight. ~2 cm — visible against the 3.5 cm ball radius,
+ * small enough that a solo ball still reads as on its ideal path.
+ */
+export const MULTIPLEX_CUP_OFFSET = 0.02;
+
+/**
+ * Deterministic in-cup offset for ball index `index` of `count` balls: a point on a
+ * horizontal circle of radius {@link MULTIPLEX_CUP_OFFSET}. Distinct for every index
+ * (so any co-located subset separates), constant per ball (so it shifts position only
+ * and preserves continuity), and a pure function of the stable ballId ordering.
+ */
+export function multiplexCupOffset(index: number, count: number): Vec3 {
+  const theta = (2 * Math.PI * index) / Math.max(count, 1);
+  return vec3(MULTIPLEX_CUP_OFFSET * Math.cos(theta), 0, MULTIPLEX_CUP_OFFSET * Math.sin(theta));
+}
 
 /**
  * Physical apex height above the throw point for equal-height throw and catch
@@ -946,6 +964,14 @@ export interface KinematicsEpoch {
 export interface KinematicsOptions {
   /** The pattern's throw values (for spatial period + held-forever detection). */
   readonly values: readonly number[];
+  /**
+   * Optional EXTENDED pattern (sync / multiplex; core/siteswap `CompiledPattern`).
+   * When present it supersedes `values` for the spatial period, the held-forever
+   * (all-2 hand) detection, and — for a MULTIPLEX pattern — the small deterministic
+   * in-cup offsets that separate co-located balls (orchestrator ruling 4). Omit for
+   * the vanilla path (identical output to before this option).
+   */
+  readonly compiled?: CompiledPattern;
   /** n_h, the hand count (DESIGN.md §3). */
   readonly handCount: number;
   /** Per-hand catch/throw points; defaults to {@link defaultHandGeometry}. */
@@ -1044,6 +1070,11 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
   const handCount = options.handCount;
   const baseGeometry = options.geometry ?? defaultHandGeometry(handCount);
   const baseCarryPath = options.carryPath ?? quinticViaCarryPath;
+  // A MULTIPLEX pattern co-locates balls (identical flights / shared carries), so
+  // they need small deterministic in-cup offsets to not z-fight (ruling 4); the
+  // hand path also needs de-overlapping so `handState` stays a single coherent
+  // position. Pure sync (no multiplex) and vanilla take neither branch.
+  const isMultiplex = options.compiled?.multiplex === true;
 
   // Kinematics epochs (DESIGN.md §4.6): runtime gravity / hold depth / geometry /
   // carry-path edits apply to FUTURE segments only. Each segment resolves its
@@ -1174,6 +1205,32 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
     segs.sort((a, b) => a.startTime - b.startTime);
   }
 
+  // MULTIPLEX in-cup offsets (ruling 4): co-thrown balls fly identical parabolas and
+  // share a carry, so without separation they z-fight. Give each ball a CONSTANT small
+  // offset on a horizontal circle keyed by its (stable) ballId — deterministic, a few
+  // cm, and distinct for every ball so any co-located set visibly separates. A constant
+  // translation shifts POSITION only (velocity/acceleration/jerk unchanged), so ball
+  // continuity, the flight `(0,−g,0)` acceleration, and the closed form are all
+  // preserved. Applied to the BALL segments only — never the hand path or the energy
+  // carries (so hand tilt and the work–energy theorem are untouched). Off for pure sync
+  // and vanilla (no multiplex), so those are bit-identical.
+  if (isMultiplex) {
+    const ids = [...ballSegmentMap.keys()].sort((a, b) => a - b);
+    const count = Math.max(ids.length, 1);
+    const idIndex = new Map<number, number>();
+    ids.forEach((id, index) => idIndex.set(id, index));
+    for (const [ballId, segs] of ballSegmentMap) {
+      const off = multiplexCupOffset(idIndex.get(ballId) ?? 0, count);
+      const shifted = segs.map((seg) => ({
+        ...seg,
+        x: seg.x.addConstant(off.x),
+        y: seg.y.addConstant(off.y),
+        z: seg.z.addConstant(off.z),
+      }));
+      ballSegmentMap.set(ballId, shifted);
+    }
+  }
+
   // Hand → carries (sorted); returns fill the gaps between consecutive carries.
   const carriesByHand = new Map<number, CarryMotion[]>();
   for (const carry of carryMotions) {
@@ -1185,13 +1242,54 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
     bucket.sort((a, b) => a.startTime - b.startTime);
   }
 
+  // For a MULTIPLEX pattern a hand may hold several balls over one interval, so its
+  // per-ball carries OVERLAP in time. `carriesForHand` keeps them all (energy iterates
+  // per ball; hand tilt collapses coincident times — ruling 6, 8), but the HAND PATH
+  // must be a single coherent dip per occupancy so `handState`/the cup is one position
+  // (ruling 4). We TILE the occupancy: walk the carries in start order, take one as the
+  // dip representative, then RESUME at the first carry that starts at or after THIS
+  // representative's own endTime. Carries starting within the representative's span (a
+  // simultaneous multiplex hold, or the next link of a staggered held-2 daisy-chain)
+  // are covered by its dip and skipped; the representative that follows becomes the next
+  // dip, and buildHandSegments fills any real gap between them with a return.
+  //
+  // This is what stops the held-2 daisy-chain from freezing the hand. In a pattern with
+  // a non-crossing held 2 ([42], [23]3, [52]3 …) every per-hand held carry overlaps the
+  // next (each 0.8 s carry staggered ~0.5 s), so the OLD reduction — which extended the
+  // cluster reach across the whole overlap chain while keeping only the earliest carry —
+  // absorbed the entire chain into one representative near genStart, emitted no returns,
+  // and left handState pinned to that carry's last endpoint for the whole window. Tiling
+  // by each representative's own endTime instead yields one dip per hold and a return
+  // between holds, so the hand keeps moving. Non-overlapping carries (pure sync, vanilla)
+  // are each their own representative, so their hand path is bit-identical to before.
+  const handPathCarries = (carries: readonly CarryMotion[]): CarryMotion[] => {
+    if (!isMultiplex) {
+      return [...carries];
+    }
+    const sorted = [...carries].sort((a, b) => a.startTime - b.startTime);
+    const representatives: CarryMotion[] = [];
+    let repEnd = -Infinity;
+    for (const carry of sorted) {
+      // Skip carries that start within the current representative's span — they are
+      // covered by its dip. We do NOT extend the reach past the representative's own
+      // endTime (the old bug): the first carry starting at/after it becomes the next
+      // dip, so a staggered chain tiles into successive dips instead of collapsing.
+      if (carry.startTime < repEnd - 1e-12) {
+        continue;
+      }
+      representatives.push(carry);
+      repEnd = carry.endTime;
+    }
+    return representatives;
+  };
+
   const handSegmentMap = new Map<number, PolySegment[]>();
   const buildHandSegments = (hand: number): PolySegment[] => {
     const cached = handSegmentMap.get(hand);
     if (cached) {
       return cached;
     }
-    const carries = carriesByHand.get(hand) ?? [];
+    const carries = handPathCarries(carriesByHand.get(hand) ?? []);
     const segments: PolySegment[] = [];
     for (let i = 0; i < carries.length; i++) {
       const carry = carries[i] as CarryMotion;
@@ -1238,8 +1336,53 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
   // prehistory (genStart) is fixed, and a genuinely all-2 hand never gains a
   // landing flight as the future window grows, so it never flips.
   const staticHoldList: StaticHold[] = [];
-  const length = options.values.length;
+  const compiled = options.compiled;
+  const length = compiled ? compiled.period : options.values.length;
   const holdRestByHand = new Map<number, Vec3>();
+  // Whether `hand` holds a ball on EVERY beat it acts, over the span (an all-2 hand).
+  // Generalized for the compiled path: async = the whole beat belongs to `beat mod n_h`
+  // and every such beat must be a value-2 hold; sync = both hands act on even beats and
+  // the hand's own tosses must all be non-crossing 2s (a held 2). Vanilla is unchanged.
+  const handAllHeld = (hand: number, span: number): boolean => {
+    let anyBeat = false;
+    for (let beat = 0; beat < span; beat++) {
+      if (compiled) {
+        // Sync throws only on even beats; odd beats are the between-pair gap the held
+        // 2 rides across, so they are not "acting" beats for either hand — skip them.
+        if (compiled.sync && beat % 2 === 1) {
+          continue;
+        }
+        const tosses = compiled.beats[beat % compiled.period] ?? [];
+        const mine = compiled.sync
+          ? tosses.filter((t) => t.hand === hand)
+          : ((beat % handCount) + handCount) % handCount === hand
+            ? tosses
+            : null;
+        if (mine === null) {
+          continue; // not this hand's beat (async)
+        }
+        if (mine.length === 0) {
+          return false; // an idle acting beat — not eternally holding
+        }
+        anyBeat = true;
+        const allHolds = mine.every((t) =>
+          compiled.sync ? t.value === 2 && !t.cross : t.value === 2,
+        );
+        if (!allHolds) {
+          return false;
+        }
+      } else {
+        if (((beat % handCount) + handCount) % handCount !== hand) {
+          continue;
+        }
+        anyBeat = true;
+        if (options.values[beat % length] !== 2) {
+          return false;
+        }
+      }
+    }
+    return anyBeat;
+  };
   if (length > 0 && handCount > 0) {
     const handsReceivingFlight = new Set<number>();
     for (const flight of timeline.flights) {
@@ -1247,19 +1390,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
     }
     const span = lcmOf(length, handCount);
     for (let hand = 0; hand < handCount; hand++) {
-      let anyBeat = false;
-      let allHeld = true;
-      for (let beat = 0; beat < span; beat++) {
-        if (((beat % handCount) + handCount) % handCount !== hand) {
-          continue;
-        }
-        anyBeat = true;
-        if (options.values[beat % length] !== 2) {
-          allHeld = false;
-          break;
-        }
-      }
-      if (anyBeat && allHeld && !handsReceivingFlight.has(hand)) {
+      if (handAllHeld(hand, span) && !handsReceivingFlight.has(hand)) {
         // Rest at the hold position (the dip point) so the ball sits sensibly.
         // Held-forever balls are a degenerate all-2 case (only meaningful at
         // n_h = 2); resolve them with the base geometry/hold depth (t = 0 params).
@@ -1288,7 +1419,9 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
     handCount,
     geometry: baseGeometry,
     carryPath: baseCarryPath,
-    spatialPeriodBeats: spatialPeriodBeats(options.values, handCount),
+    spatialPeriodBeats: options.compiled
+      ? compiledSpatialPeriodBeats(options.compiled, handCount)
+      : spatialPeriodBeats(options.values, handCount),
     ballIds: () => [...dynamicBallIds],
     ballSegments: (ballId) => [...(ballSegmentMap.get(ballId) ?? [])],
     handSegments: (hand) => [...buildHandSegments(hand)],

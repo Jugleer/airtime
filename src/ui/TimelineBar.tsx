@@ -196,8 +196,27 @@ export function TimelineBar(): ReactElement {
     );
   }
 
+  // Stack co-located multiplex marks with a small vertical step so overlapping throws
+  // / catches at one hand-beat stay individually visible (ruling 6).
+  const STACK_STEP = 3;
+  const flightList = sim.timeline.flights;
+  const throwSlot = new Map<(typeof flightList)[number], number>();
+  const catchSlot = new Map<(typeof flightList)[number], number>();
+  const throwSeen = new Map<string, number>();
+  const catchSeen = new Map<string, number>();
+  for (const f of flightList) {
+    const tk = `${f.throwBeat}:${f.throwHand}`;
+    const ck = `${f.landingBeat}:${f.landingHand}`;
+    const ti = throwSeen.get(tk) ?? 0;
+    const ci = catchSeen.get(ck) ?? 0;
+    throwSlot.set(f, ti);
+    catchSlot.set(f, ci);
+    throwSeen.set(tk, ti + 1);
+    catchSeen.set(ck, ci + 1);
+  }
+
   const eventTicks: ReactElement[] = [];
-  for (const flight of sim.timeline.flights) {
+  for (const flight of flightList) {
     if (flight.throwBeat < 0) {
       continue;
     }
@@ -206,7 +225,7 @@ export function TimelineBar(): ReactElement {
     const marks = flightMarksInWindow(flight.throwTime, flight.arrivalTime, windowStart, windowEnd);
     if (marks.showThrow) {
       const tx = xOfTime(flight.throwTime, geometry);
-      const ty = laneY(flight.throwHand);
+      const ty = laneY(flight.throwHand) + (throwSlot.get(flight) ?? 0) * STACK_STEP;
       // Throw = short filled tick.
       eventTicks.push(
         <line
@@ -222,7 +241,7 @@ export function TimelineBar(): ReactElement {
     }
     if (marks.showCatch) {
       const cx = xOfTime(flight.arrivalTime, geometry);
-      const cy = laneY(flight.landingHand);
+      const cy = laneY(flight.landingHand) + (catchSlot.get(flight) ?? 0) * STACK_STEP;
       // Catch = small hollow ring (direction reads throw → catch).
       eventTicks.push(
         <circle

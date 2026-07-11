@@ -13,7 +13,12 @@
 //      (NOTATION.md "epoch"; DESIGN.md §2 immutability). The heavy lifting
 //      (slew, arrival guard) lives in core/timeline.
 
-import { spatialPeriodBeats } from '../core/siteswap';
+import {
+  compiledBallCount,
+  compiledSpatialPeriodBeats,
+  spatialPeriodBeats,
+  type CompiledPattern,
+} from '../core/siteswap';
 import {
   buildKinematics,
   DEFAULT_GRAVITY,
@@ -109,6 +114,14 @@ export interface Simulation {
    * SAME splice deterministically. Undefined = plain periodic `values`.
    */
   readonly schedule?: PatternSchedule;
+  /**
+   * The EXTENDED (sync / multiplex) pattern this build used, when the running pattern
+   * is not vanilla (orchestrator rulings 1–4). Present ⇒ `values` is empty and the
+   * timeline/kinematics are driven by this compiled form; horizon extension re-passes
+   * it. Undefined ⇒ a vanilla pattern (the `values`/`schedule` path). No transitions
+   * exist for a compiled pattern — entering/leaving one is a clean restart (ruling 2).
+   */
+  readonly compiled?: CompiledPattern;
 }
 
 // --- Ladder / timeline window + horizon geometry (shared by store + views) ----
@@ -197,15 +210,18 @@ export function buildSimulation(
   beatCount: number,
   kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
   schedule?: PatternSchedule,
+  compiled?: CompiledPattern,
 ): Simulation {
   const timeline = buildTimeline(values, {
     beatCount,
     params: baseParams,
     epochs,
     ...(schedule !== undefined ? { schedule } : null),
+    ...(compiled !== undefined ? { compiled } : null),
   });
   const kinematics = buildKinematics(timeline, {
     values,
+    ...(compiled !== undefined ? { compiled } : null),
     handCount: baseParams.handCount,
     geometry: kinematicsConfig.geometry,
     gravity: kinematicsConfig.gravity,
@@ -216,12 +232,15 @@ export function buildSimulation(
   return {
     values,
     patternText,
-    ballCount: meanOf(values),
+    ballCount: compiled ? compiledBallCount(compiled) : meanOf(values),
     timeline,
     kinematics,
     beatCount,
-    spatialPeriodBeats: spatialPeriodBeats(values, baseParams.handCount),
+    spatialPeriodBeats: compiled
+      ? compiledSpatialPeriodBeats(compiled, baseParams.handCount)
+      : spatialPeriodBeats(values, baseParams.handCount),
     ...(schedule !== undefined ? { schedule } : null),
+    ...(compiled !== undefined ? { compiled } : null),
   };
 }
 
@@ -258,6 +277,7 @@ export function extendedIfNeeded(
       current.beatCount + HORIZON_CHUNK_BEATS,
       kinematicsConfig,
       current.schedule,
+      current.compiled,
     );
     guard += 1;
   }

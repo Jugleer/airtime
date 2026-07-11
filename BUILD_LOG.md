@@ -421,3 +421,62 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   differential C² sweep in budget; excursion → 0.37 m). First diagnosis agent
   died emitting structured output; salvage agent mined its 510 KB transcript
   and re-verified rather than re-investigating.
+
+## Round 3 wave 2a — core carry/return fixes, trail, tilt, fixups            DONE
+- Commit: 34aa05b — Gate: (2026-07-11, "npm run gate", green — 38 files / 521 tests; orchestrator-run)
+- Returns: buildReturn now routes through the dip-based carry construction
+  (held:false CarrySpec; holdDepth threaded per-epoch). Root cause was exact:
+  the old single quintic through six ball-derived endpoint states IS the flight
+  parabola for self-throws (unique interpolant), so 045's "4" hand and every
+  3-hand-cascade hand traced the ball to apex; zips lunged (1155 hand-0
+  excursion 0.79 m). After: apex 1.02 vs ball 1.60; excursion 0.33 m. Builder
+  found a NEW breach beyond the diagnosis (returns inherit huge ball velocities
+  → scoop flank collapses; 1.56e-9 at nh=4 value-14) and added a return-only
+  flank floor (CarrySpec.minFlankTime): 5.1e-10.
+- Held 2s: true static rest at the dip (v/a/jerk exactly 0, 85–93% of the
+  carry; horizontal repositioning in the curved flanks). Spec's flank-floor
+  mitigation was implemented, MEASURED to overshoot (0.032 m at hd 0.02/g 30),
+  and replaced with the rest-gate + scoop-through fallback (4000 m/s² flank
+  accel cap). Normal carries can no longer emit a level hold. Continuity swept:
+  numRuns=800 ×4 reseeds + 10k adversarial cases (worst acc 9.47e-10 is a
+  PRE-EXISTING scoop corner, unchanged — noted, deliberately not touched).
+- Render: trail/ghost sampling boundary-anchored (absolute grid + exact segment
+  boundaries; grid dropped before boundaries under cap pressure) — low-dwell
+  flicker gone, dip depth playhead-invariant. Hand-path overlay 20→80/beat.
+  NEW hand tilt: cup normal −v̂ at catch / +v̂ at throw, smoothstep slerp
+  keyframes (C¹), upright mid-return, zero per-frame alloc.
+- Wave-1 review fixups all landed (Help copy, gizmo global node lowered 0.14 m
+  with hit-sphere disjointness test, translatedPair orphan removed, comment
+  sweep, hover unmount cleanup, STAGE_MIN, aria clamp, dead windowSampleTime,
+  Y-negation + t-seek tests). Wave-2a review: ZERO confirmed findings; lows
+  fixed pre-commit (test comment, ghost buffer bound, DESIGN §7 net residue).
+  DESIGN §4.3 amended (returns + held-rest wording).
+- Deferred: pre-existing 9.47e-10 continuity margin at the near-MIN_ABSORB
+  scoop corner (~5% under budget); cup drop is world −y (not tilt-aware);
+  hand-path overlay sits at handState.y, ~35 mm above the cup mesh (owner call).
+
+## Round 3 wave 2b — hand workspace volumes + siteswap explorer            DONE
+- Commit: 7c2969c — Gate: (2026-07-11, "npm run gate", green — 42 files / 584 tests; orchestrator-run)
+- Workspace (ADVISORY): pure src/workspace module (primitive containment
+  closed-form; STL binary+ascii with watertight check → honest bbox fallback;
+  ray-parity; violation fraction + seam-merged spans); WorkspaceOverlay
+  (volumes at hand anchors, red violating spans, % badges; once per
+  (sim, config)); WorkspacePanel popup (r3f preview, shape/scale/STL/reset)
+  from HANDS & GEOMETRY. Primitives in codec (ws*); STL session-only.
+- Explorer: enumerateSiteswaps in core/stategraph (closed graph cycles,
+  reverse-BFS pruning, canonical lex-greatest rotation, fundamental period,
+  no-0s/no-2s/prime filters, capped 500 + truncated flag). Review brute-force
+  diffed it against the validator: EXACT agreement across all probed domains.
+  ≤16 ms worst on the Jetson → live useMemo generation. Bottom dock tri-state
+  None | Charts & energy | Explorer (dm key; legacy cv healed at decode).
+- Wave-2b review: workspace + explorer dimensions CLEAN (tetra re-derived;
+  rendered-inside ⇒ tests-inside verified numerically). One real integration
+  bug confirmed & fixed pre-commit: cv-only legacy links opened with charts
+  hidden (boot merge made the downstream fallback unreachable) → dockMode now
+  derived at decode and dm always emitted (idempotence property held). DESIGN
+  §6 amended (dock tri-state, explorer, workspace).
+- Deferred/owner calls: non-watertight STL draws the open mesh but tests its
+  bbox (disclosed in-panel; wave-3 polish adds a bbox wireframe); Charts'
+  internal collapsed slim-tab branch now unreachable in-app (comment updated;
+  removal is optional cleanup); explorer query params not in the URL;
+  workspace is one shared spec (per-hand overrides future); presets carry time.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PATTERN_LIBRARY, buildLibrary } from './library';
-import { validatePattern } from '../core/siteswap';
+import { isExtendedNotation, validateNotation } from '../core/siteswap';
 
 describe('pattern library (DESIGN.md §6; PLAN.md Phase 9)', () => {
   it('has at least 30 curated entries', () => {
@@ -9,13 +9,23 @@ describe('pattern library (DESIGN.md §6; PLAN.md Phase 9)', () => {
 
   it('every entry is a valid siteswap with a ball count matching the parser', () => {
     for (const entry of PATTERN_LIBRARY) {
-      const result = validatePattern(entry.pattern);
+      const result = validateNotation(entry.pattern);
       expect(result.ok, `${entry.pattern} should validate`).toBe(true);
       if (result.ok) {
         expect(entry.ballCount).toBe(result.ballCount);
         expect(Number.isInteger(entry.ballCount)).toBe(true);
       }
       expect(entry.name.length).toBeGreaterThan(0);
+      // The kind is derived from the notation, not hand-typed.
+      expect(entry.kind).toBe(isExtendedNotation(entry.pattern) ? 'sync-multiplex' : 'vanilla');
+    }
+  });
+
+  it('includes a Sync & multiplex group with at least 6 validated classics', () => {
+    const extended = PATTERN_LIBRARY.filter((entry) => entry.kind === 'sync-multiplex');
+    expect(extended.length).toBeGreaterThanOrEqual(6);
+    for (const entry of extended) {
+      expect(validateNotation(entry.pattern).ok, `${entry.pattern}`).toBe(true);
     }
   });
 

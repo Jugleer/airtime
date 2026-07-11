@@ -183,24 +183,39 @@ export function Stepper({
   min,
   max,
   onChange,
+  disabled = false,
+  title,
 }: {
   readonly label: string;
   readonly value: number;
   readonly min: number;
   readonly max: number;
   onChange(value: number): void;
+  /** When true, both steppers are inert (e.g. hand count is locked to 2 under sync). */
+  readonly disabled?: boolean;
+  /** Hover text explaining the value or (when disabled) why it is locked. */
+  readonly title?: string;
 }): ReactElement {
   const palette = usePalette();
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', fontSize: '0.8rem' }}>
+    <div
+      title={title}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.25rem',
+        fontSize: '0.8rem',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
       <span style={{ fontWeight: 600, color: palette.textSecondary }}>{label}</span>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
         <button
           type="button"
           aria-label={`${label} decrease`}
-          disabled={value <= min}
+          disabled={disabled || value <= min}
           onClick={() => onChange(value - 1)}
-          style={stepperButtonStyle(palette, value <= min)}
+          style={stepperButtonStyle(palette, disabled || value <= min)}
         >
           −
         </button>
@@ -219,9 +234,9 @@ export function Stepper({
         <button
           type="button"
           aria-label={`${label} increase`}
-          disabled={value >= max}
+          disabled={disabled || value >= max}
           onClick={() => onChange(value + 1)}
-          style={stepperButtonStyle(palette, value >= max)}
+          style={stepperButtonStyle(palette, disabled || value >= max)}
         >
           +
         </button>

@@ -7,13 +7,18 @@
 // none silently (buildLibrary throws on an invalid pattern). The sidebar groups
 // the dropdown by these derived ball counts (see Controls).
 
-import { validatePattern } from '../core/siteswap';
+import { isExtendedNotation, validateNotation } from '../core/siteswap';
 
 /** One library entry: the pattern text, a display name, and its ball count b. */
 export interface LibraryEntry {
   readonly pattern: string;
   readonly name: string;
   readonly ballCount: number;
+  /**
+   * Notation family: vanilla async patterns group by ball count in the sidebar; the
+   * sync/multiplex patterns get their own "Sync & multiplex" group (ruling 7).
+   */
+  readonly kind: 'vanilla' | 'sync-multiplex';
 }
 
 /** Raw curated list (pattern + name); ball counts are attached from the parser. */
@@ -59,6 +64,14 @@ const CURATED: readonly { readonly pattern: string; readonly name: string }[] = 
   // 7 balls
   { pattern: '7', name: 'cascade' },
   { pattern: '867', name: 'seven-ball weave' },
+  // Sync & multiplex (ruling 7) — each validated by validateNotation at build time.
+  { pattern: '(4,4)', name: 'synchronous fountain' },
+  { pattern: '(6x,4)*', name: 'five-ball half-shower (sync)' },
+  { pattern: '(4,2x)*', name: 'three-ball box' },
+  { pattern: '(2x,4)*', name: 'box (other lead)' },
+  { pattern: '[33]33', name: 'multiplex cascade' },
+  { pattern: '24[54]', name: 'multiplex shower' },
+  { pattern: '([44],2x)*', name: 'sync multiplex' },
 ];
 
 /**
@@ -68,11 +81,16 @@ const CURATED: readonly { readonly pattern: string; readonly name: string }[] = 
  */
 export function buildLibrary(): LibraryEntry[] {
   return CURATED.map(({ pattern, name }) => {
-    const result = validatePattern(pattern);
+    const result = validateNotation(pattern);
     if (!result.ok) {
-      throw new Error(`library pattern ${pattern} is invalid`);
+      throw new Error(`library pattern ${pattern} is invalid: ${result.errors[0]?.message}`);
     }
-    return { pattern, name, ballCount: result.ballCount };
+    return {
+      pattern,
+      name,
+      ballCount: result.ballCount,
+      kind: isExtendedNotation(pattern) ? 'sync-multiplex' : 'vanilla',
+    };
   });
 }
 

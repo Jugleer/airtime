@@ -18,8 +18,12 @@ Read `NOTATION.md` first — every symbol below (`b`, `h`, `n_h`, `τ_b`, `t_d`,
 
 ### v1 (this build)
 
-- Vanilla **async** siteswap only: one throw per beat, hands in cyclic order.
+- Vanilla **async** siteswap: one throw per beat, hands in cyclic order.
   Digits `0–9`, letters `a–z` (= 10–35). `0` = empty hand, `2` = held ball.
+  (Round 3, owner-approved: **sync `(l,r)` and multiplex `[…]` notation** are
+  now first-class in the sim/ladder/timeline — see NOTATION.md. The state
+  graph, explorer, and live splicing remain vanilla-only; entering or leaving
+  sync/multiplex is a clean restart. Sync requires `n_h = 2` and auto-sets it.)
 - Live-validated pattern entry with beat-accurate error messages.
 - 3D scene (navigable orbit camera) rendering balls only — **no hands, no juggler**.
 - Runtime-adjustable: beat period (slew-limited), dwell time, gravity, playback
@@ -317,6 +321,10 @@ line/circle presets, colors, audio toggles, N stepper for the graph.
   the query string; compact versioned encoding: `?v=1&...`.
 - **Presets**: named saves in localStorage + JSON file export/import.
 - **PNG capture**: canvas screenshot button.
+- **GIF/WebM export** (round 3, owner-approved): frame-exact offline render of
+  exactly N pattern loops (half-open schedule → mathematically seamless), frozen
+  current camera or one-revolution turntable, in-browser encoding (bundled
+  gifenc; WebM via WebCodecs where available). State fully restored afterwards.
 
 ### Audio
 

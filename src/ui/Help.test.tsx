@@ -23,6 +23,12 @@ describe('Help modal (ui layer)', () => {
     expect(screen.getByText(/Closes this help/i)).toBeTruthy();
     expect(screen.getByText(/three steps per notch/i)).toBeTruthy();
     expect(screen.queryByText(/Settings drawer/i)).toBeNull();
+    // Extended notation is documented (sync + multiplex), not vanilla-only.
+    expect(screen.getByText('Sync & multiplex')).toBeTruthy();
+    expect(screen.getByText(/both hands at once/i)).toBeTruthy();
+    expect(screen.getByText(/several balls from one hand/i)).toBeTruthy();
+    // Save & share mentions the animated GIF/WebM export.
+    expect(screen.getByText(/animated GIF/i)).toBeTruthy();
   });
 
   it('closes on the Escape key (standard dialog dismissal)', () => {

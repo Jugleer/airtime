@@ -40,6 +40,32 @@ const BOTTOM_MARGIN = 22;
 /** `(ballId) => cssColor`, threaded from the store's coloring settings. */
 type BallColorOf = (ballId: number) => string;
 
+/** Small sideways step (logical units) between stacked multiplex marks in a column. */
+const STACK_SPREAD = 9;
+
+/**
+ * Assign each item a slot index among the items sharing its group key (in array
+ * order). Used to STACK co-located ladder marks — a multiplex hand-beat throws /
+ * catches several balls at the same column and time, so without a per-slot sideways
+ * step they would draw exactly on top of one another (ruling 6).
+ */
+function slotIndex<T>(items: readonly T[], keyOf: (item: T) => string): Map<T, number> {
+  const counts = new Map<string, number>();
+  const slots = new Map<T, number>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const n = counts.get(key) ?? 0;
+    slots.set(item, n);
+    counts.set(key, n + 1);
+  }
+  return slots;
+}
+
+/** Sideways offset for a stacked mark: centers the group on the column. */
+function stackOffset(slot: number, groupSize: number): number {
+  return (slot - (groupSize - 1) / 2) * STACK_SPREAD;
+}
+
 interface Frame {
   readonly windowStart: number;
   readonly windowEnd: number;
@@ -123,15 +149,25 @@ function Carries({
   frame: Frame;
   colorOf: BallColorOf;
 }): ReactElement {
+  // Stack co-located carries (a multiplex hand holds several balls over one interval).
+  const carries = sim.timeline.carries;
+  const slots = slotIndex(carries, (c) => `${c.hand}:${c.startBeat}:${c.endBeat}`);
+  const groupSizes = new Map<string, number>();
+  for (const c of carries) {
+    const key = `${c.hand}:${c.startBeat}:${c.endBeat}`;
+    groupSizes.set(key, (groupSizes.get(key) ?? 0) + 1);
+  }
   const segments: ReactElement[] = [];
-  for (const carry of sim.timeline.carries) {
+  for (const carry of carries) {
     if (carry.startBeat < 0) {
       continue;
     }
     if (carry.endTime < frame.windowStart || carry.startTime > frame.windowEnd) {
       continue;
     }
-    const x = frame.laneX(carry.hand);
+    const key = `${carry.hand}:${carry.startBeat}:${carry.endBeat}`;
+    const x =
+      frame.laneX(carry.hand) + stackOffset(slots.get(carry) ?? 0, groupSizes.get(key) ?? 1);
     segments.push(
       <line
         key={`carry-${carry.ballId}-${carry.startBeat}`}
@@ -163,7 +199,20 @@ function Flights({
 }): ReactElement {
   const arcs: ReactElement[] = [];
   const dots: ReactElement[] = [];
-  for (const flight of sim.timeline.flights) {
+  // Stack co-thrown / co-caught flights (multiplex): offset each endpoint by its slot
+  // among the flights sharing that (beat, hand) so the arcs and dots don't overlap.
+  const flights = sim.timeline.flights;
+  const throwSlots = slotIndex(flights, (f) => `t${f.throwBeat}:${f.throwHand}`);
+  const catchSlots = slotIndex(flights, (f) => `c${f.landingBeat}:${f.landingHand}`);
+  const throwGroup = new Map<string, number>();
+  const catchGroup = new Map<string, number>();
+  for (const f of flights) {
+    const tk = `t${f.throwBeat}:${f.throwHand}`;
+    const ck = `c${f.landingBeat}:${f.landingHand}`;
+    throwGroup.set(tk, (throwGroup.get(tk) ?? 0) + 1);
+    catchGroup.set(ck, (catchGroup.get(ck) ?? 0) + 1);
+  }
+  for (const flight of flights) {
     if (flight.throwBeat < 0) {
       continue;
     }
@@ -171,9 +220,15 @@ function Flights({
       continue;
     }
     const color = colorOf(flight.ballId);
-    const x0 = frame.laneX(flight.throwHand);
+    const tk = `t${flight.throwBeat}:${flight.throwHand}`;
+    const ck = `c${flight.landingBeat}:${flight.landingHand}`;
+    const x0 =
+      frame.laneX(flight.throwHand) +
+      stackOffset(throwSlots.get(flight) ?? 0, throwGroup.get(tk) ?? 1);
     const y0 = frame.yOf(flight.throwTime);
-    const x1 = frame.laneX(flight.landingHand);
+    const x1 =
+      frame.laneX(flight.landingHand) +
+      stackOffset(catchSlots.get(flight) ?? 0, catchGroup.get(ck) ?? 1);
     const y1 = frame.yOf(flight.arrivalTime);
     const midY = frame.yOf((flight.throwTime + flight.arrivalTime) / 2);
     // Bow sideways (the non-time axis), growing with the throw value. Cross throws

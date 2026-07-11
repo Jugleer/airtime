@@ -30,6 +30,7 @@ import { WorkspaceOverlay } from './WorkspaceOverlay';
 import { Triad } from './Triad';
 import { useAppStore } from '../state';
 import { setCameraSampler, setCanvasElement } from '../state/sceneBridge';
+import { setCaptureRoot } from './captureBridge';
 import type { CameraPose } from '../state/codec';
 import {
   CAMERA_MAX_DISTANCE,
@@ -146,6 +147,21 @@ function CameraRig(): ReactElement {
 }
 
 /**
+ * Registers r3f's root-store getter with the capture bridge so the offline
+ * exporter (src/export/capture) can drive the render loop frame-by-frame and read
+ * the gl/scene/camera handles. Runs inside <Canvas>; clears on unmount. Renders
+ * nothing and never re-renders per frame (the getter reference is stable).
+ */
+function CaptureRegistrar(): null {
+  const get = useThree((state) => state.get);
+  useEffect(() => {
+    setCaptureRoot(get);
+    return () => setCaptureRoot(null);
+  }, [get]);
+  return null;
+}
+
+/**
  * Themed colors the scene needs (passed down from the ui layer so render3d stays
  * ui-import-free; ui → render3d is the allowed direction). Defaults are the dark
  * palette so <Scene/> also renders standalone (tests, storybook).
@@ -240,6 +256,7 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
         <color attach="background" args={[colors.background]} />
         <Environment colors={colors} />
         <CameraRig />
+        <CaptureRegistrar />
         <Tracers />
         <HandPaths />
         <Balls />

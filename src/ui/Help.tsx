@@ -26,6 +26,10 @@ const SITESWAP_SECTIONS: readonly Section[] = [
         '0 and 2',
         'A 0 is an empty hand that beat (a gap). A 2 is a ball held in the hand across the beat rather than thrown — consecutive 2s merge into one longer hold.',
       ],
+      [
+        'Sync & multiplex',
+        '(l,r) throws both hands at once — a synchronous pattern always uses 2 hands, and its values are even. [ ] throws several balls from one hand at the same instant, and works at any hand count. A trailing * mirrors a sync run with the two hands swapped.',
+      ],
     ],
   },
   {
@@ -65,7 +69,7 @@ const CONTROL_SECTIONS: readonly Section[] = [
     items: [
       ['Hand count & geometry', '1–8 hands with line/circle presets; open the editor to drag catch (green) and throw (orange) points in 3D.'],
       ['State graph N', 'The graph depth; auto-expands to fit tall patterns (warns at 9+).'],
-      ['Save & share', 'Copy a link that reproduces the whole scene, save named presets, export/import JSON, grab a PNG, and toggle audio ticks.'],
+      ['Save & share', 'Copy a link that reproduces the whole scene, save named presets, export/import JSON, grab a PNG, export an animated GIF (or WebM where supported) of the looping pattern, and toggle audio ticks.'],
     ],
   },
   {

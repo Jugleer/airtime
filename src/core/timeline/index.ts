@@ -14,11 +14,13 @@ import {
   clampDwell,
   DEFAULT_BETA_CLAMP,
   DEFAULT_SLEW_TIME_CONSTANT,
+  effectiveDwell,
   guardBeatPeriod,
   slewBeatPeriod,
   throwKind,
   type BeatSchedule,
 } from '../timing';
+import type { CompiledPattern, CompiledThrow } from '../siteswap';
 
 /** Runtime parameters that shape the timeline (piecewise-constant per epoch). */
 export interface TimelineParams {
@@ -237,6 +239,15 @@ export interface BuildTimelineOptions {
    * "repeat `values` forever" behavior (bit-identical to before this option).
    */
   readonly schedule?: PatternSchedule;
+  /**
+   * Optional EXTENDED pattern (sync `(l,r)` / multiplex `[...]`; core/siteswap
+   * `CompiledPattern`). When present it drives a SEPARATE builder that supports
+   * multiple throws per beat and explicit sync hands; `values`/`schedule` are then
+   * ignored. Omit for the vanilla path, which is bit-identical to before this option
+   * (so the existing vanilla tests are untouched). No transitions are supported for a
+   * compiled pattern — entering/leaving one is a clean restart (orchestrator ruling 2).
+   */
+  readonly compiled?: CompiledPattern;
 }
 
 function floorMod(value: number, modulus: number): number {
@@ -291,6 +302,11 @@ export function buildTimeline(
   values: readonly number[],
   options: BuildTimelineOptions,
 ): Timeline {
+  // Extended notation (sync / multiplex) drives a separate builder; the vanilla path
+  // below is untouched and bit-identical to before this option existed.
+  if (options.compiled !== undefined) {
+    return buildCompiledTimeline(options.compiled, options);
+  }
   const { beatCount, params, epochs = [], schedule } = options;
 
   const empty: Timeline = {
@@ -665,6 +681,389 @@ export function buildTimeline(
       for (let offset = 0; offset < maxHeight; offset++) {
         const thrownAt = landerThrowBeat.get(beat + offset);
         state[offset] = thrownAt !== undefined && thrownAt < beat;
+      }
+      return state;
+    },
+  };
+}
+
+// --- Extended (sync / multiplex) timeline (orchestrator ruling 4) ------------
+//
+// A SEPARATE builder for compiled sync/multiplex patterns, kept apart from the
+// vanilla path so the latter stays bit-identical. It generalizes the vanilla
+// construction in three ways:
+//   1. A beat may emit SEVERAL throws (multiplex) and, in sync, BOTH hands throw on
+//      the same (even) beat — so hand assignment is per-throw (explicit for sync,
+//      positional `beat mod n_h` for async), not `beat mod n_h` for the whole beat.
+//   2. Ball-identity threading is over throw INSTANCES (union-find on handling ids),
+//      pairing the balls a hand catches at a beat with the balls it throws there.
+//   3. The slew-limited, arrival-guarded beat schedule gathers arrivals from ALL
+//      throws landing on a beat (not the single vanilla throw).
+// The append-only, closed-form, epoch-immutable properties are preserved.
+
+/** One throw instance in the extended timeline (a flight or a held-2 carry link). */
+interface Handling {
+  readonly id: number;
+  readonly throwBeat: number;
+  readonly fromHand: number;
+  readonly value: number;
+  readonly landingBeat: number;
+  readonly landingHand: number;
+  /** Airborne flight (value 1 or ≥ 3, or a sync crossing 2x). */
+  readonly isFlight: boolean;
+  /** Held 2 (rides the hand across beats): threads the ball but is not a flight. */
+  readonly isHold: boolean;
+  ballId: number;
+}
+
+/** Union-find over handling ids (physical-ball components). */
+class IdUnionFind {
+  private parent: number[];
+  constructor(size: number) {
+    this.parent = Array.from({ length: size }, (_unused, i) => i);
+  }
+  find(x: number): number {
+    let root = x;
+    while ((this.parent[root] as number) !== root) {
+      root = this.parent[root] as number;
+    }
+    let cur = x;
+    while (cur !== root) {
+      const next = this.parent[cur] as number;
+      this.parent[cur] = root;
+      cur = next;
+    }
+    return root;
+  }
+  union(a: number, b: number): void {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) {
+      if (ra < rb) this.parent[rb] = ra;
+      else this.parent[ra] = rb;
+    }
+  }
+}
+
+function buildCompiledTimeline(compiled: CompiledPattern, options: BuildTimelineOptions): Timeline {
+  const { beatCount, params, epochs = [] } = options;
+  const empty: Timeline = {
+    events: [],
+    flights: [],
+    carries: [],
+    schedule: { beatTimes: [0], beatPeriods: [] },
+    beatTime: () => 0,
+    landingScheduleAt: (_beat, maxHeight) => new Array<boolean>(maxHeight).fill(false),
+  };
+  const period = compiled.period;
+  if (period === 0 || beatCount <= 0) {
+    return empty;
+  }
+
+  const sync = compiled.sync;
+  const handCount = params.handCount;
+
+  // Per-beat throws (periodic; prehistory wraps). Value-0 tosses are idle (no ball).
+  const throwsAtBeat = (beat: number): readonly CompiledThrow[] =>
+    compiled.beats[floorMod(beat, period)] as readonly CompiledThrow[];
+
+  const fromHandOf = (beat: number, toss: CompiledThrow): number =>
+    sync ? toss.hand : floorMod(beat, handCount);
+  const landingHandOf = (beat: number, toss: CompiledThrow): number =>
+    sync
+      ? toss.cross
+        ? 1 - toss.hand
+        : toss.hand
+      : floorMod(beat + toss.value, handCount);
+  // A held 2 (sync: non-crossing 2; async: any 2, matching vanilla throwKind).
+  const isHoldToss = (toss: CompiledThrow): boolean =>
+    sync ? toss.value === 2 && !toss.cross : toss.value === 2;
+  const isFlightToss = (toss: CompiledThrow): boolean =>
+    toss.value >= 1 && !isHoldToss(toss);
+
+  let maxValue = 0;
+  for (const beat of compiled.beats) {
+    for (const toss of beat) {
+      if (toss.value > maxValue) maxValue = toss.value;
+    }
+  }
+
+  const pad = 2 * (maxValue + period) + 4;
+  const genStart = -pad;
+  const genEnd = beatCount + pad;
+
+  const initialBeatPeriod = params.beatPeriod;
+  const slewTimeConstant = params.slewTimeConstant ?? DEFAULT_SLEW_TIME_CONSTANT;
+  const betaClamp = params.betaClamp ?? DEFAULT_BETA_CLAMP;
+
+  const sortedEpochs = [...epochs].sort((a, b) => a.beat - b.beat);
+  function paramsAt(beat: number): TimelineParams {
+    let current: TimelineParams = params;
+    for (const epoch of sortedEpochs) {
+      if (epoch.beat <= beat) current = { ...current, ...epoch.params };
+      else break;
+    }
+    return current;
+  }
+
+  // --- Beat schedule (slew-limited, arrival-guarded), identical machinery to vanilla.
+  const scheduleBeats = genEnd;
+  const beatTimes: number[] = new Array<number>(scheduleBeats + 1);
+  const beatPeriods: number[] = new Array<number>(scheduleBeats);
+  const aimPeriods: number[] = new Array<number>(scheduleBeats);
+  beatTimes[0] = 0;
+
+  const periodOfBeat = (beat: number): number =>
+    beat < 0 ? initialBeatPeriod : (beatPeriods[beat] as number);
+  const aimPeriodOfBeat = (beat: number): number =>
+    beat < 0 ? initialBeatPeriod : (aimPeriods[beat] as number);
+  const beatTimeOf = (beat: number): number => {
+    if (beat < 0) return beat * initialBeatPeriod;
+    if (beat > genEnd) {
+      throw new RangeError(`beatTime(${beat}) is outside the generated range [0, ${genEnd}]`);
+    }
+    return beatTimes[beat] as number;
+  };
+
+  // Arrival time of a flight of value `value` thrown at `beat` (past data only). The
+  // air time is computed DIRECTLY (t_air = h·τ_b − t_d_eff, NOTATION identity 1) rather
+  // than via timing's `airTime`, because that helper returns 0 for value 2 (a vanilla
+  // HOLD) — but a sync crossing `2x` is a real flight, and only flights reach here.
+  const flightArrivalOf = (beat: number, value: number): number => {
+    const active = paramsAt(beat);
+    const dwell = clampDwell(active.dwellTime, handCount, periodOfBeat(beat));
+    const aim = aimPeriodOfBeat(beat);
+    const beta = active.betaClamp ?? betaClamp;
+    return beatTimeOf(beat) + (value * aim - effectiveDwell(dwell, value, aim, beta));
+  };
+
+  // Arrivals of every flight landing at beat `m` (guard deadline candidates).
+  const arrivalsLandingAt = (m: number): number[] => {
+    const arrivals: number[] = [];
+    for (let v = 1; v <= maxValue; v++) {
+      const source = m - v;
+      if (source < genStart) continue;
+      // A value-1 flight thrown from `source = m-1` has an unassigned period while we
+      // guard it, and always arrives a dwell before its own rethrow — skip (as vanilla).
+      if (source >= 0 && beatPeriods[source] === undefined) continue;
+      for (const toss of throwsAtBeat(source)) {
+        if (toss.value === v && isFlightToss(toss)) {
+          arrivals.push(flightArrivalOf(source, v));
+        }
+      }
+    }
+    return arrivals;
+  };
+
+  let previousAimPeriod = initialBeatPeriod;
+  let previousBeatDuration = initialBeatPeriod;
+  for (let beat = 0; beat < scheduleBeats; beat++) {
+    const target = paramsAt(beat).beatPeriod;
+    const proposed =
+      beat === 0
+        ? initialBeatPeriod
+        : slewBeatPeriod(previousAimPeriod, target, previousBeatDuration, slewTimeConstant);
+    aimPeriods[beat] = proposed;
+    const guarded = guardBeatPeriod(proposed, beatTimeOf(beat), arrivalsLandingAt(beat + 1));
+    beatPeriods[beat] = guarded;
+    beatTimes[beat + 1] = (beatTimes[beat] as number) + guarded;
+    previousAimPeriod = proposed;
+    previousBeatDuration = guarded;
+  }
+  const beatSchedule: BeatSchedule = { beatTimes, beatPeriods };
+
+  // --- Handlings + ball-identity threading (union-find over throw instances) --------
+  const handlings: Handling[] = [];
+  for (let beat = genStart; beat < genEnd; beat++) {
+    for (const toss of throwsAtBeat(beat)) {
+      if (toss.value === 0) continue; // idle: no ball
+      const fromHand = fromHandOf(beat, toss);
+      const landingHand = landingHandOf(beat, toss);
+      handlings.push({
+        id: handlings.length,
+        throwBeat: beat,
+        fromHand,
+        value: toss.value,
+        landingBeat: beat + toss.value,
+        landingHand,
+        isFlight: isFlightToss(toss),
+        isHold: isHoldToss(toss),
+        ballId: -1,
+      });
+    }
+  }
+
+  const pushInto = <K>(map: Map<K, Handling[]>, k: K, h: Handling): void => {
+    const bucket = map.get(k);
+    if (bucket === undefined) map.set(k, [h]);
+    else bucket.push(h);
+  };
+
+  const unionFind = new IdUnionFind(handlings.length);
+  // Pair the balls a hand catches at (beat, hand) with the balls it throws there.
+  const outgoing = new Map<string, Handling[]>();
+  const incoming = new Map<string, Handling[]>();
+  const key = (beat: number, hand: number): string => `${beat}:${hand}`;
+  for (const h of handlings) {
+    pushInto(outgoing, key(h.throwBeat, h.fromHand), h);
+    pushInto(incoming, key(h.landingBeat, h.landingHand), h);
+  }
+  for (const [k, outs] of outgoing) {
+    const ins = incoming.get(k);
+    if (ins === undefined) continue;
+    // Deterministic pairing: caught balls by their source beat, thrown balls by their
+    // destination beat (stable under horizon extension — genStart is fixed).
+    const insSorted = ins.slice().sort((a, b) => a.throwBeat - b.throwBeat || a.id - b.id);
+    const outsSorted = outs.slice().sort((a, b) => a.landingBeat - b.landingBeat || a.id - b.id);
+    const n = Math.min(insSorted.length, outsSorted.length);
+    for (let i = 0; i < n; i++) {
+      unionFind.union((insSorted[i] as Handling).id, (outsSorted[i] as Handling).id);
+    }
+  }
+
+  // Components → physical balls, ordered by the earliest handling with beat ≥ 0
+  // (the beat-0 state anchor; matches the vanilla builder so ids are stable).
+  const rootToHandlings = new Map<number, Handling[]>();
+  for (const h of handlings) {
+    pushInto(rootToHandlings, unionFind.find(h.id), h);
+  }
+  const components = [...rootToHandlings.values()].map((list) =>
+    list.slice().sort((a, b) => a.throwBeat - b.throwBeat || a.id - b.id),
+  );
+  const anchorOf = (list: readonly Handling[]): number => {
+    for (const h of list) if (h.throwBeat >= 0) return h.throwBeat;
+    return (list[0] as Handling).throwBeat;
+  };
+  components.sort(
+    (a, b) => anchorOf(a) - anchorOf(b) || (a[0] as Handling).throwBeat - (b[0] as Handling).throwBeat,
+  );
+  const ballHandlings = new Map<number, Handling[]>();
+  components.forEach((list, ballId) => {
+    ballHandlings.set(ballId, list);
+    for (const h of list) h.ballId = ballId;
+  });
+
+  // --- Flights ----------------------------------------------------------------------
+  const flights: Flight[] = [];
+  for (const h of handlings) {
+    if (!h.isFlight) continue;
+    flights.push({
+      ballId: h.ballId,
+      throwBeat: h.throwBeat,
+      landingBeat: h.landingBeat,
+      throwHand: h.fromHand,
+      landingHand: h.landingHand,
+      value: h.value,
+      throwTime: beatTimeOf(h.throwBeat),
+      arrivalTime: flightArrivalOf(h.throwBeat, h.value),
+    });
+  }
+
+  // --- Carries (in-hand segments) ---------------------------------------------------
+  // Per ball, a carry runs from a flight's arrival to the next flight's departure,
+  // absorbing any held 2s between them (held = the carry spans extra beats).
+  const carries: Carry[] = [];
+  for (const list of ballHandlings.values()) {
+    let prevLandingBeat: number | null = null;
+    let prevLandingHand = 0;
+    let prevArrival = 0;
+    for (const h of list) {
+      if (!h.isFlight) continue;
+      if (prevLandingBeat !== null) {
+        carries.push({
+          ballId: h.ballId,
+          hand: prevLandingHand,
+          startBeat: prevLandingBeat,
+          endBeat: h.throwBeat,
+          startTime: prevArrival,
+          endTime: beatTimeOf(h.throwBeat),
+          held: h.throwBeat > prevLandingBeat,
+        });
+      }
+      prevLandingBeat = h.landingBeat;
+      prevLandingHand = h.landingHand;
+      prevArrival = flightArrivalOf(h.throwBeat, h.value);
+    }
+  }
+
+  // --- Landing schedule (best-effort; the state graph is vanilla-only, ruling 3) ----
+  const landingsByBeat = new Map<number, number[]>();
+  for (const h of handlings) {
+    if (!h.isFlight) continue;
+    const bucket = landingsByBeat.get(h.landingBeat);
+    if (bucket === undefined) landingsByBeat.set(h.landingBeat, [h.throwBeat]);
+    else bucket.push(h.throwBeat);
+  }
+
+  // --- Events (windowed) ------------------------------------------------------------
+  const inWindow = (beat: number): boolean => beat >= 0 && beat < beatCount;
+  const events: TimelineEvent[] = [];
+  for (const flight of flights) {
+    if (inWindow(flight.throwBeat)) {
+      events.push({
+        kind: 'throw',
+        beat: flight.throwBeat,
+        hand: flight.throwHand,
+        time: flight.throwTime,
+        value: flight.value,
+        landingBeat: flight.landingBeat,
+        landingHand: flight.landingHand,
+        ballId: flight.ballId,
+      });
+    }
+    if (inWindow(flight.landingBeat)) {
+      events.push({
+        kind: 'catch',
+        beat: flight.landingBeat,
+        hand: flight.landingHand,
+        time: flight.arrivalTime,
+        value: flight.value,
+        ballId: flight.ballId,
+      });
+    }
+  }
+  for (const carry of carries) {
+    if (carry.held && inWindow(carry.startBeat)) {
+      events.push({
+        kind: 'hold',
+        hand: carry.hand,
+        startBeat: carry.startBeat,
+        endBeat: carry.endBeat,
+        startTime: carry.startTime,
+        endTime: carry.endTime,
+        beatSpan: carry.endBeat - carry.startBeat,
+        ballId: carry.ballId,
+      });
+    }
+  }
+  // Idle events: a value-0 toss = that hand does nothing this beat (ladder ✕ mark).
+  for (let beat = 0; beat < beatCount; beat++) {
+    for (const toss of throwsAtBeat(beat)) {
+      if (toss.value === 0) {
+        events.push({ kind: 'idle', beat, hand: fromHandOf(beat, toss), time: beatTimeOf(beat) });
+      }
+    }
+  }
+  const kindOrder: Record<TimelineEvent['kind'], number> = { catch: 0, hold: 1, idle: 2, throw: 3 };
+  const eventTime = (event: TimelineEvent): number =>
+    event.kind === 'hold' ? event.startTime : event.time;
+  events.sort((a, b) => {
+    const dt = eventTime(a) - eventTime(b);
+    if (dt !== 0) return dt;
+    return kindOrder[a.kind] - kindOrder[b.kind];
+  });
+
+  return {
+    events,
+    flights,
+    carries,
+    schedule: beatSchedule,
+    beatTime: beatTimeOf,
+    landingScheduleAt: (beat, maxHeight) => {
+      const state = new Array<boolean>(maxHeight).fill(false);
+      for (let offset = 0; offset < maxHeight; offset++) {
+        const throwBeats = landingsByBeat.get(beat + offset);
+        state[offset] = throwBeats !== undefined && throwBeats.some((tb) => tb < beat);
       }
       return state;
     },

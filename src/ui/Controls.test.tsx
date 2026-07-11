@@ -89,6 +89,19 @@ describe('Controls (ui layer)', () => {
     expect(useAppStore.getState().sim.kinematics.handCount).toBe(3);
   });
 
+  it('locks the hand-count stepper while a sync pattern runs (forced 2 hands)', () => {
+    render(<Controls />);
+    act(() => useAppStore.getState().setPattern('(4,4)'));
+    expect(useAppStore.getState().sim.compiled?.sync).toBe(true);
+    const increase = screen.getByLabelText('Hand count increase') as HTMLButtonElement;
+    const decrease = screen.getByLabelText('Hand count decrease') as HTMLButtonElement;
+    expect(increase.disabled).toBe(true);
+    expect(decrease.disabled).toBe(true);
+    // Clicking the (disabled) button changes nothing; the sync sim stays at 2 hands.
+    fireEvent.click(increase);
+    expect(useAppStore.getState().handCount).toBe(2);
+  });
+
   it('toggles the carry path to the cubic comparison and shows the caveat note', () => {
     render(<Controls />);
     fireEvent.click(screen.getByLabelText('Carry path: Cubic'));
@@ -115,20 +128,29 @@ describe('Controls (ui layer)', () => {
     expect((screen.getByLabelText('Hand 0 catch y') as HTMLInputElement).value).toBe('0.3');
   });
 
-  it('hints that synchronous/multiplex/passing notation is unsupported', () => {
+  it('validates synchronous and multiplex notation (now supported)', () => {
     render(<Controls />);
     const input = screen.getByLabelText('Pattern (siteswap)');
-    // A valid vanilla pattern: no unsupported-notation note.
+    // The old "unsupported notation" amber hint is gone.
     expect(screen.queryByText(/aren.t supported yet/i)).toBeNull();
-    // Synchronous notation triggers the friendly nudge (alongside the parse error).
+    // Synchronous notation validates with a ball count.
     fireEvent.change(input, { target: { value: '(4,4)' } });
-    expect(screen.getByText(/aren.t supported yet/i)).toBeTruthy();
-    // Multiplex too.
-    fireEvent.change(input, { target: { value: '[33]' } });
-    expect(screen.getByText(/aren.t supported yet/i)).toBeTruthy();
-    // But a high vanilla throw using a letter (x = 33) is NOT flagged.
-    fireEvent.change(input, { target: { value: '3x' } });
+    expect(screen.getByText(/Valid · 4 balls/)).toBeTruthy();
     expect(screen.queryByText(/aren.t supported yet/i)).toBeNull();
+    // Multiplex validates too.
+    fireEvent.change(input, { target: { value: '[33]33' } });
+    expect(screen.getByText(/Valid · 4 balls/)).toBeTruthy();
+    // A high vanilla throw using a letter (x = 33) still parses as vanilla.
+    fireEvent.change(input, { target: { value: '3x' } });
+    expect(screen.getByText(/Valid ·/)).toBeTruthy();
+  });
+
+  it('previews the 2-hand switch for a sync draft at a non-2 hand count', () => {
+    render(<Controls />);
+    act(() => useAppStore.getState().setHandCount(3));
+    const input = screen.getByLabelText('Pattern (siteswap)');
+    fireEvent.change(input, { target: { value: '(4,4)' } });
+    expect(screen.getByText(/uses 2 hands/i)).toBeTruthy();
   });
 
   it('shows the held-2 note only when a 2-pattern runs at a non-2 hand count', () => {

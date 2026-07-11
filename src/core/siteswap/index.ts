@@ -475,3 +475,9 @@ export function stateSequence(values: readonly number[], maxHeight: number): boo
   }
   return sequence;
 }
+
+// Extended notation (sync `(l,r)` + multiplex `[...]`) lives in ./notation and is
+// re-exported here so `../core/siteswap` remains the single import surface. Vanilla
+// async stays entirely in THIS file (unchanged); notation.ts delegates vanilla text
+// back to `validatePattern` above (no behavior change for vanilla patterns).
+export * from './notation';

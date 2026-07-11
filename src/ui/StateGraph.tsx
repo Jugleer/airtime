@@ -330,6 +330,8 @@ function StatusLine(): ReactElement {
 type GraphModel =
   | { readonly status: 'unavailable'; readonly patternMax: number }
   | { readonly status: 'invalid' }
+  // The running pattern is sync/multiplex — the state graph covers vanilla only (ruling 3).
+  | { readonly status: 'compiled' }
   | {
       readonly status: 'ok';
       readonly graph: CoreStateGraph;
@@ -345,23 +347,29 @@ function useGraphModel(): GraphModel {
 
   const ballCount = sim.ballCount;
   const values = sim.values;
+  const isCompiled = sim.compiled !== undefined;
   const patternMax = maxThrowOf(values);
   const unavailable = patternMax > GRAPH_N_MAX;
 
   const derived = useMemo(() => {
-    if (unavailable || !Number.isInteger(ballCount)) {
+    if (unavailable || isCompiled || !Number.isInteger(ballCount)) {
       return null;
     }
     const graph = buildStateGraph(ballCount, graphMaxHeight);
     const layout = layoutStateGraph(graph);
     return { graph, layout };
-  }, [ballCount, graphMaxHeight, unavailable]);
+  }, [ballCount, graphMaxHeight, unavailable, isCompiled]);
 
   const cycle = useMemo(
     () => (derived ? patternCycle(values, graphMaxHeight) : null),
     [derived, values, graphMaxHeight],
   );
 
+  // Sync/multiplex is not a vanilla state-graph cycle — show an honest placeholder
+  // and disable navigation rather than draw a misleading (or empty) graph (ruling 3).
+  if (isCompiled) {
+    return { status: 'compiled' };
+  }
   if (unavailable) {
     return { status: 'unavailable', patternMax };
   }
@@ -382,6 +390,14 @@ function StateGraphBody(): ReactElement {
       <p role="note" style={{ ...statusStyle(palette), color: palette.amber }}>
         State graph unavailable for this pattern (max throw {model.patternMax} &gt; {GRAPH_N_MAX}). The
         simulation still runs; type a pattern with throws ≤ {GRAPH_N_MAX} to navigate the graph.
+      </p>
+    );
+  }
+  if (model.status === 'compiled') {
+    return (
+      <p role="note" style={{ ...statusStyle(palette), color: palette.amber }}>
+        State graph covers vanilla (asynchronous) patterns only (for now). Sync and multiplex
+        patterns still run — navigation from the graph is disabled here.
       </p>
     );
   }
