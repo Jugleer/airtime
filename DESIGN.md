@@ -268,15 +268,41 @@ follows the 3D toggle (same palette, same ballId mapping). This view doubles as 
 **engine debug view** — it is built before the 3D scene in the plan for exactly
 that reason.
 
+### Bottom dock (tri-state; round 3, owner-approved)
+
+The bottom dock hosts one of: **None | Charts & energy | Siteswap explorer**
+(segmented header control; codec key `dm`, legacy boolean `cv` kept for old
+links and healed to the equivalent tri-state at decode).
+
 ### Charts panel
 
 Per-hand |v|, |a|, |j| (magnitude default, per-axis toggle). X-axis = the same
 window as the timeline bar; a shared cursor line tracks `simTime` across all charts.
 Rendering: lightweight canvas (uPlot or hand-rolled); no heavyweight chart lib.
+Legend squares toggle hands on/off; hovering highlights the hand in the scene.
 
 ### Energy panel
 
 Table per hand: W⁺, |W⁻|, avg power (see §4.5), plus totals.
+
+### Siteswap explorer (round 3, owner-approved)
+
+Pure-core enumeration of valid vanilla patterns for (b, period ≤ 9, max throw
+≤ 12): closed cycles in the state graph, canonical lexicographically-greatest
+rotation, fundamental period only; filters no-0s / no-2s / prime-only; ≤ 500
+results with an explicit truncation notice. Clicking a result navigates through
+the same live-splice path as the pattern box.
+
+### Hand workspace (advisory; round 3, owner-approved)
+
+One shared volume spec (sphere / cube / regular tetrahedron / uploaded STL,
+per-axis display-frame scale 0.1–2 m, opt-in) instantiated per hand, centered
+on each hand's catch↔throw anchor. Strictly ADVISORY: the overlay renders the
+volume plus red hand-path spans where the path exits it and a per-hand
+percentage badge; paths are never re-planned. Edited in a popup with a live 3D
+preview; primitives ride the URL codec (`ws*` keys), STL meshes are
+session-only (encode degrades to disabled). Non-watertight STLs fall back to
+bounding-box containment (disclosed in the panel).
 
 ### Settings / controls
 

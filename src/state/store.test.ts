@@ -8,6 +8,7 @@ import {
   DEFAULT_CARRY_PATH_KIND,
   DEFAULT_CHART_AXIS_MODE,
   DEFAULT_CHARTS_VISIBLE,
+  DEFAULT_DOCK_MODE,
   DEFAULT_DWELL_TIME,
   DEFAULT_GHOSTS_ENABLED,
   DEFAULT_GRAVITY_VALUE,
@@ -69,6 +70,7 @@ beforeEach(() => {
     timelineWindow: DEFAULT_TIMELINE_WINDOW,
     trailLength: DEFAULT_TRAIL_LENGTH,
     ghostsEnabled: DEFAULT_GHOSTS_ENABLED,
+    dockMode: DEFAULT_DOCK_MODE,
     chartsVisible: DEFAULT_CHARTS_VISIBLE,
     chartAxisMode: DEFAULT_CHART_AXIS_MODE,
   });
@@ -448,6 +450,29 @@ describe('charts & energy panel settings (DESIGN.md §6)', () => {
     useAppStore.getState().toggleCharts();
     useAppStore.getState().setChartAxisMode('z');
     expect(useAppStore.getState().sim).toBe(before);
+  });
+
+  it('the bottom-dock tri-state keeps chartsVisible in lockstep', () => {
+    // Default: nothing shown (matches DEFAULT_CHARTS_VISIBLE = false).
+    expect(DEFAULT_DOCK_MODE).toBe('none');
+    expect(useAppStore.getState().dockMode).toBe('none');
+    expect(useAppStore.getState().chartsVisible).toBe(false);
+
+    // Charts mode ⇒ chartsVisible true (ui/Charts reads it).
+    useAppStore.getState().setDockMode('charts');
+    expect(useAppStore.getState().chartsVisible).toBe(true);
+
+    // Explorer mode ⇒ charts hidden (no per-frame chart sampling).
+    useAppStore.getState().setDockMode('explorer');
+    expect(useAppStore.getState().dockMode).toBe('explorer');
+    expect(useAppStore.getState().chartsVisible).toBe(false);
+
+    // The legacy boolean setters still map onto the tri-state.
+    useAppStore.getState().setChartsVisible(true);
+    expect(useAppStore.getState().dockMode).toBe('charts');
+    useAppStore.getState().toggleCharts();
+    expect(useAppStore.getState().dockMode).toBe('none');
+    expect(useAppStore.getState().chartsVisible).toBe(false);
   });
 });
 

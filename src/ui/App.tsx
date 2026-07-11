@@ -20,6 +20,7 @@ import { useAppStore } from '../state';
 import { Scene, type SceneColors } from '../render3d';
 import { Charts } from './Charts';
 import { Controls } from './Controls';
+import { Explorer } from './Explorer';
 import { Help } from './Help';
 import { Ladder } from './Ladder';
 import {
@@ -44,6 +45,8 @@ import { TimelineBar } from './TimelineBar';
 import { THEME_CSS, usePalette, type Palette } from './theme';
 import { useAudio } from './useAudio';
 import { useClock } from './useClock';
+import { Button } from './widgets';
+import type { DockMode } from '../state';
 
 /** Map the active palette to the subset of colors the 3D scene needs (ui → render3d). */
 function sceneColorsOf(palette: Palette): SceneColors {
@@ -270,15 +273,65 @@ function Sidebar({ onCollapse }: { onCollapse(): void }): ReactElement {
   );
 }
 
-/** The bottom dock (charts + energy). The top-edge splitter appears only when the
- *  dock is expanded; before any drag the dock is natural height (reproduces the
- *  pre-splitter layout). Once dragged it takes a fixed height and scrolls inside. */
+/** The tri-state selector in the dock header (owner round-2 #1; ruling 2026-07-11):
+ *  the bottom panel shows nothing, the charts & energy dock, or the siteswap
+ *  explorer. A segmented control (three buttons); the active mode is the accent
+ *  fill. Always visible — even when 'none' — so the panel is reachable again. */
+function DockModeSwitch(): ReactElement {
+  const palette = usePalette();
+  const dockMode = useAppStore((state) => state.dockMode);
+  const setDockMode = useAppStore((state) => state.setDockMode);
+  const options: readonly { readonly value: DockMode; readonly label: string }[] = [
+    { value: 'none', label: 'None' },
+    { value: 'charts', label: 'Charts & energy' },
+    { value: 'explorer', label: 'Siteswap explorer' },
+  ];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+      <span
+        style={{
+          fontSize: '0.68rem',
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: palette.textMuted,
+        }}
+      >
+        Bottom panel
+      </span>
+      <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+        {options.map((option) => {
+          const active = option.value === dockMode;
+          return (
+            <Button
+              key={option.value}
+              onClick={() => setDockMode(option.value)}
+              ariaLabel={`Bottom panel: ${option.label}`}
+              ariaPressed={active}
+              variant={active ? 'primary' : 'default'}
+            >
+              {option.label}
+            </Button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** The bottom dock: a slim always-present mode switch (tri-state) over the active
+ *  body (nothing / charts & energy / siteswap explorer). The top-edge splitter and
+ *  the natural-vs-fixed height behavior are preserved for BOTH non-empty modes;
+ *  before any drag the dock is natural height (reproduces the pre-splitter layout),
+ *  once dragged it takes a fixed height and scrolls inside (DESIGN.md §6). */
 function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
-  const chartsVisible = useAppStore((state) => state.chartsVisible);
+  const palette = usePalette();
+  const dockMode = useAppStore((state) => state.dockMode);
+  const expanded = dockMode !== 'none';
   const dockRef = useRef<HTMLDivElement>(null);
   const [measured, setMeasured] = useState(240);
 
-  // Track the dock's natural height so a first drag starts from where it sits.
+  // Track the dock body's natural height so a first drag starts from where it sits.
   useLayoutEffect(() => {
     const element = dockRef.current;
     if (!element) {
@@ -292,9 +345,9 @@ function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
       return () => observer.disconnect();
     }
     return undefined;
-  }, [chartsVisible]);
+  }, [dockMode]);
 
-  const fixedHeight = chartsVisible && layout.dockHeight != null ? layout.dockHeight : null;
+  const fixedHeight = expanded && layout.dockHeight != null ? layout.dockHeight : null;
   return (
     <div
       style={{
@@ -306,7 +359,7 @@ function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
         height: fixedHeight != null ? `${fixedHeight}px` : 'auto',
       }}
     >
-      {chartsVisible ? (
+      {expanded ? (
         <Splitter
           orientation="horizontal"
           // Clamp to [DOCK_MIN, DOCK_MAX]: before any drag the value is the dock's
@@ -316,13 +369,34 @@ function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
           min={DOCK_MIN}
           max={DOCK_MAX}
           sign={-1}
-          ariaLabel="Resize charts dock"
+          ariaLabel="Resize bottom dock"
           onChange={layout.setDockHeight}
         />
       ) : null}
-      <div ref={dockRef} style={{ flex: 1, minHeight: 0, overflowY: fixedHeight != null ? 'auto' : 'visible' }}>
-        <Charts />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          padding: expanded ? '0 0.15rem 0.4rem' : '0.1rem 0.15rem',
+          flexShrink: 0,
+        }}
+      >
+        <DockModeSwitch />
+        <div style={{ flex: 1 }} />
       </div>
+      {expanded ? (
+        <div
+          ref={dockRef}
+          style={{ flex: 1, minHeight: 0, overflowY: fixedHeight != null ? 'auto' : 'visible' }}
+        >
+          {dockMode === 'charts' ? <Charts /> : <Explorer />}
+        </div>
+      ) : (
+        <p style={{ margin: '0 0.15rem 0.2rem', fontSize: '0.74rem', color: palette.textMuted }}>
+          Pick a bottom panel to show per-hand kinematics &amp; energy charts, or explore siteswaps
+          by ball count and period.
+        </p>
+      )}
     </div>
   );
 }

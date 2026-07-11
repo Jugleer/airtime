@@ -61,6 +61,7 @@ import {
 } from '../state/simulation';
 import { PATTERN_LIBRARY, type LibraryEntry } from './library';
 import { usePalette, type Palette } from './theme';
+import { WorkspaceButton } from './WorkspacePanel';
 import {
   Button,
   CheckToggle,
@@ -645,6 +646,9 @@ export function Controls(): ReactElement {
           onChange={togglePositionsEditor}
         />
         {positionsEditorOpen ? <HandPositionsTable /> : null}
+        {/* The hand-workspace editor (owner feature 2026-07-11): a configurable
+            advisory bounding volume per hand. Opens a non-darkening popup. */}
+        <WorkspaceButton />
       </section>
 
       {/* View group (theme + viewing preferences), relocated here from the deleted

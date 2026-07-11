@@ -31,6 +31,31 @@ export type CarryPathKindCode = 'quintic' | 'cubic';
 export type HandPresetCode = 'line' | 'circle';
 /** The chart axis modes (mirrors state's ChartAxisMode). */
 export type ChartAxisModeCode = 'magnitude' | 'x' | 'y' | 'z';
+/** The bottom-dock tri-state (mirrors state's DockMode). */
+export type DockModeCode = 'none' | 'charts' | 'explorer';
+
+/** The workspace shape kinds (mirrors workspace's WorkspaceShapeKind). */
+export type WorkspaceShapeKindCode = 'sphere' | 'cube' | 'tetra' | 'stl';
+
+/** Per-axis workspace half-extents in the display frame (mirrors WorkspaceScale). */
+export interface WorkspaceScaleCode {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/**
+ * The codec-visible workspace spec (orchestrator ruling 4): the shared bounding
+ * volume's shape kind, per-axis display-frame scale, and enabled flag. Primitives
+ * round-trip losslessly; an 'stl' kind is NOT persisted — it encodes with enabled
+ * forced off, so on share/reload it degrades to a disabled STL workspace (the store
+ * surfaces a "re-upload the mesh" note). Geometry never enters the URL.
+ */
+export interface WorkspaceConfigCode {
+  readonly kind: WorkspaceShapeKindCode;
+  readonly scale: WorkspaceScaleCode;
+  readonly enabled: boolean;
+}
 
 /**
  * The full shareable configuration (DESIGN.md §6: pattern, all sliders,
@@ -58,6 +83,12 @@ export interface ShareConfig {
   readonly trailLength: number;
   readonly ghostsEnabled: boolean;
   readonly chartsVisible: boolean;
+  /**
+   * The bottom dock's tri-state (codec key `dm`; orchestrator ruling 2026-07-11).
+   * Optional so old `v=1` links without it still decode — a `cv`-only link maps to
+   * 'charts'/'none' at apply time (backward compatible). When present it wins.
+   */
+  readonly dockMode?: DockModeCode;
   readonly chartAxisMode: ChartAxisModeCode;
   readonly graphMaxHeight: number;
   readonly graphVisible: boolean;
@@ -73,6 +104,13 @@ export interface ShareConfig {
    * still decode (backward compatible) and the round-trip stays lossless.
    */
   readonly time?: number;
+  /**
+   * Optional hand-workspace spec (owner feature 2026-07-11, codec keys `ws*`).
+   * Optional so old `v=1` links without it still decode and the shared round-trip
+   * stays lossless when it is absent. Primitives round-trip exactly; an 'stl' kind
+   * degrades to a disabled STL on reload (its geometry never travels in the URL).
+   */
+  readonly workspace?: WorkspaceConfigCode;
 }
 
 /** The current codec version. Bump only with a decode migration (never silently). */
@@ -150,6 +188,21 @@ const CODE_TO_PRESET: Record<string, HandPresetCode> = { l: 'line', c: 'circle' 
 const AXIS_CODES: readonly ChartAxisModeCode[] = ['magnitude', 'x', 'y', 'z'];
 const AXIS_TO_CODE: Record<ChartAxisModeCode, string> = { magnitude: 'm', x: 'x', y: 'y', z: 'z' };
 const CODE_TO_AXIS: Record<string, ChartAxisModeCode> = { m: 'magnitude', x: 'x', y: 'y', z: 'z' };
+const DOCK_TO_CODE: Record<DockModeCode, string> = { none: 'n', charts: 'c', explorer: 'x' };
+const CODE_TO_DOCK: Record<string, DockModeCode> = { n: 'none', c: 'charts', x: 'explorer' };
+// Workspace shape kind codes (stl = 'x' so it never collides with a primitive).
+const WORKSPACE_TO_CODE: Record<WorkspaceShapeKindCode, string> = {
+  sphere: 's',
+  cube: 'b',
+  tetra: 't',
+  stl: 'x',
+};
+const CODE_TO_WORKSPACE: Record<string, WorkspaceShapeKindCode> = {
+  s: 'sphere',
+  b: 'cube',
+  t: 'tetra',
+  x: 'stl',
+};
 
 /** Normalize a CSS color to `#rrggbb`, or null when it is not a 6-digit hex. */
 function normalizeHex(raw: string): string | null {
@@ -187,7 +240,19 @@ export function encodeConfig(config: ShareConfig): string {
   params.set('tw', fixed(config.timelineWindow));
   params.set('tl', fixed(config.trailLength));
   params.set('gh', config.ghostsEnabled ? '1' : '0');
+  // `cv` (legacy boolean) stays for backward compatibility; `dm` carries the full
+  // tri-state and wins on decode when present (orchestrator ruling 2026-07-11).
+  // `dm` is ALWAYS emitted, deriving from chartsVisible when dockMode is absent —
+  // the same derivation decode applies to legacy cv-only links — so encode→decode
+  // →encode is stable (idempotence property).
   params.set('cv', config.chartsVisible ? '1' : '0');
+  const dockMode =
+    config.dockMode !== undefined && config.dockMode in DOCK_TO_CODE
+      ? config.dockMode
+      : config.chartsVisible
+        ? 'charts'
+        : 'none';
+  params.set('dm', DOCK_TO_CODE[dockMode]);
   params.set('ca', AXIS_TO_CODE[config.chartAxisMode]);
   params.set('gn', String(config.graphMaxHeight));
   params.set('gv', config.graphVisible ? '1' : '0');
@@ -200,6 +265,16 @@ export function encodeConfig(config: ShareConfig): string {
   // Optional playhead-time bookmark. Key `t` is free (no collision with tp/tw/tl).
   if (config.time !== undefined && Number.isFinite(config.time)) {
     params.set('t', fixedTime(config.time));
+  }
+  // Optional hand-workspace spec (ruling 4). An 'stl' kind forces enabled off — its
+  // geometry cannot travel in a URL, so it degrades to a disabled STL on reload.
+  if (config.workspace !== undefined) {
+    const ws = config.workspace;
+    params.set('wsk', WORKSPACE_TO_CODE[ws.kind]);
+    params.set('wsx', fixed(ws.scale.x));
+    params.set('wsy', fixed(ws.scale.y));
+    params.set('wsz', fixed(ws.scale.z));
+    params.set('wse', ws.kind === 'stl' ? '0' : ws.enabled ? '1' : '0');
   }
   return params.toString();
 }
@@ -282,6 +357,16 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
   if (axis !== null && axis in CODE_TO_AXIS) {
     out.chartAxisMode = CODE_TO_AXIS[axis];
   }
+  // Bottom-dock tri-state. When `dm` is present it wins. A `cv`-only (legacy)
+  // link derives dockMode HERE, not downstream: the boot path merges the decoded
+  // partial over currentConfig(), which always carries a concrete dockMode, so an
+  // absent key would never reach a derivation in applyConfig.
+  const dock = params.get('dm');
+  if (dock !== null && dock in CODE_TO_DOCK) {
+    out.dockMode = CODE_TO_DOCK[dock];
+  } else if (out.chartsVisible !== undefined) {
+    out.dockMode = out.chartsVisible ? 'charts' : 'none';
+  }
 
   const throwPoints = decodePoints(params.get('tp'));
   if (throwPoints !== null) {
@@ -318,6 +403,23 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
     out.time = Math.max(0, time);
   }
 
+  // Optional hand-workspace spec (keys `ws*`). Present only when the kind decodes;
+  // missing/garbage axes fall back to a neutral 0.4 half-extent (the store re-clamps).
+  const wsKindCode = params.get('wsk');
+  if (wsKindCode !== null && wsKindCode in CODE_TO_WORKSPACE) {
+    const kind = CODE_TO_WORKSPACE[wsKindCode]!;
+    out.workspace = {
+      kind,
+      scale: {
+        x: parseNum(params.get('wsx')) ?? 0.4,
+        y: parseNum(params.get('wsy')) ?? 0.4,
+        z: parseNum(params.get('wsz')) ?? 0.4,
+      },
+      // An 'stl' kind never travels enabled — it degrades to disabled on reload.
+      enabled: kind === 'stl' ? false : parseBool(params.get('wse')) === true,
+    };
+  }
+
   return out as Partial<ShareConfig>;
 }
 
@@ -351,6 +453,28 @@ function isCameraPose(value: unknown): value is CameraPose {
   const triple = (v: unknown): boolean =>
     Array.isArray(v) && v.length === 3 && v.every(isFiniteNumber);
   return triple(pose.position) && triple(pose.target);
+}
+
+/** Structural guard for a {@link WorkspaceConfigCode} (used by isShareConfigLike). */
+function isWorkspaceConfigLike(value: unknown): value is WorkspaceConfigCode {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const ws = value as { kind?: unknown; scale?: unknown; enabled?: unknown };
+  if (ws.kind !== 'sphere' && ws.kind !== 'cube' && ws.kind !== 'tetra' && ws.kind !== 'stl') {
+    return false;
+  }
+  if (typeof ws.enabled !== 'boolean') {
+    return false;
+  }
+  const scale = ws.scale as { x?: unknown; y?: unknown; z?: unknown } | null;
+  return (
+    scale !== null &&
+    typeof scale === 'object' &&
+    isFiniteNumber(scale.x) &&
+    isFiniteNumber(scale.y) &&
+    isFiniteNumber(scale.z)
+  );
 }
 
 /**
@@ -412,6 +536,19 @@ export function isShareConfigLike(raw: unknown): raw is ShareConfig {
   }
   // `time` is optional; if present it must be a finite number (absent = load at 0).
   if (config.time !== undefined && !isFiniteNumber(config.time)) {
+    return false;
+  }
+  // `dockMode` is optional (absent ⇒ derived from chartsVisible); validate if present.
+  if (
+    config.dockMode !== undefined &&
+    config.dockMode !== 'none' &&
+    config.dockMode !== 'charts' &&
+    config.dockMode !== 'explorer'
+  ) {
+    return false;
+  }
+  // `workspace` is optional; if present it must be a well-formed spec.
+  if (config.workspace !== undefined && !isWorkspaceConfigLike(config.workspace)) {
     return false;
   }
   return (

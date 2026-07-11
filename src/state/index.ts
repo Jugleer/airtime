@@ -74,6 +74,15 @@ import {
   savePresetTo,
 } from './presets';
 import { sampleCamera } from './sceneBridge';
+import {
+  clampScale,
+  clampScaleValue,
+  DEFAULT_WORKSPACE,
+  type ParsedStl,
+  type WorkspaceConfig,
+  type WorkspaceScale,
+  type WorkspaceShapeKind,
+} from '../workspace';
 
 // --- Defaults & slider ranges (DESIGN.md §7) --------------------------------
 
@@ -227,6 +236,17 @@ export const DEFAULT_CHARTS_VISIBLE = false;
 /** Charts plot magnitude by default; the per-axis toggle switches to x/y/z. */
 export const DEFAULT_CHART_AXIS_MODE: ChartAxisMode = 'magnitude';
 
+/**
+ * The bottom dock's tri-state (owner round-2 #1, orchestrator ruling 2026-07-11):
+ * show nothing, the charts & energy panel, or the siteswap explorer. Replaces the
+ * old boolean charts toggle; `chartsVisible` is kept as the derived alias
+ * `dockMode === 'charts'` so ui/Charts (which reads it) is unchanged, and the URL
+ * codec stays backward compatible (an old `cv` boolean decodes to 'charts'/'none').
+ */
+export type DockMode = 'none' | 'charts' | 'explorer';
+/** The bottom dock starts empty (matches the former DEFAULT_CHARTS_VISIBLE = false). */
+export const DEFAULT_DOCK_MODE: DockMode = 'none';
+
 // --- State-graph settings (DESIGN.md §5, §7) ----------------------------------
 // The graph itself is derived in the UI from core/stategraph per (b, N) and
 // memoized; the store owns N, the panel visibility, an in-progress transition
@@ -359,7 +379,10 @@ export interface AppStore {
   readonly ghostsEnabled: boolean;
 
   // charts & energy panel settings (DESIGN.md §6) — presentation only, no rebuild.
-  /** Whether the charts + energy panel is shown (also gates per-frame sampling). */
+  /** The bottom dock's tri-state: nothing / charts & energy / siteswap explorer. */
+  readonly dockMode: DockMode;
+  /** Whether the charts + energy panel is shown (= dockMode === 'charts'; gates
+   *  per-frame sampling). Kept in sync with {@link dockMode} for ui/Charts. */
   readonly chartsVisible: boolean;
   /** Which scalar the charts plot: magnitude (default) or one axis component. */
   readonly chartAxisMode: ChartAxisMode;
@@ -391,6 +414,19 @@ export interface AppStore {
   // theme (redesign 2026-07-10) — a view preference, not shared via the codec.
   /** Active color theme (dark by default). */
   readonly theme: ThemeName;
+
+  // hand workspace (owner feature 2026-07-11) — the ONE shared advisory bounding
+  // volume (shape kind + per-axis display-frame scale + enabled), instantiated per
+  // hand centered on its anchor (workspace ruling 2). Presentation/advisory only: it
+  // never rebuilds the sim or alters any path (ruling 1). The primitive spec is
+  // codec-encoded; the uploaded STL mesh is SESSION-ONLY (ruling 4) so it lives here
+  // out of band, never in the URL or localStorage.
+  /** The shared workspace spec (shape kind, per-axis scale, enabled). */
+  readonly workspace: WorkspaceConfig;
+  /** The parsed STL mesh (session-only; null unless the kind is 'stl' with an upload). */
+  readonly workspaceMesh: ParsedStl | null;
+  /** A transient note (STL parse warning, or the reload-degraded message), else null. */
+  readonly workspaceNote: string | null;
 
   // presets (DESIGN.md §6) — names of the localStorage saves (config lives there).
   /** Sorted names of the saved presets (empty when storage is unavailable). */
@@ -487,7 +523,11 @@ export interface AppStore {
   setTrailLength(trailLength: number): void;
   setGhostsEnabled(ghostsEnabled: boolean): void;
   toggleGhosts(): void;
-  /** Show/hide the charts + energy panel (hidden ⇒ no per-frame sampling). */
+  /** Select the bottom dock's tri-state (nothing / charts / explorer); keeps
+   *  {@link chartsVisible} in sync (= mode === 'charts'). */
+  setDockMode(mode: DockMode): void;
+  /** Show/hide the charts + energy panel (hidden ⇒ no per-frame sampling). Maps
+   *  onto {@link dockMode}: true ⇒ 'charts', false ⇒ 'none'. */
   setChartsVisible(chartsVisible: boolean): void;
   toggleCharts(): void;
   /** Choose the charts' plotted scalar: magnitude or an x/y/z component. */
@@ -517,6 +557,21 @@ export interface AppStore {
   // --- Theme (redesign 2026-07-10) — view preference, not codec-persisted -----
   setTheme(theme: ThemeName): void;
   toggleTheme(): void;
+
+  // --- Hand workspace (owner feature 2026-07-11) — advisory only, no sim touch ---
+  /** Choose the workspace shape (sphere/cube/tetra/stl). Picking a non-stl kind
+   *  keeps the uploaded mesh so it can be re-selected; clears any note. */
+  setWorkspaceKind(kind: WorkspaceShapeKind): void;
+  /** Set one display-frame axis half-extent (m), clamped to the slider range. */
+  setWorkspaceScaleAxis(axis: keyof WorkspaceScale, value: number): void;
+  /** Enable/disable the advisory overlay + violation flagging. */
+  setWorkspaceEnabled(enabled: boolean): void;
+  toggleWorkspaceEnabled(): void;
+  /** Adopt a parsed STL as the workspace mesh (session-only). A usable mesh switches
+   *  the kind to 'stl'; a degenerate one leaves the kind and surfaces its warning. */
+  setWorkspaceMesh(mesh: ParsedStl | null): void;
+  /** Reset the workspace to its default (clears the mesh + any note). */
+  resetWorkspace(): void;
 
   // --- Save / share (DESIGN.md §6) ------------------------------------------
   /**
@@ -774,6 +829,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     trailLength: DEFAULT_TRAIL_LENGTH,
     ghostsEnabled: DEFAULT_GHOSTS_ENABLED,
 
+    dockMode: DEFAULT_DOCK_MODE,
     chartsVisible: DEFAULT_CHARTS_VISIBLE,
     chartAxisMode: DEFAULT_CHART_AXIS_MODE,
 
@@ -790,6 +846,10 @@ export const useAppStore = create<AppStore>((set, get) => {
     cameraView: DEFAULT_CAMERA_POSE,
 
     theme: DEFAULT_THEME,
+
+    workspace: DEFAULT_WORKSPACE,
+    workspaceMesh: null,
+    workspaceNote: null,
 
     presetNames: presetNamesOf(readPresetMap(getLocalStorage())),
 
@@ -1214,9 +1274,19 @@ export const useAppStore = create<AppStore>((set, get) => {
     setGhostsEnabled: (ghostsEnabled) => set({ ghostsEnabled }),
     toggleGhosts: () => set((state) => ({ ghostsEnabled: !state.ghostsEnabled })),
 
-    // Charts settings never touch the sim (DESIGN.md §2): plain presentation setters.
-    setChartsVisible: (chartsVisible) => set({ chartsVisible }),
-    toggleCharts: () => set((state) => ({ chartsVisible: !state.chartsVisible })),
+    // Dock / charts settings never touch the sim (DESIGN.md §2): plain presentation
+    // setters. `dockMode` is the tri-state source of truth; `chartsVisible` is kept
+    // in lockstep (= 'charts') so ui/Charts and the URL codec stay unchanged.
+    setDockMode: (mode) => set({ dockMode: mode, chartsVisible: mode === 'charts' }),
+    setChartsVisible: (chartsVisible) =>
+      set({ chartsVisible, dockMode: chartsVisible ? 'charts' : 'none' }),
+    // Keyed off `chartsVisible` (not dockMode) so ui/Charts's own Hide/Show button
+    // — and tests that set chartsVisible directly — flip predictably.
+    toggleCharts: () =>
+      set((state) => {
+        const chartsVisible = !state.chartsVisible;
+        return { chartsVisible, dockMode: chartsVisible ? 'charts' : 'none' };
+      }),
     setChartAxisMode: (chartAxisMode) => set({ chartAxisMode }),
 
     setPlaying: (playing) => set({ playing }),
@@ -1272,6 +1342,37 @@ export const useAppStore = create<AppStore>((set, get) => {
     setTheme: (theme) => set({ theme }),
     toggleTheme: () => set((state) => ({ theme: state.theme === 'dark' ? 'light' : 'dark' })),
 
+    // --- Hand workspace (owner feature 2026-07-11) — advisory, never touches the
+    // sim (DESIGN.md §2): plain setters. The overlay + violation sampling react to
+    // these in render3d, recomputing once per (sim identity, workspace config). ---
+    setWorkspaceKind: (kind) =>
+      set((state) => ({ workspace: { ...state.workspace, kind }, workspaceNote: null })),
+    setWorkspaceScaleAxis: (axis, value) =>
+      set((state) => ({
+        workspace: {
+          ...state.workspace,
+          scale: { ...state.workspace.scale, [axis]: clampScaleValue(value) },
+        },
+      })),
+    setWorkspaceEnabled: (enabled) =>
+      set((state) => ({ workspace: { ...state.workspace, enabled } })),
+    toggleWorkspaceEnabled: () =>
+      set((state) => ({ workspace: { ...state.workspace, enabled: !state.workspace.enabled } })),
+    setWorkspaceMesh: (mesh) => {
+      // A usable mesh (≥ 1 triangle) becomes the active STL workspace; a degenerate
+      // parse keeps the current shape and just surfaces the warning so the user knows.
+      if (mesh && mesh.triangleCount > 0) {
+        set((state) => ({
+          workspace: { ...state.workspace, kind: 'stl' },
+          workspaceMesh: mesh,
+          workspaceNote: mesh.warning,
+        }));
+      } else {
+        set({ workspaceMesh: mesh, workspaceNote: mesh ? mesh.warning : null });
+      }
+    },
+    resetWorkspace: () => set({ workspace: DEFAULT_WORKSPACE, workspaceMesh: null, workspaceNote: null }),
+
     // --- Save / share (DESIGN.md §6) ------------------------------------------
     currentConfig: () => {
       const s = get();
@@ -1298,6 +1399,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         timelineWindow: s.timelineWindow,
         trailLength: s.trailLength,
         ghostsEnabled: s.ghostsEnabled,
+        dockMode: s.dockMode,
         chartsVisible: s.chartsVisible,
         chartAxisMode: s.chartAxisMode,
         graphMaxHeight: s.graphMaxHeight,
@@ -1311,6 +1413,9 @@ export const useAppStore = create<AppStore>((set, get) => {
         // the share link / preset / JSON so opening it seeks to the same moment.
         // Optional in the codec — a link without `t` simply loads at t = 0.
         time: s.simTime,
+        // Hand-workspace spec (owner feature 2026-07-11): primitives round-trip; an
+        // 'stl' kind degrades to disabled on reload (the mesh is session-only).
+        workspace: s.workspace,
       };
     },
 
@@ -1391,6 +1496,27 @@ export const useAppStore = create<AppStore>((set, get) => {
       const floor = targetMax <= GRAPH_N_MAX ? Math.max(GRAPH_N_MIN, targetMax) : GRAPH_N_MIN;
       const graphMaxHeight = clamp(Math.round(config.graphMaxHeight), floor, GRAPH_N_MAX);
 
+      // Hand workspace (owner feature 2026-07-11): apply the shared spec when the
+      // config carries one, else the default. An 'stl' kind can't carry its mesh in a
+      // link (ruling 4), so it degrades to disabled with a re-upload note; the mesh
+      // is always cleared on a config load (it is session-only).
+      let workspace: WorkspaceConfig = DEFAULT_WORKSPACE;
+      let workspaceNote: string | null = null;
+      if (config.workspace) {
+        const scale = clampScale(config.workspace.scale);
+        if (config.workspace.kind === 'stl') {
+          workspace = { kind: 'stl', scale, enabled: false };
+          workspaceNote = 'STL workspaces cannot travel in a link — re-upload the mesh to re-enable it.';
+        } else {
+          workspace = { kind: config.workspace.kind, scale, enabled: config.workspace.enabled };
+        }
+      }
+
+      // Bottom-dock tri-state: prefer the explicit dockMode; fall back to the legacy
+      // boolean `chartsVisible` so an old `cv`-only link decodes to the equivalent
+      // tri-state (backward compatible, orchestrator ruling 2026-07-11).
+      const dockMode: DockMode = config.dockMode ?? (config.chartsVisible ? 'charts' : 'none');
+
       set({
         pattern: patternText,
         validation,
@@ -1413,7 +1539,8 @@ export const useAppStore = create<AppStore>((set, get) => {
         timelineWindow,
         trailLength: clamp(config.trailLength, TRAIL_LENGTH_MIN, TRAIL_LENGTH_MAX),
         ghostsEnabled: config.ghostsEnabled,
-        chartsVisible: config.chartsVisible,
+        dockMode,
+        chartsVisible: dockMode === 'charts',
         chartAxisMode: config.chartAxisMode,
         graphMaxHeight,
         graphVisible: config.graphVisible,
@@ -1422,6 +1549,9 @@ export const useAppStore = create<AppStore>((set, get) => {
         catchTickEnabled: config.catchTickEnabled,
         audioVolume: clamp(config.audioVolume, AUDIO_VOLUME_MIN, AUDIO_VOLUME_MAX),
         cameraView: config.camera,
+        workspace,
+        workspaceMesh: null,
+        workspaceNote,
         baseParams,
         epochs: [],
         baseKinematics,

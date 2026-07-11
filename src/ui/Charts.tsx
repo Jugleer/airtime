@@ -398,9 +398,12 @@ function Legend({
 }
 
 /**
- * The collapsible charts + energy DOCK. The toggle collapses the whole dock to a
- * slim tab bar; when collapsed the body unmounts, so no per-frame sampling runs.
- * The header never subscribes to simTime, so it never re-renders per frame.
+ * The charts + energy DOCK body. Since the tri-state bottom dock (round 3), App
+ * mounts this only when dockMode === 'charts', so chartsVisible is always true
+ * here and the internal collapsed slim-tab branch is unreachable in-app (kept
+ * for its isolated tests; the Hide button now collapses the dock to None).
+ * When unmounted, no per-frame sampling runs. The header never subscribes to
+ * simTime, so it never re-renders per frame.
  */
 export function Charts(): ReactElement {
   const palette = usePalette();

@@ -281,3 +281,13 @@ describe('Controls view reset-to-defaults', () => {
     expect(state.trailLength).toBeCloseTo(DEFAULT_TRAIL_LENGTH, 9);
   });
 });
+
+describe('Controls hand-workspace launcher', () => {
+  it('shows a Workspace button that opens the editor popup', () => {
+    render(<Controls />);
+    const launch = screen.getByLabelText('Open the hand workspace editor');
+    expect(launch).toBeTruthy();
+    fireEvent.click(launch);
+    expect(screen.getByRole('dialog', { name: 'Hand workspace' })).toBeTruthy();
+  });
+});

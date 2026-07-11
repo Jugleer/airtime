@@ -14,6 +14,8 @@
 // inside a 32-bit int. `boolean[]` states (as core/siteswap returns) convert via
 // {@link stateToBits} / {@link bitsToState}.
 
+import { formatPattern } from '../siteswap';
+
 /** Default N for the state graph (DESIGN.md §7). */
 export const GRAPH_DEFAULT_N = 7;
 /** Hard cap on N (DESIGN.md §5: C(N, b) explodes beyond this). */
@@ -738,4 +740,355 @@ export function layoutStateGraph(graph: StateGraph, options?: GraphLayoutOptions
     }
   }
   return { nodes, levelCount: levels.length, maxNodesPerLevel, coordOf };
+}
+
+// ============================================================================
+// Vanilla-siteswap enumeration — the "siteswap explorer" generator (DESIGN.md
+// §5; orchestrator ruling 2026-07-11). Enumerates every valid vanilla async
+// siteswap of a given (ballCount b, period L, maxThrow N) by walking CLOSED
+// CYCLES in the (b, N) state graph: a period-L pattern is a length-L closed walk
+// s0 → s1 → … → s_{L-1} → s0, its throw values read off the traversed edges (each
+// edge is a legal throw and popcount = b is preserved, so every walk is a valid
+// siteswap by construction — no separate validator pass needed, though a property
+// test cross-checks against core/siteswap `validatePattern`).
+//
+// Determinism (CLAUDE.md hard rule 1): pure, no Date.now/Math.random; a fixed
+// node/edge order (ascending bitmask start states, ascending throw value edges)
+// so identical queries yield identical lists in identical order. Rotations are
+// deduped to a canonical form — the **lexicographically greatest rotation** (the
+// juggling convention: 441 not 414, 531 not 315). Only patterns whose FUNDAMENTAL
+// period equals L are kept (so a period-3 query lists 441/531/522/504/423… but not
+// 333, which is really the period-1 pattern 3). Hard caps (period ≤ 9, maxThrow ≤
+// 12, ≤ maxResults results, plus an internal walk-step budget) are enforced with
+// an explicit `truncated` flag — never a silent cap (project convention).
+
+/** Largest period the generator will enumerate (DESIGN.md §5 complexity cap). */
+export const EXPLORER_PERIOD_MAX = 9;
+/** Largest maxThrow the generator will enumerate (fits a 12-bit state mask). */
+export const EXPLORER_MAX_THROW = 12;
+/** Default hard cap on the number of results returned (owner ruling: ~500). */
+export const EXPLORER_MAX_RESULTS = 500;
+/**
+ * Internal work budget: per-start reverse-BFS node visits + DFS edge relaxations.
+ * Tuned so the worst UI-reachable query stays well under ~50 ms on the Jetson
+ * (measured; see BUILD_LOG). Hitting it sets `truncated` and stops the walk.
+ */
+const EXPLORER_STEP_BUDGET = 4_000_000;
+
+/** A generator query: enumerate valid siteswaps of this (b, L, N) with filters. */
+export interface SiteswapQuery {
+  /** b — the ball count (popcount of every state; the average of every result). */
+  readonly ballCount: number;
+  /** L — the pattern length / period to enumerate (1 ≤ L ≤ {@link EXPLORER_PERIOD_MAX}). */
+  readonly period: number;
+  /** N — the maximum throw value considered (1 ≤ N ≤ {@link EXPLORER_MAX_THROW}). */
+  readonly maxThrow: number;
+  /** Drop patterns that contain any `0` (an empty-hand beat). */
+  readonly excludeZeros?: boolean;
+  /** Drop patterns that contain any `2` (a held ball). */
+  readonly excludeTwos?: boolean;
+  /** Keep only PRIME patterns: no state repeats within the cycle. */
+  readonly primeOnly?: boolean;
+  /** Hard result cap (default {@link EXPLORER_MAX_RESULTS}); truncation is flagged. */
+  readonly maxResults?: number;
+}
+
+/** One enumerated pattern in canonical (lex-greatest-rotation) form. */
+export interface GeneratedPattern {
+  /** Canonical throw values, length === the query period. */
+  readonly values: number[];
+  /** Canonical siteswap text (e.g. "441", "97531"), = formatPattern(values). */
+  readonly text: string;
+  /** Whether the pattern is prime (no repeated state in its cycle). */
+  readonly prime: boolean;
+  /** The pattern's own largest throw value (for display / sorting affordances). */
+  readonly maxThrow: number;
+}
+
+/** The result of {@link enumerateSiteswaps}: the pattern list plus query echo. */
+export interface SiteswapEnumeration {
+  /** Distinct canonical patterns, ascending lexicographically by throw values. */
+  readonly patterns: GeneratedPattern[];
+  /** Number of patterns returned (=== patterns.length; at most maxResults). */
+  readonly total: number;
+  /** True when a hard cap or the work budget stopped the walk early. */
+  readonly truncated: boolean;
+  /** Echo of the query's ball count (for the UI). */
+  readonly ballCount: number;
+  /** Echo of the query's period. */
+  readonly period: number;
+  /** Echo of the query's maxThrow. */
+  readonly maxThrow: number;
+}
+
+/** Ascending lexicographic comparison of two equal-purpose throw-value arrays. */
+function compareThrowValues(a: readonly number[], b: readonly number[]): number {
+  const shared = Math.min(a.length, b.length);
+  for (let i = 0; i < shared; i++) {
+    const d = (a[i] as number) - (b[i] as number);
+    if (d !== 0) {
+      return d;
+    }
+  }
+  return a.length - b.length;
+}
+
+/** Compare rotation `r1` of `values` against rotation `r2` (both cyclic offsets). */
+function compareRotation(values: readonly number[], r1: number, r2: number): number {
+  const length = values.length;
+  for (let i = 0; i < length; i++) {
+    const d = (values[(r1 + i) % length] as number) - (values[(r2 + i) % length] as number);
+    if (d !== 0) {
+      return d;
+    }
+  }
+  return 0;
+}
+
+/**
+ * The canonical rotation of a cyclic throw sequence: the lexicographically
+ * GREATEST rotation (the juggling convention — 441, not 414 or 144). Ties (a
+ * sub-periodic sequence like `[3,3,3]`) resolve to an identical array regardless
+ * of the chosen offset, so canonicalization is well-defined.
+ */
+export function canonicalRotation(values: readonly number[]): number[] {
+  const length = values.length;
+  let best = 0;
+  for (let r = 1; r < length; r++) {
+    if (compareRotation(values, r, best) > 0) {
+      best = r;
+    }
+  }
+  const out = new Array<number>(length);
+  for (let i = 0; i < length; i++) {
+    out[i] = values[(best + i) % length] as number;
+  }
+  return out;
+}
+
+/** Fundamental (minimal) period of a digit sequence — the smallest divisor `d`
+ *  of L such that the sequence repeats every `d` (so `[3,3,3]` → 1). */
+function fundamentalPeriodOf(values: readonly number[]): number {
+  const length = values.length;
+  for (let d = 1; d <= length; d++) {
+    if (length % d !== 0) {
+      continue;
+    }
+    let periodic = true;
+    for (let i = d; i < length; i++) {
+      if (values[i] !== values[i - d]) {
+        periodic = false;
+        break;
+      }
+    }
+    if (periodic) {
+      return d;
+    }
+  }
+  return length;
+}
+
+/** Whether a pattern is prime: its per-beat states over one period are distinct. */
+function isPrimeCycle(values: readonly number[], maxHeight: number): boolean {
+  const length = values.length;
+  const seen = new Set<StateBits>();
+  for (let beat = 0; beat < length; beat++) {
+    const bits = stateAtBits(values, beat, maxHeight);
+    if (seen.has(bits)) {
+      return false;
+    }
+    seen.add(bits);
+  }
+  return true;
+}
+
+/**
+ * Enumerate the valid vanilla siteswaps matching `query` (see the module banner
+ * above for the algorithm). Pure and deterministic. The returned list is deduped
+ * to canonical rotations, restricted to fundamental period === `period`, filtered
+ * by the requested predicates, sorted ascending by throw values, and capped with
+ * an explicit `truncated` flag.
+ */
+export function enumerateSiteswaps(query: SiteswapQuery): SiteswapEnumeration {
+  const ballCount = Math.trunc(query.ballCount);
+  const period = Math.trunc(query.period);
+  const maxThrow = Math.trunc(query.maxThrow);
+  const maxResults = Math.max(1, Math.trunc(query.maxResults ?? EXPLORER_MAX_RESULTS));
+  const excludeZeros = query.excludeZeros ?? false;
+  const excludeTwos = query.excludeTwos ?? false;
+  const primeOnly = query.primeOnly ?? false;
+
+  const echo = { ballCount, period, maxThrow };
+  const empty: SiteswapEnumeration = { patterns: [], total: 0, truncated: false, ...echo };
+
+  // Domain guards. Out-of-cap or degenerate queries yield nothing (never a throw).
+  // max ≥ mean = b for any non-empty pattern, so b > N admits none.
+  if (period < 1 || period > EXPLORER_PERIOD_MAX) {
+    return empty;
+  }
+  if (maxThrow < 1 || maxThrow > EXPLORER_MAX_THROW) {
+    return empty;
+  }
+  if (ballCount < 1 || ballCount > maxThrow) {
+    return empty;
+  }
+
+  const nodes = statesWithPopcount(ballCount, maxThrow);
+  const nodeCount = nodes.length;
+  if (nodeCount === 0) {
+    return empty;
+  }
+
+  // Dense bitmask → node-index table (maxThrow ≤ 12 ⇒ ≤ 4096 entries) so the hot
+  // loops use flat integer arrays, not Maps (measured ~4× faster on the Jetson).
+  const indexOfBits = new Int32Array(1 << maxThrow).fill(-1);
+  for (let i = 0; i < nodeCount; i++) {
+    indexOfBits[nodes[i] as number] = i;
+  }
+  // Forward edges (throw value + target index) and reverse predecessor indices.
+  const forwardThrow: number[][] = new Array(nodeCount);
+  const forwardTo: number[][] = new Array(nodeCount);
+  const reverseFrom: number[][] = new Array(nodeCount);
+  for (let i = 0; i < nodeCount; i++) {
+    reverseFrom[i] = [];
+  }
+  for (let i = 0; i < nodeCount; i++) {
+    const edges = edgesFrom(nodes[i] as StateBits, maxThrow);
+    const throwsOut: number[] = [];
+    const targetsOut: number[] = [];
+    for (const edge of edges) {
+      // edge.to fits in maxThrow bits (popcount preserved), so it indexes the table.
+      const j = indexOfBits[edge.to] as number;
+      // popcount is preserved on every legal edge, so the target is always a node.
+      if (j < 0) {
+        continue;
+      }
+      throwsOut.push(edge.throwValue);
+      targetsOut.push(j);
+      (reverseFrom[j] as number[]).push(i);
+    }
+    forwardThrow[i] = throwsOut;
+    forwardTo[i] = targetsOut;
+  }
+
+  const found = new Map<string, number[]>();
+  let truncated = false;
+  let steps = 0;
+
+  const dist = new Int16Array(nodeCount); // reverse-BFS distance-to-start, per start
+  const bfsQueue = new Int32Array(nodeCount);
+  const onPath = new Uint8Array(nodeCount); // states currently on the DFS walk (prime)
+  const walk: number[] = []; // throw values of the current partial walk
+
+  const recordWalk = (): void => {
+    const canonical = canonicalRotation(walk);
+    // Keep only genuine period-L patterns; a sub-periodic walk (e.g. 333 at L=3)
+    // belongs to its own shorter period's list, not here.
+    if (fundamentalPeriodOf(canonical) !== period) {
+      return;
+    }
+    const key = formatPattern(canonical);
+    if (found.has(key)) {
+      return;
+    }
+    if (found.size >= maxResults) {
+      truncated = true; // one more distinct pattern than the cap allows
+      return;
+    }
+    found.set(key, canonical);
+  };
+
+  for (let start = 0; start < nodeCount; start++) {
+    if (truncated) {
+      break;
+    }
+    // Reverse-BFS: dist[u] = fewest forward steps from u to reach `start`, bounded
+    // to period−1 (a node farther than that can never close a length-L walk).
+    dist.fill(-1);
+    let head = 0;
+    let tail = 0;
+    dist[start] = 0;
+    bfsQueue[tail++] = start;
+    while (head < tail) {
+      const u = bfsQueue[head++] as number;
+      const du = dist[u] as number;
+      if (du >= period - 1) {
+        continue; // its predecessors would sit at distance period, useless for closing
+      }
+      for (const p of reverseFrom[u] as number[]) {
+        if (dist[p] === -1) {
+          dist[p] = du + 1;
+          bfsQueue[tail++] = p;
+        }
+      }
+    }
+    steps += tail;
+    if (steps > EXPLORER_STEP_BUDGET) {
+      truncated = true;
+      break;
+    }
+
+    // DFS every length-L closed walk from `start`: only follow edges whose target
+    // can still return to `start` within the remaining steps (dist prune), that
+    // pass the value filters, and — when primeOnly — do not revisit a walk state.
+    onPath[start] = 1;
+    const dfs = (u: number): void => {
+      const depth = walk.length;
+      if (depth === period) {
+        if (u === start) {
+          recordWalk();
+        }
+        return;
+      }
+      const remaining = period - depth;
+      const throwsOut = forwardThrow[u] as number[];
+      const targetsOut = forwardTo[u] as number[];
+      for (let k = 0; k < throwsOut.length; k++) {
+        if (truncated) {
+          return;
+        }
+        const value = throwsOut[k] as number;
+        if (excludeZeros && value === 0) {
+          continue;
+        }
+        if (excludeTwos && value === 2) {
+          continue;
+        }
+        const to = targetsOut[k] as number;
+        const dTo = dist[to] as number;
+        if (dTo === -1 || dTo > remaining - 1) {
+          continue; // cannot return to start in time
+        }
+        const isFinalStep = depth + 1 === period;
+        if (primeOnly && !isFinalStep && onPath[to]) {
+          continue; // a repeated state — not prime
+        }
+        if (++steps > EXPLORER_STEP_BUDGET) {
+          truncated = true;
+          return;
+        }
+        walk.push(value);
+        if (primeOnly && !isFinalStep) {
+          onPath[to] = 1;
+        }
+        dfs(to);
+        if (primeOnly && !isFinalStep) {
+          onPath[to] = 0;
+        }
+        walk.pop();
+      }
+    };
+    dfs(start);
+    onPath[start] = 0;
+  }
+
+  const canonicalList = [...found.values()];
+  canonicalList.sort(compareThrowValues);
+  const patterns: GeneratedPattern[] = canonicalList.map((values) => ({
+    values,
+    text: formatPattern(values),
+    prime: isPrimeCycle(values, maxThrow),
+    maxThrow: maxThrowOf(values),
+  }));
+  return { patterns, total: patterns.length, truncated, ...echo };
 }

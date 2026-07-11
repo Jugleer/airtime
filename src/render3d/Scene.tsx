@@ -26,6 +26,7 @@ import { Balls } from './Balls';
 import { Tracers } from './Tracers';
 import { Hands, HandPaths } from './Hands';
 import { HandGizmos } from './HandGizmos';
+import { WorkspaceOverlay } from './WorkspaceOverlay';
 import { Triad } from './Triad';
 import { useAppStore } from '../state';
 import { setCameraSampler, setCanvasElement } from '../state/sceneBridge';
@@ -243,6 +244,7 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
         <HandPaths />
         <Balls />
         <Hands color={colors.handCup} />
+        <WorkspaceOverlay />
         <HandGizmos />
         {/* Always-visible orientation triad (bottom-right corner), tracking the
             camera; shows the right-handed Z-up display frame (X/Y/Z). */}

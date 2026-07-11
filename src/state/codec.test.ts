@@ -247,3 +247,101 @@ function sampleConfig(): ShareConfig {
     camera: { position: [0, 1.35, 3.2], target: [0, 1.35, 0] },
   };
 }
+
+// --- Hand-workspace codec (owner feature 2026-07-11; orchestrator ruling 4) -----
+
+describe('workspace codec', () => {
+  const primitiveKinds = ['sphere', 'cube', 'tetra'] as const;
+  const scaleArb = fc.record({
+    x: fc.double({ min: 0.1, max: 2, noNaN: true, noDefaultInfinity: true }),
+    y: fc.double({ min: 0.1, max: 2, noNaN: true, noDefaultInfinity: true }),
+    z: fc.double({ min: 0.1, max: 2, noNaN: true, noDefaultInfinity: true }),
+  });
+
+  it('primitives round-trip (kind, scale to 4 dp, enabled) exactly', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...primitiveKinds),
+        scaleArb,
+        fc.boolean(),
+        (kind, scale, enabled) => {
+          const config: ShareConfig = { ...sampleConfig(), workspace: { kind, scale, enabled } };
+          const decoded = decodeConfig(encodeConfig(config));
+          expect(decoded.workspace?.kind).toBe(kind);
+          expect(decoded.workspace?.enabled).toBe(enabled);
+          expect(decoded.workspace?.scale.x).toBeCloseTo(scale.x, 4);
+          expect(decoded.workspace?.scale.y).toBeCloseTo(scale.y, 4);
+          expect(decoded.workspace?.scale.z).toBeCloseTo(scale.z, 4);
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+
+  it('an absent workspace stays absent (backward compatible)', () => {
+    const decoded = decodeConfig(encodeConfig(sampleConfig()));
+    expect(decoded.workspace).toBeUndefined();
+  });
+
+  it('an STL workspace degrades to disabled on reload (geometry never travels)', () => {
+    const config: ShareConfig = {
+      ...sampleConfig(),
+      workspace: { kind: 'stl', scale: { x: 0.5, y: 0.6, z: 0.7 }, enabled: true },
+    };
+    const decoded = decodeConfig(encodeConfig(config));
+    expect(decoded.workspace?.kind).toBe('stl');
+    expect(decoded.workspace?.enabled).toBe(false); // forced off — mesh cannot travel
+    expect(decoded.workspace?.scale.y).toBeCloseTo(0.6, 4);
+  });
+
+  it('isShareConfigLike accepts a valid workspace and rejects a malformed one', () => {
+    expect(
+      isShareConfigLike({ ...sampleConfig(), workspace: { kind: 'cube', scale: { x: 1, y: 1, z: 1 }, enabled: true } }),
+    ).toBe(true);
+    // Absent workspace is fine (optional).
+    expect(isShareConfigLike(sampleConfig())).toBe(true);
+    // Bad kind / non-numeric scale are rejected.
+    expect(
+      isShareConfigLike({ ...sampleConfig(), workspace: { kind: 'blob', scale: { x: 1, y: 1, z: 1 }, enabled: true } }),
+    ).toBe(false);
+    expect(
+      isShareConfigLike({ ...sampleConfig(), workspace: { kind: 'sphere', scale: { x: 'big', y: 1, z: 1 }, enabled: true } }),
+    ).toBe(false);
+  });
+});
+
+// --- Bottom-dock tri-state codec (owner round-2 #1; orchestrator ruling 2026-07-11) ---
+
+describe('dock-mode codec (tri-state, backward compatible)', () => {
+  it('round-trips each dockMode via the `dm` key', () => {
+    for (const dockMode of ['none', 'charts', 'explorer'] as const) {
+      const decoded = decodeConfig(encodeConfig({ ...sampleConfig(), dockMode }));
+      expect(decoded.dockMode).toBe(dockMode);
+    }
+  });
+
+  it('an old `cv`-only link (no `dm`) derives the equivalent dockMode at decode', () => {
+    // Legacy link: encodes cv but not dm. The decode must derive dockMode itself —
+    // the boot path merges the decoded partial over currentConfig(), which always
+    // carries a concrete dockMode, so a downstream fallback could never fire
+    // (round-3 wave-2b review finding: cv-only links opened with charts hidden).
+    const decodedOn = decodeConfig('v=1&cv=1');
+    expect(decodedOn.chartsVisible).toBe(true);
+    expect(decodedOn.dockMode).toBe('charts');
+    const decodedOff = decodeConfig('v=1&cv=0');
+    expect(decodedOff.chartsVisible).toBe(false);
+    expect(decodedOff.dockMode).toBe('none');
+    // No cv at all: nothing to derive from.
+    expect(decodeConfig('v=1').dockMode).toBeUndefined();
+  });
+
+  it('a malformed `dm` is ignored (graceful degradation)', () => {
+    expect(decodeConfig('v=1&dm=zzz').dockMode).toBeUndefined();
+  });
+
+  it('isShareConfigLike accepts a valid dockMode and rejects a bad one', () => {
+    expect(isShareConfigLike({ ...sampleConfig(), dockMode: 'explorer' })).toBe(true);
+    expect(isShareConfigLike(sampleConfig())).toBe(true); // absent is fine (optional)
+    expect(isShareConfigLike({ ...sampleConfig(), dockMode: 'sidebar' })).toBe(false);
+  });
+});
