@@ -20,6 +20,7 @@ import {
   spatialPeriodBeats,
   validateNotation,
 } from '../core/siteswap';
+import type { Vec3 } from '../core/kinematics';
 import type { Simulation } from '../state/simulation';
 import {
   BALL_RADIUS_MAX,
@@ -53,6 +54,8 @@ import {
   TRAIL_LENGTH_MAX,
   TRAIL_LENGTH_MIN,
   dwellCap,
+  presetGeometry,
+  sampleHandPoints,
   useAppStore,
   type CarryPathKind,
   type HandPreset,
@@ -116,6 +119,66 @@ function patternThrowValues(sim: Simulation): number[] {
     return values;
   }
   return [...sim.values];
+}
+
+/**
+ * Whether the current hand catch/throw positions already equal the current preset's
+ * defaults for the hand count — the "Reset positions" affordance shows only when they
+ * DON'T (the ↺-appears-only-when-off-default idiom). Cheap: one preset re-sample plus a
+ * per-point compare in the internal y-up frame (no display transform needed here).
+ */
+function handPositionsMatchPreset(
+  preset: HandPreset,
+  handCount: number,
+  throwPoints: readonly Vec3[],
+  catchPoints: readonly Vec3[],
+): boolean {
+  if (throwPoints.length !== handCount || catchPoints.length !== handCount) {
+    return false;
+  }
+  const sampled = sampleHandPoints(presetGeometry(preset, handCount), handCount);
+  const near = (a: Vec3 | undefined, b: Vec3 | undefined): boolean =>
+    a !== undefined && b !== undefined && Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.z - b.z) < 1e-9;
+  for (let hand = 0; hand < handCount; hand++) {
+    if (!near(throwPoints[hand], sampled.throwPoints[hand])) {
+      return false;
+    }
+    if (!near(catchPoints[hand], sampled.catchPoints[hand])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The "↺ Reset positions" affordance for the Hands & geometry group (owner ruling
+ * 2026-07-11): re-samples the current preset's default catch/throw points for the
+ * current hand count via the store's resetHandPositions — a future-only geometry
+ * edit, so the markers follow and in-flight balls keep their paths. A labeled button
+ * (not a bare ↺) because it resets a GROUP of values, mirroring
+ * the "Reset all" idiom in the Tempo & View groups. Rendered only when the positions
+ * are off-default, consistent with the per-control ↺.
+ */
+function HandsResetButton(): ReactElement | null {
+  const handPreset = useAppStore((state) => state.handPreset);
+  const handCount = useAppStore((state) => state.handCount);
+  const throwPoints = useAppStore((state) => state.handThrowPoints);
+  const catchPoints = useAppStore((state) => state.handCatchPoints);
+  const resetHandPositions = useAppStore((state) => state.resetHandPositions);
+  if (handPositionsMatchPreset(handPreset, handCount, throwPoints, catchPoints)) {
+    return null;
+  }
+  return (
+    <Button
+      variant="ghost"
+      onClick={resetHandPositions}
+      ariaLabel="Reset hand positions"
+      title="Reset all hand catch/throw positions to the preset defaults"
+      style={resetAllStyle}
+    >
+      ↺ Reset positions
+    </Button>
+  );
 }
 
 /**
@@ -665,7 +728,10 @@ export function Controls(): ReactElement {
 
       {/* Hands & geometry group. */}
       <section style={groupStyle(palette)}>
-        <SectionLabel>Hands &amp; geometry</SectionLabel>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+          <SectionLabel>Hands &amp; geometry</SectionLabel>
+          <HandsResetButton />
+        </div>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <Stepper
             label="Hand count"

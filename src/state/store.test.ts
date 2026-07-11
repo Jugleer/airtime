@@ -370,7 +370,7 @@ describe('timeline-bar settings (DESIGN.md §6)', () => {
     expect(useAppStore.getState().timelineWindow).toBe(5);
   });
 
-  it('clamps the trail length to [0, 8] s', () => {
+  it('clamps the trail length to [0, 2] s', () => {
     useAppStore.getState().setTrailLength(100);
     expect(useAppStore.getState().trailLength).toBe(TRAIL_LENGTH_MAX);
     useAppStore.getState().setTrailLength(-1);
@@ -508,5 +508,154 @@ describe('scrub (setSimTime)', () => {
     expect(after.simTime).toBe(30);
     expect(horizonTime(after.sim)).toBeGreaterThanOrEqual(neededHorizonTime(30));
     expect(after.sim.timeline.beatTime(2)).toBeCloseTo(beat2Before, 12);
+  });
+});
+
+// Transport ↺ Restart rebuilds from the CURRENT committed config at t = 0 (owner
+// ruling 2026-07-11) — pattern, dragged hand geometry, tempo/physics, compiled state
+// — so the balls fly from exactly where the markers sit. Shares hardReset's path.
+describe('restart (rebuild from the current committed config)', () => {
+  it('rebuilds from the CURRENT dragged geometry so balls fly from the markers', () => {
+    // Run into mid-flight and drag hand 0's throw point far out — a future-only epoch.
+    useAppStore.setState({ simTime: 1.0 });
+    useAppStore.getState().setHandPoint(0, 'throw', 0.9, 0);
+    const dragged = useAppStore.getState();
+    expect(dragged.kinematicsEpochs).toHaveLength(1);
+    // Base (t = 0) geometry is still the default — the edit was future-only.
+    expect(dragged.sim.kinematics.geometry.throwPoint(0).x).toBeLessThan(0);
+    // The store field the markers render from already shows the drag.
+    expect(dragged.handThrowPoints[0]?.x).toBeCloseTo(0.9, 9);
+
+    useAppStore.getState().restart();
+    const after = useAppStore.getState();
+    // Clock reset; no stale epochs; transition cleared.
+    expect(after.simTime).toBe(0);
+    expect(after.epochs).toHaveLength(0);
+    expect(after.kinematicsEpochs).toHaveLength(0);
+    expect(after.transition).toBeNull();
+    // The dragged throw point is now the BASE (t = 0) geometry the balls fly from.
+    expect(after.sim.kinematics.geometry.throwPoint(0).x).toBeCloseTo(0.9, 9);
+    // handState confirms: hand 0 now travels out to x ≈ 0.9 within the first two
+    // spatial periods (the default geometry never sent hand 0 to positive x).
+    const period = after.sim.spatialPeriodBeats * after.baseParams.beatPeriod;
+    let maxX = -Infinity;
+    for (let i = 0; i <= 400; i++) {
+      const t = (2 * period * i) / 400;
+      maxX = Math.max(maxX, after.sim.kinematics.handState(0, t).position.x);
+    }
+    expect(maxX).toBeGreaterThan(0.8);
+  });
+
+  it('preserves the playing/paused state across a restart', () => {
+    useAppStore.setState({ simTime: 2, playing: false });
+    useAppStore.getState().restart();
+    expect(useAppStore.getState().simTime).toBe(0);
+    expect(useAppStore.getState().playing).toBe(false);
+
+    useAppStore.setState({ simTime: 2, playing: true });
+    useAppStore.getState().restart();
+    expect(useAppStore.getState().playing).toBe(true);
+  });
+
+  it('folds a mid-flight tempo change into the base (no stale slew epoch)', () => {
+    useAppStore.setState({ simTime: 1.0 });
+    useAppStore.getState().setBeatPeriod(0.5); // a timeline epoch at the playhead
+    expect(useAppStore.getState().epochs.length).toBeGreaterThan(0);
+    useAppStore.getState().restart();
+    const after = useAppStore.getState();
+    expect(after.epochs).toHaveLength(0);
+    expect(after.baseParams.beatPeriod).toBeCloseTo(0.5, 9); // starts at the target τ_b
+    expect(after.simTime).toBe(0);
+  });
+
+  it('rebuilds a compiled (sync) sim at t = 0, still compiled', () => {
+    useAppStore.getState().setPattern('(4,4)');
+    expect(useAppStore.getState().sim.compiled?.sync).toBe(true);
+    useAppStore.setState({ simTime: 3 });
+    useAppStore.getState().restart();
+    const after = useAppStore.getState();
+    expect(after.simTime).toBe(0);
+    expect(after.sim.compiled?.sync).toBe(true);
+    expect(after.sim.patternText).toBe('(4,4)');
+    expect(after.handCount).toBe(2);
+    expect(after.epochs).toHaveLength(0);
+    expect(after.kinematicsEpochs).toHaveLength(0);
+  });
+
+  it('leaves view / theme / panel state untouched (only the sim/clock reset)', () => {
+    useAppStore.setState({
+      theme: 'light',
+      ballRadius: 0.08,
+      dockMode: 'charts',
+      chartsVisible: true,
+      graphVisible: true,
+      timelineWindow: 7,
+      simTime: 2,
+    });
+    useAppStore.getState().restart();
+    const after = useAppStore.getState();
+    expect(after.simTime).toBe(0);
+    expect(after.theme).toBe('light');
+    expect(after.ballRadius).toBeCloseTo(0.08, 9);
+    expect(after.dockMode).toBe('charts');
+    expect(after.graphVisible).toBe(true);
+    expect(after.timelineWindow).toBe(7);
+  });
+});
+
+// resetHandPositions (owner ruling 2026-07-11): re-sample the current preset's default
+// catch/throw points for the current hand count as a future-only geometry edit.
+describe('resetHandPositions', () => {
+  it('re-samples the line preset defaults for the current hand count (full re-sample)', () => {
+    // Drag both of hand 0's points off-default at beat 0 (folds into the base).
+    useAppStore.setState({ simTime: 0 });
+    useAppStore.getState().setHandPoint(0, 'catch', -0.9, 0.3);
+    useAppStore.getState().setHandPoint(0, 'throw', 0.85, -0.2);
+    const preset = sampleHandPoints(presetGeometry('line', DEFAULT_HAND_COUNT), DEFAULT_HAND_COUNT);
+
+    useAppStore.getState().resetHandPositions();
+    const after = useAppStore.getState();
+    for (let h = 0; h < DEFAULT_HAND_COUNT; h++) {
+      expect(after.handCatchPoints[h]?.x).toBeCloseTo(preset.catchPoints[h]!.x, 9);
+      expect(after.handCatchPoints[h]?.z).toBeCloseTo(preset.catchPoints[h]!.z, 9);
+      expect(after.handThrowPoints[h]?.x).toBeCloseTo(preset.throwPoints[h]!.x, 9);
+      expect(after.handThrowPoints[h]?.z).toBeCloseTo(preset.throwPoints[h]!.z, 9);
+    }
+    // The sim geometry follows the markers (they are one and the same).
+    expect(after.sim.kinematics.geometry.catchPoint(0).x).toBeCloseTo(preset.catchPoints[0]!.x, 9);
+  });
+
+  it('re-samples the circle preset defaults at n_h = 3', () => {
+    useAppStore.getState().setHandPreset('circle');
+    useAppStore.getState().setHandCount(3);
+    useAppStore.setState({ simTime: 0 });
+    useAppStore.getState().setHandPoint(1, 'catch', 1.2, 0.4); // drag one point away
+    const preset = sampleHandPoints(presetGeometry('circle', 3), 3);
+
+    useAppStore.getState().resetHandPositions();
+    const after = useAppStore.getState();
+    expect(after.handCount).toBe(3);
+    expect(after.handPreset).toBe('circle');
+    for (let h = 0; h < 3; h++) {
+      expect(after.handCatchPoints[h]?.x).toBeCloseTo(preset.catchPoints[h]!.x, 9);
+      expect(after.handCatchPoints[h]?.z).toBeCloseTo(preset.catchPoints[h]!.z, 9);
+      expect(after.handThrowPoints[h]?.x).toBeCloseTo(preset.throwPoints[h]!.x, 9);
+      expect(after.handThrowPoints[h]?.z).toBeCloseTo(preset.throwPoints[h]!.z, 9);
+    }
+  });
+
+  it('applies as a future-only epoch when running (markers revert, base intact)', () => {
+    useAppStore.setState({ simTime: 1.0 });
+    useAppStore.getState().setHandPoint(0, 'throw', 0.9, 0); // future-only drag
+    const baseThrowX = useAppStore.getState().sim.kinematics.geometry.throwPoint(0).x;
+    const preset = sampleHandPoints(presetGeometry('line', DEFAULT_HAND_COUNT), DEFAULT_HAND_COUNT);
+
+    useAppStore.getState().resetHandPositions();
+    const after = useAppStore.getState();
+    // Markers are back at the preset defaults.
+    expect(after.handThrowPoints[0]?.x).toBeCloseTo(preset.throwPoints[0]!.x, 9);
+    // It stayed a future-only edit (an epoch); the t = 0 base geometry is intact.
+    expect(after.kinematicsEpochs.length).toBeGreaterThan(0);
+    expect(after.sim.kinematics.geometry.throwPoint(0).x).toBeCloseTo(baseThrowX, 9);
   });
 });

@@ -304,6 +304,30 @@ describe('Controls view reset-to-defaults', () => {
   });
 });
 
+// Reset hand positions (owner ruling 2026-07-11): a labeled "↺ Reset positions"
+// button in the Hands & geometry group, shown only when the positions are off-default,
+// re-samples the current preset's defaults through the store.
+describe('Controls reset hand positions', () => {
+  it('hides the reset when positions already match the preset defaults', () => {
+    render(<Controls />);
+    expect(screen.queryByRole('button', { name: 'Reset hand positions' })).toBeNull();
+  });
+
+  it('resets dragged hand positions to the preset defaults through the store', () => {
+    render(<Controls />);
+    act(() => {
+      useAppStore.setState({ simTime: 0 });
+      useAppStore.getState().setHandPoint(0, 'catch', -0.9, 0.2); // drag off-default
+    });
+    // Now off-default, the affordance appears and wires to the store action.
+    fireEvent.click(screen.getByRole('button', { name: 'Reset hand positions' }));
+    const preset = sampleHandPoints(presetGeometry('line', DEFAULT_HAND_COUNT), DEFAULT_HAND_COUNT);
+    expect(useAppStore.getState().handCatchPoints[0]?.x).toBeCloseTo(preset.catchPoints[0]!.x, 9);
+    // …and once matched again, the affordance hides.
+    expect(screen.queryByRole('button', { name: 'Reset hand positions' })).toBeNull();
+  });
+});
+
 describe('Controls hand-workspace launcher', () => {
   it('shows a Workspace button that opens the editor popup', () => {
     render(<Controls />);

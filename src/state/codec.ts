@@ -116,6 +116,17 @@ export interface ShareConfig {
 /** The current codec version. Bump only with a decode migration (never silently). */
 export const CODEC_VERSION = '1';
 
+/**
+ * Trail-length ceiling the decode clamps to (owner override 2026-07-11: the app max
+ * dropped 8 s → 2 s). An OLD shared link still carries its larger `tl`; decode caps
+ * it here so a pre-2026-07-11 link loads as a 2 s trail. Mirrors state's
+ * `TRAIL_LENGTH_MAX` — the codec stays store-free (a stated invariant of this
+ * module), so the value is duplicated deliberately and pinned equal by a drift-guard
+ * test in codec.test.ts. The store re-clamps on apply too (belt-and-suspenders, as
+ * with the `t` bookmark's ≥ 0 clamp below); this keeps the decoded partial in range.
+ */
+const TRAIL_LENGTH_MAX_DECODE = 2;
+
 /** Fixed-precision float encoding (4 dp): stable, compact, round-trips cleanly. */
 const FLOAT_DECIMALS = 4;
 
@@ -306,7 +317,6 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
     ['hd', 'holdDepth'],
     ['br', 'ballRadius'],
     ['tw', 'timelineWindow'],
-    ['tl', 'trailLength'],
     ['av', 'audioVolume'],
   ];
   for (const [key, field] of numFields) {
@@ -314,6 +324,14 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
     if (value !== null) {
       out[field] = value;
     }
+  }
+
+  // Trail length `tl` clamps to [0, TRAIL_LENGTH_MAX_DECODE] here (not a plain
+  // passthrough like the numFields above): an old link that encoded a larger `tl`
+  // (the pre-2026-07-11 max was 8 s) loads as a 2 s trail. The store re-clamps too.
+  const trail = parseNum(params.get('tl'));
+  if (trail !== null) {
+    out.trailLength = Math.min(TRAIL_LENGTH_MAX_DECODE, Math.max(0, trail));
   }
 
   const intFields: readonly [string, keyof ShareConfig][] = [

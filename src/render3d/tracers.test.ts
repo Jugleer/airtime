@@ -95,8 +95,9 @@ describe('sampleTimeAt', () => {
 
 describe('buffer capacities', () => {
   it('maxTrailPoints sizes for the longest trail', () => {
-    // 8 s at 12 ms ⇒ floor(666.6)+1 = 667.
-    expect(maxTrailPoints(8, 0.012)).toBe(667);
+    // The longest trail is now 2 s (owner 2026-07-11, was 8 s): 2 s at 12 ms ⇒
+    // floor(166.6)+1 = 167.
+    expect(maxTrailPoints(2, 0.012)).toBe(167);
   });
 
   it('maxGhostPoints covers the fixed ghost span', () => {
@@ -104,8 +105,9 @@ describe('buffer capacities', () => {
   });
 
   it('every trail point count stays within the buffer', () => {
-    const cap = maxTrailPoints(8, TRAIL_SAMPLE_DT);
-    for (const span of [0.1, 0.8, 3, 8, 12]) {
+    // Cap follows the real max trail (2 s); spans past it (3, 8) exercise the clamp.
+    const cap = maxTrailPoints(TRAIL_LENGTH_MAX, TRAIL_SAMPLE_DT);
+    for (const span of [0.1, 0.8, 3, 8]) {
       expect(trailPointCount(span, TRAIL_SAMPLE_DT, cap)).toBeLessThanOrEqual(cap);
     }
   });

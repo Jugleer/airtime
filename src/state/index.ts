@@ -214,7 +214,16 @@ export const DEFAULT_SHOW_HAND_PATHS = false;
  */
 export const DEFAULT_TRAIL_LENGTH = 0.15;
 export const TRAIL_LENGTH_MIN = 0;
-export const TRAIL_LENGTH_MAX = 8;
+/**
+ * Longest trailing tracer, in seconds (owner override 2026-07-11: was 8 s — too
+ * long to read; a 2 s tail already spans several beats at typical tempos). The
+ * View-group slider range and the 3D trail buffer capacity
+ * ({@link trailBufferCapacity}) both derive from this, so lowering it shrinks the
+ * preallocated tracer buffers automatically. An old shared link that encoded a
+ * larger `tl` still decodes; the store re-clamps it to this max on apply, so it
+ * loads as a 2 s trail rather than crashing or drawing past the buffer.
+ */
+export const TRAIL_LENGTH_MAX = 2;
 /**
  * Future ghost paths OFF by default (owner override 2026-07-11): the forward
  * preview is opt-in via the View group in the left sidebar, so a fresh boot shows
@@ -499,6 +508,13 @@ export interface AppStore {
   setHandCount(handCount: number): void;
   /** Hand-geometry preset (line/circle). FULL rebuild at the current n_h. */
   setHandPreset(preset: HandPreset): void;
+  /**
+   * Reset every hand's catch/throw position to the CURRENT preset's defaults for the
+   * current hand count (re-samples the preset geometry). A future-only geometry edit
+   * like any other hand move — in-flight balls keep their aimed paths; the markers
+   * follow. Keeps the preset kind and hand count; only the positions revert.
+   */
+  resetHandPositions(): void;
   /** Move one hand's catch/throw point (x, z; y fixed). Future throws only (epoch). */
   setHandPoint(hand: number, kind: HandPointKind, x: number, z: number): void;
   /**
@@ -856,6 +872,57 @@ export const useAppStore = create<AppStore>((set, get) => {
   }
 
   /**
+   * Clean rebuild of the CURRENT committed config at t = 0 — shared by the transport
+   * ↺ Restart and the state-graph hard reset (DESIGN.md §5). Folds the live slider
+   * values AND the dragged hand geometry into fresh base params / base kinematics,
+   * clears every timeline + kinematics epoch and any in-progress transition, and
+   * rebuilds the sim (vanilla or the current compiled sync/multiplex form). Because
+   * the dragged catch/throw points become the t = 0 geometry, the balls now fly from
+   * exactly where the markers sit. Resets ONLY the sim / timeline / epochs / clock
+   * (and the transient graph notice, which describes the transition being cleared);
+   * every view / panel / theme / audio / camera field — and the `playing` flag — is
+   * deliberately left untouched (the restart preserves play/pause state).
+   */
+  function cleanRestartCurrentPatch(): Partial<AppStore> {
+    const state = get();
+    const baseParams: TimelineParams = {
+      beatPeriod: state.beatPeriod,
+      dwellTime: state.dwellTime,
+      handCount: state.handCount,
+    };
+    const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
+      gravity: state.gravity,
+      holdDepth: state.holdDepth,
+      carryPath: carryPathOf(state.carryPathKind),
+      geometry: makeHandGeometry(state.handThrowPoints, state.handCatchPoints),
+    };
+    const sim = buildSimulation(
+      state.sim.values,
+      state.sim.patternText,
+      baseParams,
+      [],
+      INITIAL_BEATS,
+      kinematicsConfigOf(baseKinematics, []),
+      undefined,
+      state.sim.compiled,
+    );
+    return {
+      simTime: 0,
+      pattern: state.sim.patternText,
+      validation: state.sim.compiled
+        ? { ok: true, values: [], ballCount: state.sim.ballCount }
+        : validatePattern(state.sim.patternText),
+      baseParams,
+      epochs: [],
+      baseKinematics,
+      kinematicsEpochs: [],
+      sim,
+      transition: null,
+      graphNotice: null,
+    };
+  }
+
+  /**
    * Defensive splice validation (the prompt's "validate anyway"): the bridge must
    * be a legal beat-by-beat advance from the state at the splice beat. BFS
    * guarantees this; a violation indicates a bug and throws loudly rather than
@@ -1154,47 +1221,10 @@ export const useAppStore = create<AppStore>((set, get) => {
       });
     },
 
-    hardReset: () => {
-      const state = get();
-      // Restart clean at t = 0 (DESIGN.md §5): the running pattern on a periodic
-      // schedule, epochs cleared, the CURRENT slider values folded into the base
-      // params (so the reset keeps what the user hears/sees on the sliders).
-      const baseParams: TimelineParams = {
-        beatPeriod: state.beatPeriod,
-        dwellTime: state.dwellTime,
-        handCount: state.handCount,
-      };
-      const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
-        gravity: state.gravity,
-        holdDepth: state.holdDepth,
-        carryPath: carryPathOf(state.carryPathKind),
-        geometry: makeHandGeometry(state.handThrowPoints, state.handCatchPoints),
-      };
-      const sim = buildSimulation(
-        state.sim.values,
-        state.sim.patternText,
-        baseParams,
-        [],
-        INITIAL_BEATS,
-        kinematicsConfigOf(baseKinematics, []),
-        undefined,
-        state.sim.compiled,
-      );
-      set({
-        simTime: 0,
-        pattern: state.sim.patternText,
-        validation: state.sim.compiled
-          ? { ok: true, values: [], ballCount: state.sim.ballCount }
-          : validatePattern(state.sim.patternText),
-        baseParams,
-        epochs: [],
-        baseKinematics,
-        kinematicsEpochs: [],
-        sim,
-        transition: null,
-        graphNotice: null,
-      });
-    },
+    // Hard reset (DESIGN.md §5): restart clean at t = 0 with the running pattern on a
+    // periodic schedule, epochs cleared, the current slider/geometry values folded in.
+    // Shares the transport ↺ Restart's rebuild — one clean-restart path (see above).
+    hardReset: () => set(cleanRestartCurrentPatch()),
 
     setGraphMaxHeight: (raw) => {
       const state = get();
@@ -1396,6 +1426,24 @@ export const useAppStore = create<AppStore>((set, get) => {
       });
     },
 
+    // Reset all hand catch/throw positions to the CURRENT preset's defaults for the
+    // current hand count (owner ruling 2026-07-11): re-sample the preset geometry and
+    // apply it as ONE future-only geometry epoch (via applyKinematicsChange), exactly
+    // like setHandPoint/setHandAnchor — in-flight balls keep their aimed paths, only
+    // later throws use the reset geometry, and the markers follow. A reset at beat 0
+    // folds into the base kinematics (keeps the epoch list empty at the start). The
+    // preset kind and hand count are unchanged; only the positions revert.
+    resetHandPositions: () => {
+      const state = get();
+      const geometry = presetGeometry(state.handPreset, state.handCount);
+      const { throwPoints, catchPoints } = sampleHandPoints(geometry, state.handCount);
+      set({
+        handThrowPoints: throwPoints,
+        handCatchPoints: catchPoints,
+        ...applyKinematicsChange({ geometry: makeHandGeometry(throwPoints, catchPoints) }),
+      });
+    },
+
     setPositionsEditorOpen: (open) => set({ positionsEditorOpen: open }),
     togglePositionsEditor: () =>
       set((state) => ({ positionsEditorOpen: !state.positionsEditorOpen })),
@@ -1453,7 +1501,14 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     setPlaying: (playing) => set({ playing }),
     togglePlaying: () => set((state) => ({ playing: !state.playing })),
-    restart: () => set({ simTime: 0 }),
+    // Transport ↺ Restart: rebuild the sim from the CURRENT committed store config at
+    // t = 0 (pattern, dragged hand geometry, tempo/dwell/gravity/holdDepth, compiled
+    // sync/multiplex state — everything as configured NOW), so the balls fly from
+    // exactly where the markers are (owner ruling 2026-07-11). Previously this only
+    // seeked simTime to 0, which predated mid-flight edits and replayed the pre-edit
+    // geometry. Shares hardReset's clean-restart path; the playing/paused state is
+    // preserved (the flag is untouched) and no view/panel/theme state is reset.
+    restart: () => set(cleanRestartCurrentPatch()),
 
     setSimTime: (raw) => {
       const simTime = Math.max(0, raw);

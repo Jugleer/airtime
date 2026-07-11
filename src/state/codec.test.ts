@@ -7,6 +7,9 @@ import {
   isShareConfigLike,
   type ShareConfig,
 } from './codec';
+// Imported only to drift-guard the codec's local trail-length clamp against the
+// store's TRAIL_LENGTH_MAX (the codec itself stays store-free by design).
+import { TRAIL_LENGTH_MAX } from './index';
 
 const DIGITS = '0123456789abcdefghijklmnopqrstuvwxyz'.split('');
 
@@ -46,7 +49,10 @@ const shareConfigArb: fc.Arbitrary<ShareConfig> = fc
         showHands: fc.boolean(),
         showHandPaths: fc.boolean(),
         timelineWindow: positive(15),
-        trailLength: positive(8),
+        // Trail length now maxes at 2 s (owner 2026-07-11); the store never encodes
+        // a larger value, so the round-trip arbitrary stays in range and decode is
+        // identity. Old out-of-range links are covered by the clamp test below.
+        trailLength: positive(2),
         ghostsEnabled: fc.boolean(),
         chartsVisible: fc.boolean(),
         chartAxisMode: fc.constantFrom(
@@ -186,6 +192,18 @@ describe('URL codec versioning + graceful degradation', () => {
     expect(decodeConfig('v=1&p=531').time).toBeUndefined();
     expect(decodeConfig('v=1&t=-4').time).toBe(0); // negative times clamp to 0
     expect(decodeConfig('v=1&t=notanumber').time).toBeUndefined();
+  });
+
+  it('clamps an old link trail length to the current max (8 s → 2 s)', () => {
+    // The app max dropped 8 s → 2 s (owner 2026-07-11). A pre-change shared link
+    // still carries tl=8; decode caps it so the trail loads in range, not at 8 s.
+    // The imported TRAIL_LENGTH_MAX also drift-guards the codec's local mirror: if
+    // the store max moves and the codec constant does not, this assertion goes red.
+    expect(decodeConfig('v=1&tl=8').trailLength).toBe(TRAIL_LENGTH_MAX);
+    expect(decodeConfig('v=1&tl=3.5').trailLength).toBe(TRAIL_LENGTH_MAX);
+    expect(decodeConfig('v=1&tl=-1').trailLength).toBe(0); // negative clamps to 0
+    // An in-range value round-trips untouched.
+    expect(decodeConfig('v=1&tl=1.25').trailLength).toBeCloseTo(1.25, 4);
   });
 
   it('never throws on arbitrary versioned junk', () => {

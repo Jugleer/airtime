@@ -89,24 +89,41 @@ describe('handPathPointCount', () => {
 });
 
 describe('handPathStartBeat', () => {
-  it('anchors one full period in when there is no kinematics epoch (skip startup)', () => {
-    expect(handPathStartBeat(2, 160, -1)).toBe(2);
-    expect(handPathStartBeat(6, 160, -1)).toBe(6);
+  it('anchors at the END of the horizon (current pattern + latest kinematics, past startup)', () => {
+    // The last full period before the horizon edge: always the current pattern's
+    // steady state, which also clears the t=0 startup ease-in.
+    expect(handPathStartBeat(2, 160)).toBe(158);
+    expect(handPathStartBeat(6, 160)).toBe(154);
   });
 
-  it('anchors at the latest kinematics-epoch beat so param edits are reflected', () => {
-    expect(handPathStartBeat(2, 160, 40)).toBe(40);
+  it('keeps the whole loop [start, start + period] inside the horizon', () => {
+    expect(handPathStartBeat(6, 100)).toBe(94);
+    expect(handPathStartBeat(6, 100) + 6).toBeLessThanOrEqual(100);
+    expect(handPathStartBeat(24, 160) + 24).toBeLessThanOrEqual(160);
   });
 
-  it('clamps the window so the whole loop stays inside the generated horizon', () => {
-    // Epoch near the end: start pulls back so start + period ≤ beatCount.
-    expect(handPathStartBeat(6, 100, 98)).toBe(94);
-    expect(handPathStartBeat(6, 100, 98) + 6).toBeLessThanOrEqual(100);
+  it('BUG A regression: anchors PAST a mid-timeline splice so the overlay never persists the old pattern', () => {
+    // Repro: playing pattern 3, splice to 531 (period 6) at the playhead (~beat 48).
+    // The past [0, spliceBeat) stays bit-identical "3" (DESIGN.md §5); the future is
+    // "531". The old anchor of one period in (start = 6) resampled the stale "3"
+    // region — the overlay drew the 3-loop traced 3× (len ~1.898) instead of the 531
+    // loop (len ~2.134). The horizon-end anchor lands well past any splice beat, in
+    // the current pattern's steady future.
+    const spliceBeat = 48;
+    const periodBeats = 6;
+    const beatCount = 160;
+    const start = handPathStartBeat(periodBeats, beatCount);
+    expect(start).toBeGreaterThan(spliceBeat); // 154 > 48 — samples the NEW pattern
+    expect(start + periodBeats).toBeLessThanOrEqual(beatCount);
+  });
+
+  it('never returns a negative beat when the period exceeds the horizon', () => {
+    expect(handPathStartBeat(200, 160)).toBe(0);
   });
 
   it('is 0 for a degenerate period or empty horizon', () => {
-    expect(handPathStartBeat(0, 160, 10)).toBe(0);
-    expect(handPathStartBeat(2, 0, 10)).toBe(0);
+    expect(handPathStartBeat(0, 160)).toBe(0);
+    expect(handPathStartBeat(2, 0)).toBe(0);
   });
 });
 

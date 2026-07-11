@@ -141,5 +141,18 @@ function totalRowStyle(palette: Palette): CSSProperties {
 }
 
 function captionStyle(palette: Palette): CSSProperties {
-  return { margin: 0, color: palette.textMuted, fontSize: '0.74rem', lineHeight: 1.4 };
+  return {
+    margin: 0,
+    color: palette.textMuted,
+    fontSize: '0.74rem',
+    lineHeight: 1.4,
+    // Width-neutralized so this long paragraph does NOT set the panel's natural
+    // width (owner requirement 1, 2026-07-11): the panel is `flex: 0 1 auto`, whose
+    // auto basis is the widest child's max-content. `width: 0` drops the caption's
+    // intrinsic contribution to 0 so the TABLE drives the panel width; `minWidth:
+    // 100%` then stretches the caption back to that resolved width, so the text
+    // wraps to the table's width instead of forcing the whole dock wider.
+    width: 0,
+    minWidth: '100%',
+  };
 }

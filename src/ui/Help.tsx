@@ -79,7 +79,7 @@ const CONTROL_SECTIONS: readonly Section[] = [
       ['Space', 'Play or pause — works anywhere except while typing in a field or focused on a button.'],
       ['Enter · Esc (pattern box)', 'Enter applies the typed pattern; Esc reverts it to the running one.'],
       ['Esc (help)', 'Closes this help.'],
-      ['Scroll wheel', 'Hover any slider and scroll to nudge it three steps per notch (no page scroll).'],
+      ['Scroll wheel', 'Hover any slider and scroll to nudge it 1% of its range per notch (no page scroll).'],
       ['Drag · scroll (3D scene)', 'Drag to orbit the camera, scroll to zoom, right-drag to pan.'],
     ],
   },

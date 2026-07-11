@@ -26,7 +26,6 @@ import {
   type MeshStandardMaterial,
 } from 'three';
 import { useAppStore } from '../state';
-import { firstBeatAtOrAfter } from '../state/simulation';
 import { sampleTimeAt } from './tracers';
 import {
   buildHandTiltKeyframes,
@@ -175,7 +174,6 @@ export function Hands({ color }: { readonly color: string }): ReactElement | nul
  */
 function HandPathLine({ hand, color }: { readonly hand: number; readonly color: string }): ReactElement {
   const sim = useAppStore((state) => state.sim);
-  const kinematicsEpochs = useAppStore((state) => state.kinematicsEpochs);
 
   // Built once; persists across sim rebuilds because React reconciles this element
   // by its stable hand key. frustumCulled off: the buffer spans a whole loop.
@@ -201,10 +199,14 @@ function HandPathLine({ hand, color }: { readonly hand: number; readonly color: 
     [line],
   );
 
-  // Resample the closed loop once per sim / kinematics-epoch change. Anchor the
-  // one-period window at the steady state after the latest kinematics epoch (so a
-  // gravity / hold-depth / carry-path / geometry edit is reflected), or one period
-  // in when there is none (the first steady cycle, past the startup ease-in).
+  // Resample the closed loop once per sim identity change (rebuild / splice /
+  // clean restart / kinematics epoch / horizon extension — every one of these
+  // replaces `sim`). The window is anchored at the END of the horizon, which is
+  // always the CURRENT pattern's steady state with the latest kinematics: a live
+  // pattern splice keeps the past bit-identical, so sampling near the start would
+  // resample the OLD pattern and the overlay would persist the pre-change loop
+  // (handPathStartBeat). drawRange is set to the fresh `count` every time, so a
+  // shorter new loop never leaves stale points from a longer previous one drawn.
   useEffect(() => {
     const { timeline, beatCount, spatialPeriodBeats, kinematics } = sim;
     const periodBeats = handPathPeriodBeats(spatialPeriodBeats);
@@ -216,9 +218,7 @@ function HandPathLine({ hand, color }: { readonly hand: number; readonly color: 
       line.visible = false;
       return;
     }
-    const lastEpoch = kinematicsEpochs.length > 0 ? kinematicsEpochs[kinematicsEpochs.length - 1] : null;
-    const lastEpochBeat = lastEpoch ? firstBeatAtOrAfter(timeline, lastEpoch.time) : -1;
-    const startBeat = handPathStartBeat(periodBeats, beatCount, lastEpochBeat);
+    const startBeat = handPathStartBeat(periodBeats, beatCount);
     const start = timeline.beatTime(startBeat);
     const end = timeline.beatTime(startBeat + periodBeats);
     for (let i = 0; i < count; i++) {
@@ -230,7 +230,7 @@ function HandPathLine({ hand, color }: { readonly hand: number; readonly color: 
     position.needsUpdate = true;
     line.geometry.setDrawRange(0, count);
     line.visible = true;
-  }, [sim, kinematicsEpochs, hand, line]);
+  }, [sim, hand, line]);
 
   return <primitive object={line} />;
 }

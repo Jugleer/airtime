@@ -39,7 +39,7 @@ export function Transport(): ReactElement {
         type="button"
         onClick={restart}
         aria-label="Restart"
-        title="Restart (jump to t = 0)"
+        title="Restart from current settings (rebuild at t = 0)"
         style={{
           ...buttonStyle(palette, 'default'),
           width: '2.3rem',

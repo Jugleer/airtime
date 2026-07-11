@@ -314,7 +314,13 @@ function ChartsBody({ hiddenHands }: { readonly hiddenHands: ReadonlySet<number>
 
   const canvasSizedStyle = { ...canvasStyle, height: `${canvasHeight}px` };
   return (
-    <div ref={bodyRef} style={{ display: 'flex', flex: '3 1 0%', minWidth: 0, gap: '0.5rem' }}>
+    // flex: grow 1 (the only grower — absorbs ALL space the compact energy table
+    // leaves) + a 60% basis. The basis is invisible while the table fits (charts
+    // just take the remainder); it only sets the shrink proportion once the dock is
+    // too narrow for the natural table, so the charts fall back to a ~60/40 share
+    // (echoing the historic split) instead of collapsing to zero width. See the
+    // energy wrapper below. (verified in a headless engine at 500–2400px.)
+    <div ref={bodyRef} style={{ display: 'flex', flex: '1 1 60%', minWidth: 0, gap: '0.5rem' }}>
       <canvas ref={velocityRef} aria-label="Hand speed chart" style={canvasSizedStyle} />
       <canvas ref={accelerationRef} aria-label="Hand acceleration chart" style={canvasSizedStyle} />
       <canvas ref={jerkRef} aria-label="Hand jerk chart" style={canvasSizedStyle} />
@@ -497,12 +503,20 @@ export function Charts(): ReactElement {
         }}
       >
         <ChartsBody hiddenHands={hiddenHands} />
-        {/* 60/40 split (owner requirement 1): charts get flex-grow 3, energy 2, both
-            on a 0% basis so the ratio holds at every width. minWidth 0 keeps the
-            energy panel SHRINKABLE — a real/max-content basis here would let the
-            (non-wrapping) table starve the chart canvases at very wide viewports
-            (the owner-reported collapse; verified fixed at ~2000px and ≥2400px). */}
-        <div style={{ flex: '2 1 0%', minWidth: 0 }}>
+        {/* Energy table pinned to the right at its NATURAL width; the charts flex to
+            fill ALL remaining space (owner requirement 1, 2026-07-11). The split is
+            no longer a fixed ratio: ChartsBody is the only grower (grow 1), so the
+            table can never starve the canvases at wide docks — the historic ≥2340px
+            charts-collapse cannot recur because this item's flex-grow is 0.
+              • `flex: 0 1 auto` — basis auto sizes the item to the table's own width
+                (the caption is width-neutralized in EnergyPanel so it does NOT inflate
+                this basis to the full unwrapped paragraph); grow 0 pins it compact.
+              • `minWidth: 0` — keeps it SHRINKABLE so at narrow docks (~1400px and
+                below) it gives way and the table scrolls inside its own overflow-x
+                container rather than pushing the charts to zero width.
+            Reasoned at ~1400px (table ~natural, charts take the rest), ~2000px and
+            ≥2400px (identical — the table stays compact, charts absorb the surplus). */}
+        <div style={{ flex: '0 1 auto', minWidth: 0 }}>
           <EnergyPanel />
         </div>
       </div>

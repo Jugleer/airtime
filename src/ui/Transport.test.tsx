@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useAppStore } from '../state';
 import { Transport } from './Transport';
 
@@ -22,10 +22,22 @@ describe('Transport (ui layer)', () => {
     expect(screen.getByRole('button', { name: 'Play' })).toBeTruthy();
   });
 
-  it('restart zeroes simTime through the store', () => {
-    useAppStore.setState({ simTime: 2.4 });
+  it('restart rebuilds the sim from the current config at t = 0 (not just a seek)', () => {
+    // A mid-flight hand-geometry edit is a future-only epoch (owner ruling 2026-07-11):
+    // the store field the markers render from moves now, but the t = 0 base does not.
+    act(() => {
+      useAppStore.setState({ simTime: 1.0 });
+      useAppStore.getState().setHandPoint(0, 'throw', 0.9, 0);
+    });
+    expect(useAppStore.getState().kinematicsEpochs.length).toBeGreaterThan(0);
+
     render(<Transport />);
     fireEvent.click(screen.getByRole('button', { name: 'Restart' }));
-    expect(useAppStore.getState().simTime).toBe(0);
+
+    const after = useAppStore.getState();
+    expect(after.simTime).toBe(0);
+    // Folded into the base at t = 0 — the balls now fly from exactly the marker.
+    expect(after.kinematicsEpochs).toHaveLength(0);
+    expect(after.sim.kinematics.geometry.throwPoint(0).x).toBeCloseTo(0.9, 9);
   });
 });

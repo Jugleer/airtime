@@ -12,10 +12,15 @@ import { usePalette, type Palette } from './theme';
 
 const SLIDER_STEPS = 1000;
 /**
- * Internal steps a single wheel event nudges the slider (owner 2026-07-11: the old
- * ±1 was "prohibitively slow"; ~3× more sensitive). Still clamped to min/max.
+ * WHEEL SENSITIVITY (owner-facing tuning knob). One wheel notch over a hovered
+ * slider moves it `WHEEL_STEP` internal steps, and the whole slider track spans
+ * `SLIDER_STEPS` (1000) steps from min to max — so a notch covers
+ * `WHEEL_STEP / SLIDER_STEPS` of the range (10/1000 = 1% per notch at the current
+ * value). Raise this to scroll faster, lower it for finer control. It is a display
+ * convenience only (never touches the sim) and the move is always clamped to
+ * [min, max]. History: 1 (too slow) → 3 (still slow) → 10 (owner 2026-07-11).
  */
-const WHEEL_STEP = 3;
+const WHEEL_STEP = 10;
 
 /**
  * A subtle ↺ affordance that resets one control to its default. Rendered only when

@@ -104,4 +104,23 @@ describe('Charts (ui layer)', () => {
     // The draw effect calls getContext (stubbed to null); the guard must no-op.
     expect(() => render(<Charts />)).not.toThrow();
   });
+
+  it('pins the layout: charts grow, energy table is compact + shrinkable (owner req. 1)', () => {
+    // jsdom does not compute flexbox, so we assert the *declared* flex intent that
+    // makes the split correct at every dock width. The charts body is the only
+    // grower (grow 1) → it fills ALL space the compact energy table leaves; the
+    // energy wrapper never grows (grow 0) → it cannot starve the canvases at wide
+    // docks (the historic ≥2340px collapse), and stays shrinkable (minWidth 0) so a
+    // narrow dock shrinks it and the table scrolls instead of squeezing the charts.
+    render(<Charts />);
+    const chartsBody = screen.getByLabelText('Hand speed chart').parentElement as HTMLElement;
+    expect(chartsBody.style.flexGrow).toBe('1'); // only grower → fills the remainder
+    expect(chartsBody.style.flexBasis).toBe('60%'); // narrow-dock floor (no collapse)
+    const energyWrapper = chartsBody.nextElementSibling as HTMLElement;
+    // The wrapper holds the energy table (sanity: it is the right sibling).
+    expect(within(energyWrapper).getByText('Total')).toBeTruthy();
+    expect(energyWrapper.style.flexGrow).toBe('0'); // never grows → charts never starve
+    expect(energyWrapper.style.flexBasis).toBe('auto'); // natural (table) width
+    expect(energyWrapper.style.minWidth).toBe('0px'); // shrinkable at narrow docks
+  });
 });

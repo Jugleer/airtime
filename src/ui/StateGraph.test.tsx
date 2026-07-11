@@ -136,6 +136,15 @@ describe('StateGraph panel (ui layer)', () => {
     expect(useAppStore.getState().graphVisible).toBe(false);
     expect(screen.queryByLabelText('Current state marker')).toBeNull();
   });
+
+  it('draws muted directional arrows on base (background) edges (owner req. 2026-07-11)', () => {
+    // The '3' cascade graph is sparse (node radius at max), so the clutter gate lets
+    // base edges carry the secondary arrowhead: the muted marker def exists and at
+    // least one base <line> references it. Cycle arrows live on <path>, not <line>.
+    const { container } = render(<StateGraph />);
+    expect(container.querySelector('#stategraph-arrow-base')).toBeTruthy();
+    expect(container.querySelectorAll('line[marker-end]').length).toBeGreaterThan(0);
+  });
 });
 
 describe('StateGraph minimap (always-visible corner preview)', () => {
@@ -161,6 +170,16 @@ describe('StateGraph minimap (always-visible corner preview)', () => {
     expect(screen.getByText('click to expand')).toBeTruthy();
     // The old ⤢ arrow glyph is gone.
     expect(screen.queryByText('⤢')).toBeNull();
+  });
+
+  it('omits base-edge arrows in the tiny minimap (non-interactive, owner req. 2026-07-11)', () => {
+    useAppStore.setState({ graphVisible: false, graphMinimap: true });
+    const { container } = render(<StateGraph />);
+    // Minimap shares GraphPicture but passes interactive=false, so no base arrowhead
+    // marker is emitted and no base <line> references one — keeps the 200px box clean
+    // and avoids a duplicate #stategraph-arrow-base id (the overlay is not mounted).
+    expect(container.querySelector('#stategraph-arrow-base')).toBeNull();
+    expect(container.querySelectorAll('line[marker-end]').length).toBe(0);
   });
 
   it('hides the minimap entirely when graphMinimap is off (toggle still opens the overlay)', () => {

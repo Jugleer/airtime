@@ -559,3 +559,46 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
 - [ ] Export GIF: 1 loop loops seamlessly; turntable orbits once; cancel
       restores; on a desktop Chrome, WebM option appears.
 - [ ] &t= in a shared URL seeks; keyboard: tab ring visible, Esc closes dialogs.
+
+## Round 4 — owner feedback on round 3 (2026-07-11)            DONE
+- Commit: (this commit) — Gate: (2026-07-11, "npm run gate", green — 55 files / 701 tests; orchestrator-run)
+- WAIT-HIGH RETURNS (owner's top item; supersedes round-3 wait-low): empty hand
+  decelerates from release to a ready point AT the line (readyY = line, worst
+  measured dip below line 6.4e-6 m), true static rest when timing allows
+  (531@nh3 84%, 441 50%, 3-cascade 9%), flanks-meet slowdown on tight zips;
+  ready column = wind-up runway clamped to the throw–catch chord (unclamped
+  blew 1.2 m excursions). Endpoints unchanged → seams C², no-ball-tracing pins
+  kept. Swept 4800 elevated property runs + 8640 adversarial cases (worst acc
+  7.1e-10). Wait-low test expectations updated (owner-directed). Review: ZERO
+  confirmed findings; two doc-accuracy lows fixed (rise-bound wording, stale
+  minFlankTime comment). Flag: rise scales ~0.4·holdDepth in the descent-
+  dominated regime (floor-limited < ~6 cm absolute otherwise).
+- Charts: energy table at natural width pinned right (caption width-
+  neutralized so it wraps to the table), charts absorb ALL remaining dock
+  width; verified 500–2400 px; neither historic collapse mode can recur.
+- Wheel: WHEEL_STEP 3 → 10 (src/ui/widgets.tsx — the owner's tuning knob;
+  1% of range per notch). Help copy updated.
+- Trail max 8 s → 2 s; old links clamp at decode (drift-guard test pins the
+  codec's store-free mirror to TRAIL_LENGTH_MAX); buffers re-pinned.
+- State graph: muted directional arrowheads on background edges (suppressed
+  when nodeRadius < 3.5 — density proxy; minimap never draws them).
+- Hand-path persistence BUG: overlay sampled the timeline START, but splices
+  keep the past bit-identical → it redrew the pre-splice pattern (proven:
+  3→531 splice drew the 3-loop, length 1.898 vs 2.134). Now anchors at the
+  horizon END (always current steady state); WorkspaceOverlay inherits via the
+  shared helper; dead epoch plumbing removed.
+- Gizmo "reset markers" report: DISPROVEN as a marker bug (markers derive from
+  the store; verified all three marker kinds follow resets). Real cause:
+  transport ↺ Restart only seeked to t=0, which PREDATES future-only geometry
+  epochs — balls replayed pre-edit geometry under post-edit markers. Owner
+  ruling: Restart now REBUILDS from current committed settings at t=0 (shares
+  the clean-restart path with graph hardReset; playing state preserved; view/
+  panel/theme untouched) + new "↺ Reset positions" button in HANDS & GEOMETRY
+  (re-samples the preset as a future-only epoch; hidden when already default).
+- Round-4 operator checks: 531/441 hand waits HIGH near the catch column with
+  a visible pause, then drops into the catch (no dip between throws); charts
+  fill the dock with the work table compact at the right; wheel-scroll feels
+  fast (tune WHEEL_STEP in src/ui/widgets.tsx); trail slider tops out at 2 s;
+  graph background edges show direction; change patterns with hand paths on —
+  no stale loops; drag markers then ↺ Restart — balls fly from the markers;
+  "Reset positions" appears only after dragging and snaps C/T/G markers back.

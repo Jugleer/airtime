@@ -994,14 +994,25 @@ describe('held carries and multi-hand patterns', () => {
   });
 });
 
-// --- Empty-hand returns scoop low — they do NOT track the ball (§4.3) ---------
+// --- Empty-hand returns WAIT HIGH — they do NOT track the ball (§4.3) ---------
+//
+// OWNER-DIRECTED SPEC CHANGE (round 4, 2026-07-11): the empty hand must WAIT near
+// the TOP of its travel (y ≈ the catch/throw line, the top of the hold band) —
+// slowing to a pause there until the ball comes — NOT scoop down to line −
+// holdDepth between throws. This SUPERSEDES the round-3 wait-low return. These
+// tests are UPDATED accordingly: the wait-low `handDip ≈ line − holdDepth`
+// expectation is replaced with a wait-high `handDip ≈ line` one (an owner spec
+// change, not a test-weakening), while the LOAD-BEARING assertions are KEPT —
+// large hand↔ball separation during a self-throw flight, and the hand apex well
+// below the ball apex (no ball-tracking) — and the 1155 excursion bound HOLDS
+// (it improves: the hand no longer dips).
 
 /**
  * Find a self-throw flight (ball thrown and caught by the SAME hand) and that
  * hand: the flight leaves hand h's throw point and lands at hand h's catch
  * point. The hand is EMPTY through the flight, so handState(h, ·) over the
- * flight interval IS the return — which must scoop down to a ready point, NOT
- * trace the ball's arc (the owner's ball-following bug).
+ * flight interval IS the return — which must WAIT HIGH near the line, NOT trace
+ * the ball's arc (the owner's ball-following bug).
  */
 function selfThrowFlight(
   k: Kinematics,
@@ -1022,16 +1033,16 @@ function selfThrowFlight(
   return undefined;
 }
 
-describe('empty-hand returns scoop low — no ball-tracking (§4.3)', () => {
-  // Owner bug: "In 045 the hand throwing the 4 follows the ball along the entire
-  // path; same for 3 with three hands." The old return was a single quintic
-  // pinned to the throw's six ball-derived boundary states — for a self-throw
-  // those ARE the flight's endpoint states, so the unique quintic through them
-  // was the flight parabola and the empty hand traced the arc exactly (measured
-  // separation 0, hand apex = ball apex). Routing the return through the dip
-  // construction pulls the hand down to a ready point instead.
+describe('empty-hand returns wait high — no ball-tracking (owner round-4, §4.3)', () => {
+  // Owner bug (round 3): "In 045 the hand throwing the 4 follows the ball along
+  // the entire path; same for 3 with three hands." A single quintic pinned to the
+  // throw's six ball-derived boundary states IS the flight parabola for a
+  // self-throw, so the empty hand traced the arc exactly (separation 0, hand apex
+  // = ball apex). The wait-high return keeps the hand near the line instead —
+  // still NOT tracking the ball (the load-bearing property), but now waiting HIGH
+  // (round-4 owner spec) rather than dipping to line − holdDepth (round 3).
   for (const [pattern, handCount] of [['045', 2], ['3', 3]] as const) {
-    it(`${pattern} n_h=${handCount}: the throwing hand does not follow its self-throw`, () => {
+    it(`${pattern} n_h=${handCount}: the throwing hand waits high and does not follow its self-throw`, () => {
       const values = parse(pattern);
       const timeline = buildTimeline(values, { beatCount: 24, params: { ...DEFAULT_PARAMS, handCount } });
       const kinematics = buildKinematics(timeline, { values, handCount });
@@ -1056,21 +1067,90 @@ describe('empty-hand returns scoop low — no ball-tracking (§4.3)', () => {
       }
       const ballApexHeight = ballApex - catchHeight; // apex above the hand line
       expect(ballApexHeight).toBeGreaterThan(0.1); // a real airborne self-throw
-      // Separation is LARGE — the empty hand is nowhere near the ball (was ~0).
+      // LOAD-BEARING (kept): separation is LARGE — the empty hand is nowhere near
+      // the ball (was ~0 when it traced the arc).
       expect(maxSep).toBeGreaterThan(0.5 * ballApexHeight);
-      // The hand apex stays near the line — it does NOT rise to the ball's apex.
+      // LOAD-BEARING (kept): the hand apex stays well BELOW the ball's apex — it
+      // does not rise to follow the ball.
       expect(handApex).toBeLessThan(ballApex - 0.25 * ballApexHeight);
-      expect(handApex).toBeLessThan(catchHeight + 0.1);
-      // The hand dips to the ready point: catch height − holdDepth.
-      expect(handDip).toBeCloseTo(catchHeight - kinematics.holdDepth, 2);
+      // WAIT-HIGH (round-4, replaces the round-3 wait-low `handDip ≈ line −
+      // holdDepth`): the empty hand's low point is the LINE itself (the top of the
+      // hold band), never near the old dip bottom. It drifts a little ABOVE the
+      // line after release (the natural post-throw rise), but that rise is bounded.
+      expect(handDip).toBeCloseTo(catchHeight, 2); // waits AT the line, not at line − holdDepth
+      expect(handDip).toBeGreaterThan(catchHeight - 0.5 * kinematics.holdDepth); // nowhere near line − holdDepth
+      expect(handApex).toBeGreaterThan(catchHeight); // it does rise a touch above the line
+      expect(handApex - catchHeight).toBeLessThan(0.1); // but the rise is bounded (measured ~0.04)
     });
   }
 
+  it('long return comes to a genuine rest at the line (owner round-4 pin)', () => {
+    // (b) When the return duration allows, the empty hand comes to a TRUE REST
+    // near the ready point: a static hand segment (v = a = jerk ≡ 0) at the line
+    // height, spanning a nonzero interval. 3-cascade at n_h = 3 has a long empty
+    // window (t_e ≈ 0.45 s), so its returns rest. (In a plain cascade the only
+    // static hand segments are return rests — the value-3 carries sweep.)
+    const values = parse('3');
+    const handCount = 3;
+    const timeline = buildTimeline(values, { beatCount: 24, params: { ...DEFAULT_PARAMS, handCount } });
+    const kinematics = buildKinematics(timeline, { values, handCount });
+    const lineY = kinematics.geometry.catchPoint(0).y;
+    // A static return-rest segment: constant polynomials on all three axes.
+    const restSeg = kinematics
+      .handSegments(0)
+      .find(
+        (s) =>
+          s.x.degree === 0 &&
+          s.y.degree === 0 &&
+          s.z.degree === 0 &&
+          s.endTime - s.startTime > 1e-6 &&
+          s.startTime >= 2 &&
+          s.startTime <= 10,
+      );
+    expect(restSeg).toBeDefined();
+    if (!restSeg) return;
+    // The rest sits at the LINE (top of the hold band), not at line − holdDepth.
+    expect(evalSeg(restSeg, restSeg.startTime).position.y).toBeCloseTo(lineY, 6);
+    // Velocity is exactly zero across the whole pause (a genuine rest).
+    for (let f = 0; f <= 1; f += 0.1) {
+      const t = restSeg.startTime + f * (restSeg.endTime - restSeg.startTime);
+      expect(magnitude(kinematics.handState(0, t).velocity)).toBeLessThan(1e-9);
+    }
+  });
+
+  it('short zip return stays continuous and lunge-free (owner round-4 pin)', () => {
+    // (c) A short return (a fast value-1 zip: the tightest empty window) must stay
+    // C² at every joint and must not lunge toward the far hand. 531 at defaults has
+    // a ~0.2 s zip return.
+    const values = parse('531');
+    const timeline = buildTimeline(values, { beatCount: 20, params: DEFAULT_PARAMS });
+    const kinematics = buildKinematics(timeline, { values, handCount: 2 });
+    for (let hand = 0; hand < 2; hand++) {
+      // Continuity budget at every hand joint.
+      for (const { left, right } of jointStates(kinematics.handSegments(hand))) {
+        expect(vecDiff(left.position, right.position)).toBeLessThan(1e-10);
+        expect(vecDiff(left.velocity, right.velocity)).toBeLessThan(1e-10);
+        expect(vecDiff(left.acceleration, right.acceleration)).toBeLessThan(1e-9);
+      }
+      // Lunge-free: the hand stays near its own throw/catch points throughout
+      // (the zip's fast release used to fling the empty hand toward the far hand).
+      // Sampled over the whole path (carries + returns); locality holds for both.
+      const cp = kinematics.geometry.catchPoint(hand);
+      const tp = kinematics.geometry.throwPoint(hand);
+      for (let t = 2; t < 5; t += 0.004) {
+        const p = kinematics.handState(hand, t).position;
+        const local = Math.min(magnitude(subtract(p, cp)), magnitude(subtract(p, tp)));
+        expect(local).toBeLessThan(0.25); // stays local (no lunge)
+      }
+    }
+  });
+
   it('1155 n_h=3: each empty-hand return stays local (no wild travel)', () => {
     // Owner: the wild hand travel in 1155/n_h=3 — hand 0 lunged to |z| ≈ 0.74
-    // (past the far hand at z ≈ 0.51) on the fast zip's inherited release
-    // velocity. The dip scoop keeps every hand's return within ~0.35 m of its own
-    // points, and hand 0's z well short of the neighbour column.
+    // (past the far hand at z ≈ 0.51) on the fast zip's inherited release velocity.
+    // The wait-high return keeps every hand within ~0.35 m of its own points and
+    // hand 0's z well short of the neighbour column — the excursion bound HOLDS
+    // (it improves vs the round-3 dip: the hand no longer scoops down).
     const values = parse('1155');
     const geometry = makeHandGeometry(
       [vec3(-0.1, 1, 0), vec3(0.0524, 1, 0.349), vec3(0.1, 1, 0)],

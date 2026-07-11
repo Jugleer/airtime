@@ -166,15 +166,25 @@ The hand trajectory must be defined for **all** time (charts need it):
   - A cubic (4-point Bézier, velocity-matched only) is available behind a
     `CarryPath` interface as a comparison toggle — it produces jerk deltas at
     events by construction; the UI may note this when selected.
-- **Return** (throw → next catch, empty hand): the hand scoops through a low
-  ready point via the same dip construction as a carry (`held: false`) — NOT a
-  single quintic pinned to the six ball-derived boundary states (for a
-  self-throw that unique quintic IS the flight parabola, so the empty hand
-  would trace the ball's whole arc; round-3 fix). C² at the junctions
-  (endpoint accelerations match the adjoining carry ends, i.e. `−g`). Return
-  flanks are floored to a numerically clean duration — returns inherit the
-  ball's large release/arrival velocities and are not subject to the carry's
-  monotone-descent constraint, so a slightly lower ready point is harmless.
+- **Return** (throw → next catch, empty hand): the empty hand **waits high** —
+  it decelerates from the release to a ready point near the **top** of its
+  travel (y ≈ the catch/throw line, the top of the hold band — NOT
+  `line − holdDepth`), pauses there, then accelerates down into the next
+  catch. Three C²-stitched quintic segments (absorb → rest → wind-up) mirror
+  the held-2 carry but at line height with the return's boundary velocities.
+  When the empty window is long enough the pause is a true static rest
+  (v = a = jerk ≡ 0); when timing is tight the flanks meet at the midpoint and
+  the hand only slows to an instantaneous stop. The ready column is the
+  drift-placed wind-up runway (monotone velocity ramp into the catch), clamped
+  to the throw–catch chord so a fast horizontal catch cannot lunge the hand
+  past a column. Endpoints are unchanged — the same six ball-derived boundary
+  states with `−g` endpoint accelerations — so every carry↔return seam stays
+  C² and the empty hand never traces its own self-throw (round-3 property,
+  kept). The absorb decelerates the upward release, so the hand drifts a
+  little above the line first (≈ 0.4·holdDepth when the descent term sets the
+  flank; a small absolute floor-limited rise — measured < ~6 cm — at tiny
+  holdDepth). Supersedes the round-3 wait-low return (owner ruling, round 4,
+  2026-07-11).
 - **Idle** (`0` beats / startup): hand eases to and rests at its catch point.
 - **Held 2s**: the carry simply spans the extra beats through the same spline
   machinery (static rest at the dip; do not generate a throw/catch pair).

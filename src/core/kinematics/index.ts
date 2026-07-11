@@ -424,11 +424,11 @@ export interface CarrySpec {
    */
   readonly held?: boolean;
   /**
-   * Optional lower bound (s) on the scoop-sweep flank time. RETURNS set this
-   * (see {@link RETURN_FLANK_FLOOR}) so their steep, ball-velocity-driven flanks
-   * cannot collapse below a numerically clean duration; carries omit it (their
-   * flank timing is fixed by the vertical descent so the scoop-shape monotone
-   * descent stays intact).
+   * Optional lower bound (s) on the scoop-sweep flank time. Vestigial as of the
+   * round-4 wait-high return: returns no longer route through this carry
+   * construction (they have their own builder — see {@link buildReturn}), and
+   * carries never set it, so {@link buildScoopSweepCarry} reads it as 0. Kept on
+   * the interface so the carry construction stays byte-for-byte unchanged.
    */
   readonly minFlankTime?: number;
 }
@@ -490,23 +490,32 @@ const SHORT_SEGMENT_TIME = 0.05;
 const MIN_HOLD_TIME = 1e-3;
 
 /**
- * Minimum absorb/wind-up flank time (s) for a RETURN's dip scoop. A return
- * inherits the ball's release velocity (UP) at the throw and arrival velocity
- * (DOWN) at the catch — the opposite of a carry, whose boundary velocities point
- * INTO the dip — so its scoop-sweep flanks work harder to reverse the vertical
- * motion, and for a high throw (large release/arrival speed) the
- * {@link ABSORB_TIME_PER_SPEED} floor collapses the flank toward ~0.7 ms, whose
- * steep quintic breaches the 1e-9 acceleration-continuity budget at the flank
- * seams (measured 1.78e-9 for a value-14 return at g ≈ 19, holdDepth ≈ 0.005 —
- * the near-MIN_ABSORB conditioning corner). Unlike a carry, a return is NOT
- * subject to the scoop-shape monotone-descent test, so its flank may be floored
- * to a clean-conditioning duration without risking a vertical overshoot below
- * the dip (a slightly lower empty-hand ready point is harmless). At 3 ms the
- * measured worst return-flank endpoint |a| error over the property domain drops
- * to ~2.6e-10 — comfortably inside budget. The value is capped at a quarter of
- * the return so the scoop's sweep always survives (see buildScoopSweepCarry).
+ * Minimum absorb/wind-up flank time (s) for a wait-high RETURN ({@link
+ * buildReturn}). A return's flanks inherit the ball's release velocity (UP) at
+ * the throw and arrival velocity (DOWN) at the catch — large, and the opposite
+ * of a carry's dip-ward boundary velocities — so for a high throw (large
+ * release/arrival speed) a flank sized only by the vertical descent collapses
+ * toward ~0.7 ms, whose steep quintic breaches the 1e-9 acceleration-continuity
+ * budget at the flank seams (measured 1.78e-9 for a value-14 return at g ≈ 19).
+ * Unlike a carry, a return is NOT subject to the scoop-shape monotone-descent
+ * test, so its flank may be floored to a clean-conditioning duration harmlessly.
+ * At 3 ms the measured worst return-flank endpoint |a| error over the property
+ * domain drops to ~2.6e-10 — comfortably inside budget. The flank is capped at
+ * half the return so the two flanks always fit (see buildReturn).
  */
 const RETURN_FLANK_FLOOR = 3e-3;
+
+/**
+ * Clamp `value` to the closed interval spanned by `from` and `to` (order-free).
+ * Used by the wait-high return to keep its ready column between the throw and
+ * catch columns (the drift-placed wind-up runway can otherwise reach past a
+ * column for a fast, mostly-horizontal catch, sending the empty hand on a lunge).
+ */
+function clampToChord(from: number, to: number, value: number): number {
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  return Math.min(hi, Math.max(lo, value));
+}
 
 /**
  * Cap (m/s²) on the internal horizontal acceleration of a HELD-2 rest flank,
@@ -583,9 +592,9 @@ function buildScoopSweepCarry(spec: CarrySpec): PolySegment[] | null {
   const sweepRaw = q > 0 ? (2 * total * depth) / (q + root) : (root - q) / (2 * verticalSpeed);
   let flankTime = (total - sweepRaw) / 2;
   // Floor the flank for numerical conditioning: the ABSORB_TIME_PER_SPEED scale
-  // caps the internal vertical acceleration, and RETURNS additionally floor by
-  // minFlankTime (their ball-velocity-driven flanks would otherwise collapse
-  // below a clean-conditioning duration — see RETURN_FLANK_FLOOR).
+  // caps the internal vertical acceleration. (minFlankTime is vestigial — see its
+  // CarrySpec doc: round-4 returns no longer route through this construction and
+  // carries never set it, so it always resolves to 0 here.)
   const flankFloor = Math.max(verticalSpeed * ABSORB_TIME_PER_SPEED, spec.minFlankTime ?? 0);
   if (flankTime < flankFloor) {
     flankTime = Math.min(flankFloor, total / 2);
@@ -891,22 +900,51 @@ export const quinticViaCarryPath: CarryPath = { name: 'quintic-via', build: buil
 export const cubicBezierCarryPath: CarryPath = { name: 'cubic-bezier', build: buildCubicCarry };
 
 /**
- * Empty-hand return (throw → next catch): the hand scoops through a low ready
- * point via the SAME dip construction as a carry ({@link buildQuinticViaCarry}
- * with `held: false`), NOT a single quintic pinned to the throw's six ball-
- * derived boundary states. That single quintic was exactly the flight parabola
- * for a self-throw (its endpoints ARE the flight's), so the empty hand traced
- * the ball's whole arc (owner: "the hand throwing the 4 follows the ball"); for
- * fast zips it lunged toward the far hand on the inherited release velocity.
- * Routing through the dip pulls the hand down to the ready point instead.
+ * Empty-hand WAIT-HIGH return (throw → next catch), owner spec (2026-07-11,
+ * round 4): the empty hand must NOT scoop down to line − holdDepth between a
+ * throw and the next catch — it should WAIT near the top of its travel (y ≈ the
+ * catch/throw line, the top of the hold band), pausing there until the ball
+ * comes. Three C²-stitched segments mirror {@link buildHeldRestCarry} but at line
+ * height and with the return's boundary velocities (the ball's release velocity —
+ * UP — at the throw, its arrival velocity — DOWN — at the catch):
  *
- * The seams stay C²: the via-carry absorb begins at exactly (fromPoint,
- * fromVelocity, (0, −g, 0)) and the wind-up ends at exactly (toPoint,
- * toVelocity, (0, −g, 0)) — the same six endpoint states the old single quintic
- * matched; only the interior changes (it now dips instead of tracking the ball).
- * Returns ALWAYS use this construction regardless of the user's carry-path
- * choice (the old return was likewise a hardcoded quintic). buildQuinticViaCarry
- * handles the total ≤ 0 / short / holdDepth = 0 edge cases, so no guard here.
+ *   absorb  (throw → ready)  quintic flank, endpoint accel (0, −g, 0) → (0,0,0)
+ *   rest    (at the ready)   static — v = a = jerk ≡ 0 (a true pause)
+ *   wind-up (ready → catch)  quintic flank, endpoint accel (0,0,0) → (0, −g, 0)
+ *
+ * The ready point sits at y = lineY = ½(fromY + toY) — the hand's natural level,
+ * NOT lineY − holdDepth — so the empty hand waits high. The absorb decelerates
+ * the upward release velocity to a stop there; because the release points UP the
+ * hand drifts a little ABOVE the line first (the natural post-release rise), then
+ * settles to the ready point — ~0.4·holdDepth when the descent term sets the
+ * flank (~3.8 cm at the 0.1 default); at tiny holdDepth the flank hits its
+ * conditioning floors instead and the rise decouples from holdDepth, staying a
+ * small absolute bound (measured < ~6 cm across the property domain).
+ * Horizontally the ready column is the drift-placed
+ * wind-up runway (toPoint − toVelocity·flank/2, so the wind-up is a monotone
+ * velocity ramp into the catch), CLAMPED to the throw–catch chord so a fast
+ * mostly-horizontal catch cannot send it lunging past a column.
+ *
+ * This SUPERSEDES the round-3 wait-low return (which routed through the carry's
+ * dip via `held: false`, dipping the empty hand to lineY − holdDepth — the side
+ * effect the owner now rejects). It KEEPS the round-3 fixes: the seams stay C²
+ * (the same six ball-derived endpoint states — fromPoint/fromVelocity/(0,−g,0)
+ * and toPoint/toVelocity/(0,−g,0) — so no carry↔return acceleration step and no
+ * ball-tracing), and the empty hand no longer lunges (measured excursion ≤ the
+ * round-3 return's in every swept corner).
+ *
+ * Flank time: the carry's absorb time 2·holdDepth/v_y sizes the vertical
+ * slow-to-rest (so the empty hand's rise mirrors the held hand's dip); floored so
+ * the reposition-to-rest stays within the {@link HELD_REST_MAX_ACCEL} cap
+ * (flank ≥ √(reposition/cap)), the steep flank stays numerically clean
+ * ({@link RETURN_FLANK_FLOOR} / {@link ABSORB_TIME_PER_SPEED}), and capped at
+ * half the return. When the return is too tight for a genuine rest
+ * (total − 2·flank ≤ MIN_HOLD_TIME) the flanks meet at the midpoint — the hand
+ * still slows to an instantaneous v = 0 there (the owner's "just a slowdown"),
+ * with no static segment. Short flanks use {@link quinticHermiteConditioned} and
+ * EXACT evaluation-visible durations (as {@link buildHeldRestCarry}) so the
+ * joints stay inside the 1e-9 budget. Returns ALWAYS use this construction
+ * regardless of the user's carry-path choice.
  */
 function buildReturn(
   startTime: number,
@@ -918,20 +956,71 @@ function buildReturn(
   gravity: number,
   holdDepth: number,
 ): PolySegment[] {
-  return buildQuinticViaCarry({
-    startTime,
+  const total = endTime - startTime;
+  if (total <= 0) {
+    return [staticSegment(startTime, endTime, fromPoint)];
+  }
+  const g = gravityVector(gravity);
+  // The ready point waits at the TOP of the hold band (the catch/throw line),
+  // not at its bottom (lineY − holdDepth) — the owner's wait-high spec.
+  const lineY = 0.5 * (fromPoint.y + toPoint.y);
+  const verticalSpeed = Math.max(Math.abs(fromVelocity.y), Math.abs(toVelocity.y));
+  // Half the horizontal chord — the reposition each flank makes; floors the flank
+  // so the reposition-to-rest stays within the acceleration cap.
+  const reposition =
+    0.5 * Math.max(Math.abs(toPoint.x - fromPoint.x), Math.abs(toPoint.z - fromPoint.z));
+  // Flank time = the carry's absorb time (2·holdDepth/v_y), floored for the
+  // reposition accel cap and numerical conditioning, capped at half the return.
+  let flankTime = verticalSpeed > 0 ? (2 * holdDepth) / verticalSpeed : 0.25 * total;
+  flankTime = Math.max(
+    flankTime,
+    verticalSpeed * ABSORB_TIME_PER_SPEED,
+    Math.sqrt(reposition / HELD_REST_MAX_ACCEL),
+    RETURN_FLANK_FLOOR,
+  );
+  flankTime = Math.min(flankTime, 0.5 * total);
+  // Too tight for a genuine rest → flanks meet at the midpoint (v = 0 there, but
+  // no static dwell): the owner's "just a slowdown".
+  if (total - 2 * flankTime <= MIN_HOLD_TIME) {
+    flankTime = 0.5 * total;
+  }
+  const entryTime = startTime + flankTime;
+  const exitTime = endTime - flankTime;
+  const hasRest = exitTime - entryTime > 0;
+  // Ready column: the drift-placed wind-up runway, clamped to the throw–catch
+  // chord so it never strays past a column (no lunge on a fast horizontal catch).
+  const ready = vec3(
+    clampToChord(fromPoint.x, toPoint.x, toPoint.x - 0.5 * toVelocity.x * flankTime),
+    lineY,
+    clampToChord(fromPoint.z, toPoint.z, toPoint.z - 0.5 * toVelocity.z * flankTime),
+  );
+  const short = flankTime < SHORT_SEGMENT_TIME;
+  const hermite = short ? quinticHermiteConditioned : quinticHermite;
+  const absorbDuration = short ? entryTime - startTime : flankTime;
+  const windupDuration = short ? endTime - exitTime : flankTime;
+  const segments: PolySegment[] = [
+    {
+      startTime,
+      endTime: entryTime,
+      x: hermite(fromPoint.x, fromVelocity.x, g.x, ready.x, 0, 0, absorbDuration),
+      y: hermite(fromPoint.y, fromVelocity.y, g.y, ready.y, 0, 0, absorbDuration),
+      z: hermite(fromPoint.z, fromVelocity.z, g.z, ready.z, 0, 0, absorbDuration),
+    },
+  ];
+  if (hasRest) {
+    // A true rest at the ready point: constant polynomials, so velocity /
+    // acceleration / jerk are exactly 0 through the whole pause. The flanks meet
+    // it at v = a = 0, so the seams are C².
+    segments.push(staticSegment(entryTime, exitTime, ready));
+  }
+  segments.push({
+    startTime: exitTime,
     endTime,
-    catchPoint: fromPoint,
-    throwPoint: toPoint,
-    startVelocity: fromVelocity,
-    endVelocity: toVelocity,
-    gravity,
-    holdDepth,
-    held: false,
-    // Keep the empty-hand scoop's flanks numerically clean (see RETURN_FLANK_FLOOR),
-    // capped at a quarter of the return so the sweep always survives.
-    minFlankTime: Math.min(0.25 * (endTime - startTime), RETURN_FLANK_FLOOR),
+    x: hermite(ready.x, 0, 0, toPoint.x, toVelocity.x, g.x, windupDuration),
+    y: hermite(ready.y, 0, 0, toPoint.y, toVelocity.y, g.y, windupDuration),
+    z: hermite(ready.z, 0, 0, toPoint.z, toVelocity.z, g.z, windupDuration),
   });
+  return segments;
 }
 
 // --- Assembled kinematics ---------------------------------------------------

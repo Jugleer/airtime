@@ -41,6 +41,15 @@ const MAX_NODE_RADIUS = 8;
 const MIN_NODE_RADIUS = 1.6;
 const TAU = Math.PI * 2;
 const LABEL_NODE_LIMIT = 42;
+/**
+ * Clutter gate for the muted directional arrowheads on BASE (non-cycle) edges
+ * (owner requirement 2026-07-11). `nodeRadius` shrinks as the graph densifies
+ * (geometryOf packs it toward MIN_NODE_RADIUS), so it is a direct proxy for how
+ * much room an arrowhead has: below this radius a dense graph has hundreds of tiny
+ * edges and per-edge arrowheads read as noise (and cost SVG markers), so we drop
+ * them and leave the base edges as plain lines. The blue cycle arrows always show.
+ */
+const BASE_ARROW_MIN_RADIUS = 3.5;
 
 interface GraphGeometry {
   readonly width: number;
@@ -113,6 +122,12 @@ const GraphPicture = memo(function GraphPicture({
   const cycleEdgeKeys = new Set(cycle.edges.map((edge) => `${edge.from}:${edge.to}`));
   const centerX = toX(0.5);
   const centerY = toY(0.5);
+  // Base (background) edges get muted directional arrowheads only in the interactive
+  // overlay and only when nodes are big enough to carry them (clutter gate). The
+  // minimap (interactive=false) and dense graphs keep plain lines — see
+  // BASE_ARROW_MIN_RADIUS. The arrows share palette.edgeStroke with the base lines
+  // so they read as secondary to the blue cycle arrows.
+  const showBaseArrows = interactive && nodeRadius >= BASE_ARROW_MIN_RADIUS;
 
   const baseEdges: ReactElement[] = [];
   const cycleEdges: ReactElement[] = [];
@@ -185,6 +200,7 @@ const GraphPicture = memo(function GraphPicture({
             y2={y2}
             stroke={palette.edgeStroke}
             strokeWidth={1}
+            markerEnd={showBaseArrows ? 'url(#stategraph-arrow-base)' : undefined}
           />,
         );
       }
@@ -253,6 +269,25 @@ const GraphPicture = memo(function GraphPicture({
         >
           <path d="M 0 0 L 8 4 L 0 8 z" fill={CYCLE_COLOR} />
         </marker>
+        {/* Muted base-edge arrowhead: smaller than the cycle marker and drawn in the
+            edge-stroke color so it reads as a secondary, background direction cue.
+            Only emitted when base arrows are shown (never in the minimap), so a dense
+            graph carries no unused marker. Its id differs from #stategraph-arrow, and
+            the overlay + minimap are never mounted at once (verified: StateGraph
+            renders one xor the other), so no duplicate marker id can exist in the DOM. */}
+        {showBaseArrows ? (
+          <marker
+            id="stategraph-arrow-base"
+            viewBox="0 0 8 8"
+            refX={8 + nodeRadius / 1.3}
+            refY={4}
+            markerWidth={5.5}
+            markerHeight={5.5}
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 8 4 L 0 8 z" fill={palette.edgeStroke} />
+          </marker>
+        ) : null}
       </defs>
       <g>{baseEdges}</g>
       <g>{cycleEdges}</g>

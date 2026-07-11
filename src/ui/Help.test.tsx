@@ -19,9 +19,10 @@ describe('Help modal (ui layer)', () => {
     expect(screen.getByText('Space')).toBeTruthy();
     expect(screen.getByText(/Play or pause/i)).toBeTruthy();
     // Post-Settings-drawer copy: Esc documents the help, and the wheel nudge matches
-    // widgets.tsx (WHEEL_STEP = 3), not the old "one fine step" / "Settings drawer".
+    // widgets.tsx (WHEEL_STEP = 10 of SLIDER_STEPS = 1000 → 1% per notch), not the
+    // old "one fine step" / "three steps" / "Settings drawer".
     expect(screen.getByText(/Closes this help/i)).toBeTruthy();
-    expect(screen.getByText(/three steps per notch/i)).toBeTruthy();
+    expect(screen.getByText(/1% of its range per notch/i)).toBeTruthy();
     expect(screen.queryByText(/Settings drawer/i)).toBeNull();
     // Extended notation is documented (sync + multiplex), not vanilla-only.
     expect(screen.getByText('Sync & multiplex')).toBeTruthy();

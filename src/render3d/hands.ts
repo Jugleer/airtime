@@ -89,28 +89,36 @@ export function handPathPointCount(periodBeats: number): number {
 }
 
 /**
- * The beat the sampled loop STARTS at — the steady state to sample one period
- * from. When a kinematics epoch (gravity / hold depth / carry path / geometry
- * edit) exists, anchor at the first beat at/after the LATEST epoch so the drawn
- * path reflects the current kinematics (pass that beat as `lastEpochBeat`);
- * otherwise (`lastEpochBeat < 0`) anchor one full period in, past the startup
- * ease-in, so the loop is a clean closed steady-state cycle. The window is
- * clamped so the whole loop `[start, start + periodBeats]` stays inside the
- * generated horizon (`beatCount`).
+ * The beat the sampled loop STARTS at — anchored at the END of the generated
+ * horizon (`beatCount − periodBeats`), the last full period before the edge.
+ *
+ * The far future is ALWAYS the current pattern's steady state, so this is the one
+ * window that never goes stale. A live pattern change SPLICES the running timeline
+ * and keeps the PAST bit-identical (DESIGN.md §5): after switching e.g. 3 → 531 at
+ * the playhead, beats near the start are still the OLD pattern, so anchoring there
+ * would resample the pre-splice loop and the overlay would "persist" the old path
+ * (the reported bug). The horizon end sits past any splice/transition and past the
+ * latest kinematics epoch (a gravity / hold-depth / carry-path / geometry edit
+ * applies from its beat onward), so it reflects the current pattern AND kinematics,
+ * while still clearing the startup ease-in (the first cycle at t = 0). The result
+ * is clamped ≥ 0 so a period longer than the horizon degrades to the whole span;
+ * a degenerate period or empty horizon ⇒ 0.
+ *
+ * `lastEpochBeat` is retained only for backward compatibility with existing callers
+ * (it used to anchor at the latest kinematics epoch): the horizon-end anchor already
+ * sits at or past every epoch, so it is intentionally ignored. New callers pass two
+ * arguments.
  */
 export function handPathStartBeat(
   periodBeats: number,
   beatCount: number,
-  lastEpochBeat: number,
+  lastEpochBeat = -1,
 ): number {
+  void lastEpochBeat; // superseded by the horizon-end anchor (see above)
   if (periodBeats <= 0 || beatCount <= 0) {
     return 0;
   }
-  let start = lastEpochBeat >= 0 ? lastEpochBeat : periodBeats;
-  if (start + periodBeats > beatCount) {
-    start = Math.max(0, beatCount - periodBeats);
-  }
-  return start;
+  return Math.max(0, beatCount - periodBeats);
 }
 
 // --- Per-hand path hues ------------------------------------------------------
