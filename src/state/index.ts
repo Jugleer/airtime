@@ -169,13 +169,13 @@ export const DEFAULT_ORBIT_COLORING = true;
  * Hand cups ON by default (owner decision 2026-07-11): the hands are now core to
  * the visual, so a fresh boot shows a simple translucent partial hollow sphere
  * (a cup opening upward) riding each hand's `handState(hand, t)` position. Codec
- * key `sh`; toggled in Settings › View.
+ * key `sh`; toggled in the View group of the left sidebar.
  */
 export const DEFAULT_SHOW_HANDS = true;
 /**
  * Persistent hand paths OFF by default: the closed loop each hand traverses over
  * one spatial period (carries + returns) is a subtle guide line drawn only when
- * asked. Codec key `hp`; toggled in Settings › View.
+ * asked. Codec key `hp`; toggled in the View group of the left sidebar.
  */
 export const DEFAULT_SHOW_HAND_PATHS = false;
 
@@ -200,8 +200,9 @@ export const TRAIL_LENGTH_MIN = 0;
 export const TRAIL_LENGTH_MAX = 8;
 /**
  * Future ghost paths OFF by default (owner override 2026-07-11): the forward
- * preview is opt-in via Settings › View, so a fresh boot shows only the live
- * pattern. Old shared links that explicitly encode `gh` still decode identically;
+ * preview is opt-in via the View group in the left sidebar, so a fresh boot shows
+ * only the live pattern. Old shared links that explicitly encode `gh` still decode
+ * identically;
  * only the fresh-boot default changed.
  */
 export const DEFAULT_GHOSTS_ENABLED = false;
@@ -251,7 +252,7 @@ export const DEFAULT_GRAPH_VISIBLE = false;
  * sits in the scene's top-left corner (cycle + hopping marker visible, no labels)
  * and expands to the full {@link DEFAULT_GRAPH_VISIBLE} overlay on click. Turn it
  * OFF for a minimal scene (the labeled toggle button still opens the overlay).
- * Codec key `gm`; toggled in Settings › View.
+ * Codec key `gm`; toggled in the View group of the left sidebar.
  */
 export const DEFAULT_GRAPH_MINIMAP = true;
 

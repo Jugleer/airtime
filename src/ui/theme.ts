@@ -1,6 +1,7 @@
 // src/ui/theme — the dark-first palette + light variant for the redesigned shell
 // (owner override 2026-07-10, recorded in BUILD_LOG). The app is designed dark by
-// default; a light/dark toggle lives in Settings. This module is the single source
+// default; a light/dark toggle lives in the View group of the left sidebar. This
+// module is the single source
 // of truth for every non-data color: the DOM chrome (inline styles), the SVG views
 // (Ladder / TimelineBar / StateGraph), and the canvas charts all read the same
 // {@link Palette} object via {@link usePalette}. Data colors (per-ball, per-hand

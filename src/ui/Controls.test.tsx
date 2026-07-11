@@ -75,8 +75,9 @@ describe('Controls (ui layer)', () => {
     render(<Controls />);
     expect(screen.getByLabelText('Gravity')).toBeTruthy();
     expect(screen.getByLabelText('Hold depth')).toBeTruthy();
-    // Tempo & physics live in the sidebar; playback speed (viewing) lives in
-    // Settings — the two are never on the same panel (see Settings.test).
+    // Tempo & physics is its own sidebar group; playback speed (viewing) lives in
+    // the separate View group — both now in the left sidebar since the Settings
+    // drawer was removed (2026-07-11); the View group is covered below.
     expect(screen.getByText('Tempo & physics')).toBeTruthy();
   });
 
@@ -101,6 +102,17 @@ describe('Controls (ui layer)', () => {
     fireEvent.click(screen.getByLabelText('Edit hand positions'));
     expect(useAppStore.getState().positionsEditorOpen).toBe(true);
     expect(screen.getByLabelText('Hand 0 catch x')).toBeTruthy();
+  });
+
+  it('negates the hand-position Y field against the store z (display Y = −sim z), round-trip', () => {
+    render(<Controls />);
+    fireEvent.click(screen.getByLabelText('Edit hand positions'));
+    const catchY = screen.getByLabelText('Hand 0 catch y') as HTMLInputElement;
+    // Typing display Y = +0.3 stores z = −0.3 (front–back sign flips for the z-up frame).
+    fireEvent.change(catchY, { target: { value: '0.3' } });
+    expect(useAppStore.getState().handCatchPoints[0]?.z).toBeCloseTo(-0.3, 9);
+    // …and the stored z = −0.3 reads back as display Y = +0.3 in the field.
+    expect((screen.getByLabelText('Hand 0 catch y') as HTMLInputElement).value).toBe('0.3');
   });
 
   it('hints that synchronous/multiplex/passing notation is unsupported', () => {

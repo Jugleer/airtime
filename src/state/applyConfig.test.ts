@@ -8,6 +8,7 @@ import {
   useAppStore,
 } from './index';
 import { decodeConfig, encodeConfig, type ShareConfig } from './codec';
+import { horizonTime } from './simulation';
 
 // Reset to a clean default sim before each test (the store is a module singleton).
 beforeEach(() => {
@@ -126,6 +127,29 @@ describe('applyConfig (URL boot / preset load / JSON import)', () => {
     const state = useAppStore.getState();
     expect(state.sim.patternText).toBe('441');
     expect(state.ballColor).toBe('#ff8800');
+  });
+
+  it('seeks to a nonzero time bookmark, arrives playing, and extends the horizon past the initial range', () => {
+    const config = useAppStore.getState().currentConfig();
+    const initialHorizon = horizonTime(useAppStore.getState().sim);
+    // A bookmark well beyond the initially generated range (INITIAL_BEATS ≈ 40 s).
+    const seekTime = initialHorizon + 15;
+
+    useAppStore.getState().applyConfig({ ...config, time: seekTime });
+    const state = useAppStore.getState();
+
+    // The playhead lands on the bookmark, and a t-load arrives PLAYING (like a fresh boot).
+    expect(state.simTime).toBeCloseTo(seekTime, 6);
+    expect(state.playing).toBe(true);
+    // The generated horizon grew (append-only) to cover the bookmark + future span + margin.
+    expect(horizonTime(state.sim)).toBeGreaterThan(initialHorizon);
+    expect(horizonTime(state.sim)).toBeGreaterThanOrEqual(seekTime);
+  });
+
+  it('clamps a negative time bookmark to 0 (loads at the start)', () => {
+    const config = useAppStore.getState().currentConfig();
+    useAppStore.getState().applyConfig({ ...config, time: -5 });
+    expect(useAppStore.getState().simTime).toBe(0);
   });
 
   it('has the DESIGN.md §6 audio + camera defaults at startup', () => {

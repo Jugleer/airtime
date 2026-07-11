@@ -142,9 +142,16 @@ The hand trajectory must be defined for **all** time (charts need it):
   everywhere and jerk finite everywhere (jerk may step at events; only a septic
   would smooth that — out of scope).
   - **Hold dip**: the carry scoops to depth `holdDepth` (m) below the
-    catch–throw line. **Held 2s** rest there — a bounded absorb (catch → dip,
-    sized by the constant-deceleration time `2·holdDepth / v_vertical`), an
-    exactly level hold through the dip, and a wind-up (dip → throw). **Normal
+    catch–throw line. **Held 2s** rest at the dip low point — a bounded absorb
+    (catch → rest, sized by the constant-deceleration time
+    `2·holdDepth / v_vertical`), a **static rest there** (velocity,
+    acceleration, and jerk exactly zero: the hand stops, it does not slide —
+    all horizontal repositioning lives in the curved flanks), and a wind-up
+    (rest → throw). In the extreme shallow-dip / high-gravity corner, where
+    the vertical-timed flank is too short to reposition to rest cleanly, the
+    held 2 instead scoops through the dip like a normal carry (continuous,
+    non-flat) rather than resting. (Owner ruling 2026-07-11, round 3: no hand
+    path is ever flat; holds may stop at the low point.) **Normal
     single-beat carries** sweep a parabolic bottom through the dip instead (no
     level segment — hands sweep, they don't park), with the dip entry/exit
     placed per-axis so the wind-up has runway toward the release (no counter-
@@ -155,11 +162,18 @@ The hand trajectory must be defined for **all** time (charts need it):
   - A cubic (4-point Bézier, velocity-matched only) is available behind a
     `CarryPath` interface as a comparison toggle — it produces jerk deltas at
     events by construction; the UI may note this when selected.
-- **Return** (throw → next catch, empty hand): same quintic machinery, C² at the
-  junctions (endpoint accelerations match the adjoining carry ends, i.e. `−g`).
+- **Return** (throw → next catch, empty hand): the hand scoops through a low
+  ready point via the same dip construction as a carry (`held: false`) — NOT a
+  single quintic pinned to the six ball-derived boundary states (for a
+  self-throw that unique quintic IS the flight parabola, so the empty hand
+  would trace the ball's whole arc; round-3 fix). C² at the junctions
+  (endpoint accelerations match the adjoining carry ends, i.e. `−g`). Return
+  flanks are floored to a numerically clean duration — returns inherit the
+  ball's large release/arrival velocities and are not subject to the carry's
+  monotone-descent constraint, so a slightly lower ready point is harmless.
 - **Idle** (`0` beats / startup): hand eases to and rests at its catch point.
 - **Held 2s**: the carry simply spans the extra beats through the same spline
-  machinery (level hold at the dip; do not generate a throw/catch pair).
+  machinery (static rest at the dip; do not generate a throw/catch pair).
 
 `CarryPath` is a pluggable interface; quintic-with-via-point is the default.
 
@@ -262,7 +276,7 @@ Rendering: lightweight canvas (uPlot or hand-rolled); no heavyweight chart lib.
 
 ### Energy panel
 
-Table per hand: W⁺, |W⁻|, net, avg power (see §4.5), plus totals.
+Table per hand: W⁺, |W⁻|, avg power (see §4.5), plus totals.
 
 ### Settings / controls
 

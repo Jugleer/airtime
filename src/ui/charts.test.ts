@@ -16,7 +16,6 @@ import {
   quantityVector,
   SAMPLE_COUNT,
   scalarFromState,
-  windowSampleTime,
 } from './charts';
 
 function motionState(): MotionState {
@@ -27,36 +26,6 @@ function motionState(): MotionState {
     jerk: vec3(1, -2, 2), // |j| = 3
   };
 }
-
-describe('windowSampleTime', () => {
-  it('spans [windowStart, windowStart + window] with exact endpoints', () => {
-    const start = 4.1;
-    const window = 3;
-    expect(windowSampleTime(0, SAMPLE_COUNT, start, window)).toBeCloseTo(start, 12);
-    expect(windowSampleTime(SAMPLE_COUNT - 1, SAMPLE_COUNT, start, window)).toBeCloseTo(
-      start + window,
-      12,
-    );
-  });
-
-  it('places the midpoint sample at the window center', () => {
-    const t = windowSampleTime(4, 9, 0, 8); // index 4 of 9 → halfway
-    expect(t).toBeCloseTo(4, 12);
-  });
-
-  it('degrades to windowStart for a count of 1', () => {
-    expect(windowSampleTime(0, 1, 2.5, 3)).toBe(2.5);
-  });
-
-  it('is monotonically increasing across the window', () => {
-    let previous = -Infinity;
-    for (let i = 0; i < SAMPLE_COUNT; i++) {
-      const t = windowSampleTime(i, SAMPLE_COUNT, -1, 5);
-      expect(t).toBeGreaterThan(previous);
-      previous = t;
-    }
-  });
-});
 
 describe('chartCanvasHeight — splitter-responsive canvas sizing', () => {
   it('passes through a measured height above the floor, floored to whole px', () => {
@@ -113,11 +82,13 @@ describe('gridSampleTime — absolute-lattice sampling (jerk anti-alias, owner r
     const after = gridSampleTime(10, 1.05, step); // still inside the (1.0, 1.1) cell
     expect(after).toBe(before);
 
-    // Contrast: windowSampleTime shifts EVERY sample time by the playhead delta,
-    // re-phasing past samples each frame — exactly the aliasing source being removed.
-    const wBefore = windowSampleTime(10, SAMPLE_COUNT, 1.02, 3);
-    const wAfter = windowSampleTime(10, SAMPLE_COUNT, 1.05, 3);
-    expect(wAfter - wBefore).toBeCloseTo(0.03, 9);
+    // Contrast: the OLD window-relative grid (windowStart + window·index/(count−1))
+    // shifts EVERY sample time by the playhead delta, re-phasing past samples each
+    // frame — exactly the aliasing source the absolute lattice removes. Inlined here
+    // (the dead windowSampleTime helper was deleted) to keep the regression on record.
+    const windowRelative = (windowStart: number): number =>
+      windowStart + 3 * (10 / (SAMPLE_COUNT - 1));
+    expect(windowRelative(1.05) - windowRelative(1.02)).toBeCloseTo(0.03, 9);
   });
 
   it('yields identical values at a shared absolute time from two playhead positions', () => {

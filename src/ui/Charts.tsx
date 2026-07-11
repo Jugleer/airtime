@@ -350,6 +350,10 @@ function Legend({
 }): ReactElement {
   const palette = usePalette();
   const setHoveredHandIndex = useAppStore((state) => state.setHoveredHandIndex);
+  // If the dock/legend unmounts mid-hover (e.g. the operator collapses the charts
+  // while a legend item is highlighted), the pointer never fires its leave/blur — so
+  // clear the scene highlight on unmount, else a cup stays lit with nothing hovering it.
+  useEffect(() => () => setHoveredHandIndex(null), [setHoveredHandIndex]);
   const items: ReactElement[] = [];
   for (let hand = 0; hand < handCount; hand++) {
     const color = handColor(hand);

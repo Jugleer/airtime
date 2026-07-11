@@ -9,6 +9,13 @@
 // 0.20 m, circle preset throwInset 0.10 m — with GIZMO_HIT_RADIUS below, one
 // marker's center is never inside a neighbor's hit sphere, so the raycaster's
 // closest-hit ordering resolves every grab unambiguously.
+//
+// The grey GLOBAL ("whole hand") node sits at the catch↔throw midpoint, only
+// 0.05 m from each endpoint in the circle preset — well inside the 0.07 m hit
+// sphere. To keep it from stealing grabs meant for C or T, HandGizmos renders it
+// dropped {@link GLOBAL_NODE_DROP} below the hand plane (sim −y): the vertical
+// offset lifts the global↔endpoint CENTER distance clear of both hit spheres in
+// either preset (see the pairwise-separation test in ./gizmos.test).
 
 import type { HandPointKind } from '../state';
 
@@ -47,6 +54,17 @@ const THROW_HOT_COLOR = '#ff9433';
  */
 export const GLOBAL_COLOR = '#8a94a6'; // grey — moves the whole hand
 export const GLOBAL_HOT_COLOR = '#c2cad6';
+
+/**
+ * Vertical drop (m, sim −y) of the grey global node below the catch↔throw midpoint.
+ * The node anchors at the midpoint horizontally, which in the tight circle preset is
+ * only 0.05 m from each endpoint — inside the 0.07 m hit sphere. Dropping it by this
+ * amount pushes the global↔endpoint CENTER distance to √(0.05² + 0.14²) ≈ 0.149 m ≥
+ * 2·{@link GIZMO_HIT_RADIUS} (0.14 m), so the global hit sphere clears both the catch
+ * and throw hit spheres in BOTH presets (0.131 m would suffice; 0.14 keeps a margin).
+ * The drop is purely vertical, so a horizontal (x–z) drag still targets the midpoint.
+ */
+export const GLOBAL_NODE_DROP = 0.14;
 
 /** The marker fill color for a kind and hover/drag state. */
 export function markerColorOf(kind: HandPointKind, hot: boolean): string {
@@ -87,32 +105,13 @@ export interface PlanarXZ {
 /**
  * The anchor point for a hand's global node: the midpoint of its catch and throw
  * points in the x–z plane (owner's "sensible anchor"). Dragging the global node to
- * a new anchor translates both points by the same delta — see {@link translatedPair}.
+ * a new anchor rigidly translates both points by the same delta (new anchor − old
+ * anchor), preserving their offset — applied by the store's `setHandAnchor` as a
+ * single future-only geometry epoch.
  */
 export function globalAnchor(catchPoint: PlanarXZ, throwPoint: PlanarXZ): PlanarXZ {
   return {
     x: 0.5 * (catchPoint.x + throwPoint.x),
     z: 0.5 * (catchPoint.z + throwPoint.z),
-  };
-}
-
-/**
- * Move a hand's catch/throw pair rigidly so its {@link globalAnchor} lands on
- * `(anchorX, anchorZ)`: both points shift by the same delta = new anchor − old
- * anchor, preserving their relative offset. Pure math for the grey global node's
- * drag; the store applies the result as a future-only geometry epoch.
- */
-export function translatedPair(
-  catchPoint: PlanarXZ,
-  throwPoint: PlanarXZ,
-  anchorX: number,
-  anchorZ: number,
-): { catch: PlanarXZ; throw: PlanarXZ } {
-  const anchor = globalAnchor(catchPoint, throwPoint);
-  const dx = anchorX - anchor.x;
-  const dz = anchorZ - anchor.z;
-  return {
-    catch: { x: catchPoint.x + dx, z: catchPoint.z + dz },
-    throw: { x: throwPoint.x + dx, z: throwPoint.z + dz },
   };
 }

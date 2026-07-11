@@ -527,7 +527,8 @@ function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
  * The state-graph scene affordances (DESIGN.md §5, §6):
  *   • a persistent top-left toggle button that opens/closes the FULL overlay;
  *   • an always-visible corner MINIMAP under it (unless the overlay is open or the
- *     operator turned it off in Settings) that also expands the overlay on click;
+ *     operator turned it off in the sidebar View group) that also expands the
+ *     overlay on click;
  *   • the full interactive overlay (N stepper, hard reset, navigation) when
  *     `graphVisible`. When the overlay is closed its body unmounts (nothing derived
  *     or drawn beyond the cheap minimap).

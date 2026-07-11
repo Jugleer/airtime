@@ -33,6 +33,7 @@ import {
   LADDER_MIN,
   SIDEBAR_MAX,
   SIDEBAR_MIN,
+  STAGE_MIN,
   Splitter,
   useLayout,
   type LayoutController,
@@ -308,7 +309,10 @@ function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
       {chartsVisible ? (
         <Splitter
           orientation="horizontal"
-          value={layout.dockHeight ?? measured}
+          // Clamp to [DOCK_MIN, DOCK_MAX]: before any drag the value is the dock's
+          // natural height, which can exceed DOCK_MAX and would push aria-valuenow
+          // past aria-valuemax (an invalid slider). The drag baseline stays in range.
+          value={Math.max(DOCK_MIN, Math.min(DOCK_MAX, layout.dockHeight ?? measured))}
           min={DOCK_MIN}
           max={DOCK_MAX}
           sign={-1}
@@ -398,7 +402,7 @@ function rootGridStyle(palette: Palette, layout: LayoutController): CSSPropertie
     display: 'grid',
     // sidebar | splitter | stage | splitter | ladder. The splitter tracks ARE the
     // gutters (columnGap 0); the stage keeps a hard minimum so no panel crushes it.
-    gridTemplateColumns: `${leftTrack}px ${GUTTER}px minmax(380px, 1fr) ${GUTTER}px ${rightTrack}px`,
+    gridTemplateColumns: `${leftTrack}px ${GUTTER}px minmax(${STAGE_MIN}px, 1fr) ${GUTTER}px ${rightTrack}px`,
     gridTemplateRows: 'auto minmax(0, 1fr) auto',
     gap: '0.6rem 0',
     padding: '0.6rem 0.75rem',

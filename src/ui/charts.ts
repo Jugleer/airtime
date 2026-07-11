@@ -118,30 +118,6 @@ export function scalarFromState(
   return axisScalar(quantityVector(state, quantity), mode);
 }
 
-/**
- * Sim time of sample `index` of `count`, uniformly spanning the visible window
- * [windowStart, windowStart + timelineWindow]. Index 0 is exactly the left edge
- * and `count − 1` exactly the right edge (mirrors render3d/tracers `sampleTimeAt`).
- *
- * NOTE: this is a WINDOW-relative grid — every sample time slides continuously with
- * `windowStart` (i.e. with the playhead). For a scrolling live chart that aliases a
- * piecewise quantity (the quintic's jerk STEPS at segment boundaries): the same
- * pixel column shows a different absolute time every frame, so past samples re-phase
- * and the jerk trace shimmers. Use {@link gridSampleTime} for the live charts and
- * keep this only where exact window endpoints are wanted (e.g. tests).
- */
-export function windowSampleTime(
-  index: number,
-  count: number,
-  windowStart: number,
-  timelineWindow: number,
-): number {
-  if (count <= 1) {
-    return windowStart;
-  }
-  return windowStart + timelineWindow * (index / (count - 1));
-}
-
 /** Guard so a `windowStart` sitting exactly on a lattice point is not nudged off it. */
 const LATTICE_EPS = 1e-9;
 

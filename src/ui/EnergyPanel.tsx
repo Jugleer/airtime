@@ -2,7 +2,7 @@
 //
 // Reads core's period-aggregated `energyReport` for the current simulation and
 // lays it out as a table: one row per hand plus a totals row, columns throw work
-// W⁺, catch absorption |W⁻|, net, average power (full-word headers, the NOTATION
+// W⁺, catch absorption |W⁻|, average power (full-word headers, the NOTATION
 // symbol in a tooltip). The figures are period-aggregated and time-independent
 // between rebuilds, so they are recomputed only when the sim changes (useMemo on
 // `sim`) — NOT per frame (DESIGN.md §2: the sim is a pure function of time; the

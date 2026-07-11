@@ -69,6 +69,18 @@ describe('Charts (ui layer)', () => {
     expect(useAppStore.getState().hoveredHandIndex).toBeNull();
   });
 
+  it('clears the scene highlight when the legend unmounts mid-hover', () => {
+    const { unmount } = render(<Charts />);
+    const legend = within(screen.getByRole('group', { name: 'Chart legend' }));
+    const hand1 = legend.getByRole('button', { name: /Hand 1 series/ });
+    fireEvent.mouseEnter(hand1);
+    expect(useAppStore.getState().hoveredHandIndex).toBe(1);
+    // Unmounting (dock collapsed / component removed) fires no pointer leave, so the
+    // Legend's effect cleanup is what must reset the store — else the cup stays lit.
+    unmount();
+    expect(useAppStore.getState().hoveredHandIndex).toBeNull();
+  });
+
   it('hides the charts (unmounts the canvases) when the toggle is clicked', () => {
     render(<Charts />);
     expect(screen.queryByLabelText('Hand speed chart')).toBeTruthy();

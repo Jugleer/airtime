@@ -42,9 +42,10 @@ export interface DisplayAxis {
   readonly color: string;
   /**
    * The direction, expressed in the SIM (three.js world, y-up) frame, that this
-   * display axis points along — i.e. `simToDisplay` of the display unit axis. The
-   * triad draws each arrow along this world direction so it renders correctly in
-   * the natively-y-up scene while labeling the display convention.
+   * display axis points along — i.e. `displayToSim` of the display unit axis (the
+   * code below builds each with `displayToSim`). The triad draws each arrow along
+   * this world direction so it renders correctly in the natively-y-up scene while
+   * labeling the display convention.
    */
   readonly simDirection: Vec3Tuple;
 }

@@ -27,18 +27,22 @@ import {
 import { TRAIL_LENGTH_MAX, useAppStore } from '../state';
 import { useBallColorResolver } from './useBallColors';
 import {
+  buildSampleTimes,
   GHOST_SPAN_SECONDS,
-  maxGhostPoints,
-  maxTrailPoints,
-  sampleTimeAt,
+  ghostBufferCapacity,
+  segmentBoundaryTimes,
   TRAIL_SAMPLE_DT,
-  trailPointCount,
+  trailBufferCapacity,
 } from './tracers';
 
 // Buffer capacities: sized for the widest trail (store cap) and the fixed ghost
-// span, so a slider/handle change never reallocates (Phase 5 hot-path rule).
-const MAX_TRAIL_POINTS = maxTrailPoints(TRAIL_LENGTH_MAX);
-const MAX_GHOST_POINTS = maxGhostPoints();
+// span, PLUS boundary headroom (buildSampleTimes adds segment-boundary samples on
+// top of the uniform grid), so a slider/handle change never reallocates and the
+// densest pattern still fits (Phase 5 hot-path rule; the merge also hard-clamps).
+const MAX_TRAIL_POINTS = trailBufferCapacity(TRAIL_LENGTH_MAX);
+const MAX_GHOST_POINTS = ghostBufferCapacity();
+// Scratch for one frame's sorted sample-time list; the larger of the two windows.
+const MAX_SAMPLE_TIMES = Math.max(MAX_TRAIL_POINTS, MAX_GHOST_POINTS);
 
 // Dashes in world units (meters): small enough to read as a "future" hint.
 const GHOST_DASH_SIZE = 0.045;
@@ -70,10 +74,28 @@ function makeLine(maxPoints: number, dashed: boolean): Line {
 
 /** One ball's trail + ghost lines, updated imperatively each frame. */
 function BallTracer({ ballId, color }: { ballId: number; color: string }): ReactElement {
+  // Subscribe to the sim so the per-ball segment-boundary times recompute once per
+  // sim identity (a horizon extension / kinematics edit replaces `sim`), NOT per
+  // frame. `ballSegments` allocates a fresh copy, so it must live here (a memo),
+  // never in useFrame.
+  const sim = useAppStore((state) => state.sim);
+  const boundaries = useMemo(
+    () => segmentBoundaryTimes(sim.kinematics.ballSegments(ballId)),
+    [sim, ballId],
+  );
+
   // Built once (capacities are module constants); persists across horizon
   // extensions because React reconciles this element by its stable ballId key.
-  const { trail, ghost } = useMemo(
-    () => ({ trail: makeLine(MAX_TRAIL_POINTS, false), ghost: makeLine(MAX_GHOST_POINTS, true) }),
+  // `sampleTimes` is the preallocated scratch for one frame's sorted time list.
+  const { trail, ghost, sampleTimes } = useMemo(
+    () => ({
+      trail: makeLine(MAX_TRAIL_POINTS, false),
+      // Ghost geometry sized to the shared scratch bound (not the smaller ghost
+      // window estimate): buildSampleTimes clamps to the scratch length, so the
+      // fill can never outrun this buffer.
+      ghost: makeLine(MAX_SAMPLE_TIMES, true),
+      sampleTimes: new Float64Array(MAX_SAMPLE_TIMES),
+    }),
     [],
   );
 
@@ -107,14 +129,19 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
     const ghostsShown = ghostsEnabled || positionsEditorOpen;
 
     // --- Trail: [max(0, simTime − trailLength), simTime] ---
-    const trailSpan = Math.min(trailLength, simTime); // never sample t < 0
-    const trailCount = trailPointCount(trailSpan, TRAIL_SAMPLE_DT, MAX_TRAIL_POINTS);
-    if (trailCount > 0) {
-      const start = simTime - trailSpan;
+    // Sample times are boundary-anchored (buildSampleTimes): the absolute interior
+    // grid + every ball segment boundary in the window + the two endpoints. This is
+    // invariant under sub-dt playhead motion, so the carry dip no longer flickers.
+    const start = Math.max(0, simTime - trailLength); // never sample t < 0
+    const trailCount =
+      simTime > start
+        ? buildSampleTimes(start, simTime, TRAIL_SAMPLE_DT, boundaries, sampleTimes)
+        : 0;
+    if (trailCount > 1) {
       const pos = trail.geometry.getAttribute('position') as BufferAttribute;
       const arr = pos.array as Float32Array;
       for (let i = 0; i < trailCount; i++) {
-        const { position } = k.ballState(ballId, sampleTimeAt(i, trailCount, start, simTime));
+        const { position } = k.ballState(ballId, sampleTimes[i] as number);
         arr[3 * i] = position.x;
         arr[3 * i + 1] = position.y;
         arr[3 * i + 2] = position.z;
@@ -122,12 +149,12 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
       pos.needsUpdate = true;
       trail.geometry.setDrawRange(0, trailCount);
     }
-    trail.visible = trailCount > 0;
+    trail.visible = trailCount > 1;
 
     // --- Ghost: [simTime, simTime + GHOST_SPAN_SECONDS], dashed ---
     if (ghostsShown) {
       const end = simTime + GHOST_SPAN_SECONDS;
-      const ghostCount = trailPointCount(GHOST_SPAN_SECONDS, TRAIL_SAMPLE_DT, MAX_GHOST_POINTS);
+      const ghostCount = buildSampleTimes(simTime, end, TRAIL_SAMPLE_DT, boundaries, sampleTimes);
       const pos = ghost.geometry.getAttribute('position') as BufferAttribute;
       const dist = ghost.geometry.getAttribute('lineDistance') as BufferAttribute;
       const parr = pos.array as Float32Array;
@@ -137,7 +164,7 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
       let py = 0;
       let pz = 0;
       for (let i = 0; i < ghostCount; i++) {
-        const { position } = k.ballState(ballId, sampleTimeAt(i, ghostCount, simTime, end));
+        const { position } = k.ballState(ballId, sampleTimes[i] as number);
         parr[3 * i] = position.x;
         parr[3 * i + 1] = position.y;
         parr[3 * i + 2] = position.z;
@@ -157,7 +184,7 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
       pos.needsUpdate = true;
       dist.needsUpdate = true;
       ghost.geometry.setDrawRange(0, ghostCount);
-      ghost.visible = true;
+      ghost.visible = ghostCount > 1;
     } else {
       ghost.visible = false;
     }

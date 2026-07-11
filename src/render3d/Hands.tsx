@@ -29,6 +29,8 @@ import { useAppStore } from '../state';
 import { firstBeatAtOrAfter } from '../state/simulation';
 import { sampleTimeAt } from './tracers';
 import {
+  buildHandTiltKeyframes,
+  evaluateHandTilt,
   HAND_CUP_DROP_FACTOR,
   HAND_CUP_PHI_LENGTH,
   HAND_CUP_PHI_START,
@@ -39,8 +41,14 @@ import {
   handPathPeriodBeats,
   handPathPointCount,
   handPathStartBeat,
+  type HandTiltKeyframes,
   maxHandPathPoints,
+  type Quat,
 } from './hands';
+
+// Reused scratch for the per-frame cup orientation — one <Hands> is mounted and
+// each frame fills it per hand in turn, so a module-level object is zero-allocation.
+const cupTiltScratch: Quat = { x: 0, y: 0, z: 0, w: 1 };
 
 /** Cup tessellation — smooth enough for a small bowl, cheap for ≤ 8 hands. */
 const CUP_WIDTH_SEGMENTS = 24;
@@ -64,10 +72,25 @@ export function Hands({ color }: { readonly color: string }): ReactElement | nul
   const showHands = useAppStore((state) => state.showHands);
   const handCount = useAppStore((state) => state.handCount);
   const ballRadius = useAppStore((state) => state.ballRadius);
+  // Subscribe to the sim so cup-tilt keyframes recompute once per sim identity (a
+  // horizon extension / kinematics edit replaces `sim`), NOT per frame. carriesForHand
+  // allocates fresh copies, so it must live in a memo — never in useFrame.
+  const sim = useAppStore((state) => state.sim);
 
   const cupRadius = handCupRadius(ballRadius);
   const drop = ballRadius * HAND_CUP_DROP_FACTOR;
   const meshes = useRef(new Map<number, Mesh>());
+
+  // Per-hand cup-orientation keyframes (catch/throw normals + upright return relax),
+  // from core's analytic event velocities. Rebuilt only when the sim / hand count
+  // changes; the render loop below just binary-searches + slerps into a scratch quat.
+  const tiltKeyframes = useMemo(() => {
+    const map = new Map<number, HandTiltKeyframes>();
+    for (let hand = 0; hand < handCount; hand++) {
+      map.set(hand, buildHandTiltKeyframes(sim.kinematics.carriesForHand(hand)));
+    }
+    return map;
+  }, [sim, handCount]);
 
   useFrame(() => {
     // Read the clock + kinematics fresh (a horizon extension mid-frame replaces
@@ -75,11 +98,19 @@ export function Hands({ color }: { readonly color: string }): ReactElement | nul
     // `hoveredHandIndex` (set by the chart legend, DESIGN.md §2 view-only) makes the
     // hovered hand's cup pop — brighter (emissive) and more opaque — so it stands out
     // from its neighbors. Scalars only (no per-frame allocation, no string parsing).
-    const { simTime, sim, hoveredHandIndex } = useAppStore.getState();
-    const k = sim.kinematics;
+    const { simTime, sim: liveSim, hoveredHandIndex } = useAppStore.getState();
+    const k = liveSim.kinematics;
     meshes.current.forEach((mesh, hand) => {
       const { position } = k.handState(hand, simTime);
       mesh.position.set(position.x, position.y - drop, position.z);
+      // Tilt the cup so its opening is normal to the ball at catches/throws and
+      // blends smoothly between (evaluateHandTilt is zero-allocation). A hand with
+      // no carries (static hold) has empty keyframes → upright.
+      const keyframes = tiltKeyframes.get(hand);
+      if (keyframes) {
+        evaluateHandTilt(keyframes, simTime, cupTiltScratch);
+        mesh.quaternion.set(cupTiltScratch.x, cupTiltScratch.y, cupTiltScratch.z, cupTiltScratch.w);
+      }
       const material = mesh.material as MeshStandardMaterial;
       const highlighted = hand === hoveredHandIndex;
       material.emissiveIntensity = highlighted ? CUP_HOVER_EMISSIVE : 0;

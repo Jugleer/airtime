@@ -1,6 +1,6 @@
 // src/ui/widgets — the shared, dark-themed control kit for the redesigned shell
 // (redesign 2026-07-10). These were previously defined inline in Controls; they
-// are extracted here so the left sidebar (Controls), the Settings drawer, the
+// are extracted here so the left sidebar (Controls, incl. its View group), the
 // charts dock, and the state-graph overlay all render identical, palette-driven
 // controls. Every widget reads {@link usePalette} — no color is hard-coded here.
 //

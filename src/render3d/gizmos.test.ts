@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { circleHandGeometry, lineHandGeometry } from '../core/kinematics';
-import { HAND_COUNT_MAX, type HandPointKind } from '../state';
+import { HAND_COUNT_MAX, HAND_Y, type HandPointKind } from '../state';
 import {
   GIZMO_HIT_RADIUS,
   GIZMO_HOVER_SCALE,
@@ -13,12 +13,12 @@ import {
   GIZMO_RENDER_ORDER,
   GLOBAL_COLOR,
   GLOBAL_HOT_COLOR,
+  GLOBAL_NODE_DROP,
   globalAnchor,
   globalColorOf,
   globalMarkerLabel,
   markerColorOf,
   markerLabel,
-  translatedPair,
 } from './gizmos';
 
 const KINDS: readonly HandPointKind[] = ['catch', 'throw'];
@@ -113,18 +113,33 @@ describe('global hand-position node', () => {
     expect(globalAnchor({ x: 0.2, z: 0.4 }, { x: 0.6, z: -0.2 })).toEqual({ x: 0.4, z: 0.1 });
   });
 
-  it('translates the catch/throw pair rigidly so the anchor lands on the drag target', () => {
-    const catchPoint = { x: -0.3, z: 0 };
-    const throwPoint = { x: -0.1, z: 0 };
-    // Old anchor is (−0.2, 0); dragging it to (0.5, 0.25) shifts both by (+0.7, +0.25).
-    const moved = translatedPair(catchPoint, throwPoint, 0.5, 0.25);
-    expect(moved.catch.x).toBeCloseTo(0.4, 12);
-    expect(moved.catch.z).toBeCloseTo(0.25, 12);
-    expect(moved.throw.x).toBeCloseTo(0.6, 12);
-    expect(moved.throw.z).toBeCloseTo(0.25, 12);
-    // The pair's relative offset is preserved, and the new midpoint IS the target.
-    const newAnchor = globalAnchor(moved.catch, moved.throw);
-    expect(newAnchor.x).toBeCloseTo(0.5, 12);
-    expect(newAnchor.z).toBeCloseTo(0.25, 12);
+  it('drops the global node so its hit sphere clears catch/throw in BOTH presets', () => {
+    // The three markers a hand shows in 3D: catch (on the hand plane), throw (on the
+    // hand plane), and the grey global node dropped GLOBAL_NODE_DROP below the plane.
+    // The global node's whole POINT is to move the pair; if its hit sphere overlapped
+    // C or T, a grab near an endpoint could resolve to it. So the global↔endpoint
+    // CENTER distance must exceed 2·GIZMO_HIT_RADIUS (the spheres are fully disjoint).
+    // C↔T themselves keep only the design's weaker closest-hit invariant — each center
+    // outside the other's hit sphere — because their separation is fixed geometry
+    // (0.10 m in the circle preset, below 2·GIZMO_HIT_RADIUS = 0.14 m by design).
+    const dist = (
+      a: { x: number; y: number; z: number },
+      b: { x: number; y: number; z: number },
+    ): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+    for (const geometry of [lineHandGeometry(2), circleHandGeometry(2)]) {
+      for (let hand = 0; hand < 2; hand++) {
+        const catchPoint = geometry.catchPoint(hand);
+        const throwPoint = geometry.throwPoint(hand);
+        const anchor = globalAnchor(catchPoint, throwPoint);
+        const global = { x: anchor.x, y: HAND_Y - GLOBAL_NODE_DROP, z: anchor.z };
+        // The global hit sphere is fully disjoint from both endpoint hit spheres.
+        expect(dist(global, catchPoint)).toBeGreaterThanOrEqual(2 * GIZMO_HIT_RADIUS);
+        expect(dist(global, throwPoint)).toBeGreaterThanOrEqual(2 * GIZMO_HIT_RADIUS);
+        // And no marker center sits inside another's hit sphere (closest-hit invariant).
+        expect(dist(catchPoint, throwPoint)).toBeGreaterThan(GIZMO_HIT_RADIUS);
+        expect(dist(global, catchPoint)).toBeGreaterThan(GIZMO_HIT_RADIUS);
+        expect(dist(global, throwPoint)).toBeGreaterThan(GIZMO_HIT_RADIUS);
+      }
+    }
   });
 });

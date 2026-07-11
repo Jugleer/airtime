@@ -43,6 +43,7 @@ import {
   GIZMO_LABEL_RENDER_ORDER,
   GIZMO_MARKER_RADIUS,
   GIZMO_RENDER_ORDER,
+  GLOBAL_NODE_DROP,
   globalAnchor,
   globalColorOf,
   globalMarkerLabel,
@@ -113,6 +114,7 @@ function Marker({
   label,
   colorIdle,
   colorHot,
+  planeY = HAND_Y,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -121,6 +123,14 @@ function Marker({
   readonly label: string;
   readonly colorIdle: string;
   readonly colorHot: string;
+  /**
+   * The y of the horizontal plane the pointer ray is intersected against during a
+   * drag. Defaults to HAND_Y (the catch/throw markers sit on it); the grey global
+   * node renders one {@link GLOBAL_NODE_DROP} below the hand plane, so it drags in
+   * that lowered plane — keeping the grabbed point under the pointer (no parallax
+   * jump) while its x/z still map straight to the catch↔throw midpoint.
+   */
+  readonly planeY?: number;
   onDragStart(): void;
   onDrag(point: Vector3): void;
   onDragEnd(): void;
@@ -132,7 +142,7 @@ function Marker({
   const refreshHot = (): void => setHot(hovered.current || dragging.current);
 
   // A single reusable plane + hit vector (no per-move allocation).
-  const plane = useMemo(() => new Plane(new Vector3(0, 1, 0), -HAND_Y), []);
+  const plane = useMemo(() => new Plane(new Vector3(0, 1, 0), -planeY), [planeY]);
   const hit = useMemo(() => new Vector3(), []);
 
   const labelTexture = useMemo(() => makeLabelTexture(label), [label]);
@@ -181,7 +191,7 @@ function Marker({
             return;
           }
           event.stopPropagation();
-          // Constrain to the y = HAND_Y plane: intersect the pointer ray with it.
+          // Constrain to the marker's drag plane (y = planeY): intersect the ray with it.
           if (event.ray.intersectPlane(plane, hit)) {
             onDrag(hit);
           }
@@ -297,16 +307,21 @@ export function HandGizmos(): ReactElement | null {
       );
     }
     // Grey whole-hand ("global") node at the midpoint of catch and throw; drags
-    // both together as a rigid pair (owner item, 2026-07-11).
+    // both together as a rigid pair (owner item, 2026-07-11). It renders one
+    // GLOBAL_NODE_DROP BELOW the hand plane so its hit sphere clears the catch/throw
+    // spheres even in the tight circle preset (see ./gizmos); it drags in that same
+    // lowered plane, so its x/z still target the midpoint (setHandAnchor).
     if (catchPoint && throwPoint) {
       const anchor = globalAnchor(catchPoint, throwPoint);
+      const globalY = HAND_Y - GLOBAL_NODE_DROP;
       markers.push(
         <Marker
           key={`global-${hand}`}
-          position={new Vector3(anchor.x, HAND_Y, anchor.z)}
+          position={new Vector3(anchor.x, globalY, anchor.z)}
           label={globalMarkerLabel(hand)}
           colorIdle={globalColorOf(false)}
           colorHot={globalColorOf(true)}
+          planeY={globalY}
           onDragStart={() => beginDrag({ hand, kind: 'global' })}
           onDrag={(point) => update({ hand, kind: 'global' }, point)}
           onDragEnd={endDrag}

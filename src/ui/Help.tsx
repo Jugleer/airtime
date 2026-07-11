@@ -73,8 +73,8 @@ const CONTROL_SECTIONS: readonly Section[] = [
     items: [
       ['Space', 'Play or pause — works anywhere except while typing in a field or focused on a button.'],
       ['Enter · Esc (pattern box)', 'Enter applies the typed pattern; Esc reverts it to the running one.'],
-      ['Esc (dialogs)', 'Closes the Settings drawer or this help.'],
-      ['Scroll wheel', 'Hover any slider and scroll to nudge it one fine step (no page scroll).'],
+      ['Esc (help)', 'Closes this help.'],
+      ['Scroll wheel', 'Hover any slider and scroll to nudge it three steps per notch (no page scroll).'],
       ['Drag · scroll (3D scene)', 'Drag to orbit the camera, scroll to zoom, right-drag to pan.'],
     ],
   },
@@ -113,9 +113,8 @@ export function Help(): ReactElement {
   const palette = usePalette();
   const [open, setOpen] = useState(false);
 
-  // Escape closes the modal, mirroring the Settings drawer (consistent dialog
-  // dismissal). Only listens while open, so it never competes with the global
-  // Space/other handlers otherwise.
+  // Escape closes the modal (the standard dialog-dismissal affordance). Only listens
+  // while open, so it never competes with the global Space/other handlers otherwise.
   useEffect(() => {
     if (!open) {
       return;

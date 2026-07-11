@@ -18,9 +18,14 @@ describe('Help modal (ui layer)', () => {
     expect(screen.getByText('Keyboard & mouse')).toBeTruthy();
     expect(screen.getByText('Space')).toBeTruthy();
     expect(screen.getByText(/Play or pause/i)).toBeTruthy();
+    // Post-Settings-drawer copy: Esc documents the help, and the wheel nudge matches
+    // widgets.tsx (WHEEL_STEP = 3), not the old "one fine step" / "Settings drawer".
+    expect(screen.getByText(/Closes this help/i)).toBeTruthy();
+    expect(screen.getByText(/three steps per notch/i)).toBeTruthy();
+    expect(screen.queryByText(/Settings drawer/i)).toBeNull();
   });
 
-  it('closes on the Escape key, mirroring the Settings drawer', () => {
+  it('closes on the Escape key (standard dialog dismissal)', () => {
     render(<Help />);
     fireEvent.click(screen.getByRole('button', { name: 'Help' }));
     expect(screen.getByRole('dialog', { name: 'Help' })).toBeTruthy();

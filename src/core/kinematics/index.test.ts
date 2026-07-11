@@ -24,6 +24,7 @@ import {
   quinticHermite,
   quinticViaCarryPath,
   solveFlight,
+  subtract,
   vec3,
   type CarryMotion,
   type CarrySpec,
@@ -680,13 +681,15 @@ function flatFraction(kinematics: Kinematics, carry: CarryMotion): number {
   return heights.filter((y) => y <= minY + 1e-6).length / heights.length;
 }
 
-describe('normal carries sweep through the dip; held 2s rest level at it', () => {
+describe('normal carries sweep through the dip; held 2s rest static at it', () => {
   // Owner requirement: a NORMAL single-beat carry must not sit flat at the
   // bottom (the old construction was exactly level for ~41% of the default
   // cascade carry). The hand now sweeps through the dip on a parabolic bottom —
   // only the sweep's vertex instant touches the minimum. Multi-beat HELD
-  // carries (2s) keep the exactly level hold (85–93% of the carry at the dip),
-  // which is where the owner wants it and what the 423 exact-dip test pins.
+  // carries (2s) come to a TRUE STATIC REST at the dip low point (v/a/jerk
+  // exactly zero for 85–93% of the carry; all horizontal repositioning lives
+  // in the curved flanks), pinned by the "held carries rest (v = 0) at the
+  // dip low point" test below.
   it('pattern 3 normal carry has no flat bottom (was 41% flat)', () => {
     const { kinematics } = kinematicsFor('3', 20);
     const carry = kinematics.carriesForHand(0).find((c) => c.startBeat >= 4 && c.startBeat <= 10);
@@ -696,13 +699,26 @@ describe('normal carries sweep through the dip; held 2s rest level at it', () =>
     expect(flatFraction(kinematics, carry)).toBeLessThan(0.02);
   });
 
-  it('522 and 423 held carries keep the level hold', () => {
+  it('522 and 423 held carries rest (v = 0) at the dip low point', () => {
     for (const pattern of ['522', '423']) {
       const { kinematics } = kinematicsFor(pattern, 20);
       const carry = kinematics.allCarries().find((c) => c.held && c.startBeat >= 3 && c.startBeat <= 10);
       expect(carry).toBeDefined();
       if (!carry) continue;
       expect(flatFraction(kinematics, carry)).toBeGreaterThan(0.5);
+      // The hold is a TRUE REST, not a level slide: the static middle segment
+      // (constant polynomials) has velocity exactly zero throughout (owner: a
+      // hold may simply stop at the lowest point; no hand path is ever
+      // flat-and-moving). All horizontal repositioning lives in the flanks.
+      const middle = carry.segments.find(
+        (s) => s.x.degree === 0 && s.y.degree === 0 && s.z.degree === 0,
+      );
+      expect(middle).toBeDefined();
+      if (!middle) continue;
+      for (let f = 0; f <= 1; f += 0.05) {
+        const t = (middle.startTime as number) + f * (middle.endTime - middle.startTime);
+        expect(magnitude(evalSeg(middle, t).velocity)).toBeLessThan(1e-9);
+      }
     }
   });
 });
@@ -976,6 +992,137 @@ describe('held carries and multi-hand patterns', () => {
       }
     }
   });
+});
+
+// --- Empty-hand returns scoop low — they do NOT track the ball (§4.3) ---------
+
+/**
+ * Find a self-throw flight (ball thrown and caught by the SAME hand) and that
+ * hand: the flight leaves hand h's throw point and lands at hand h's catch
+ * point. The hand is EMPTY through the flight, so handState(h, ·) over the
+ * flight interval IS the return — which must scoop down to a ready point, NOT
+ * trace the ball's arc (the owner's ball-following bug).
+ */
+function selfThrowFlight(
+  k: Kinematics,
+  handCount: number,
+): { ballId: number; hand: number; startTime: number; endTime: number } | undefined {
+  for (const ballId of k.ballIds()) {
+    for (const seg of k.ballSegments(ballId)) {
+      if (seg.y.degree !== 2 || seg.startTime < 2 || seg.startTime > 8) continue;
+      const start = evalSeg(seg, seg.startTime).position;
+      const end = evalSeg(seg, seg.endTime).position;
+      for (let h = 0; h < handCount; h++) {
+        if (vecDiff(start, k.geometry.throwPoint(h)) < 1e-6 && vecDiff(end, k.geometry.catchPoint(h)) < 1e-6) {
+          return { ballId, hand: h, startTime: seg.startTime, endTime: seg.endTime };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+describe('empty-hand returns scoop low — no ball-tracking (§4.3)', () => {
+  // Owner bug: "In 045 the hand throwing the 4 follows the ball along the entire
+  // path; same for 3 with three hands." The old return was a single quintic
+  // pinned to the throw's six ball-derived boundary states — for a self-throw
+  // those ARE the flight's endpoint states, so the unique quintic through them
+  // was the flight parabola and the empty hand traced the arc exactly (measured
+  // separation 0, hand apex = ball apex). Routing the return through the dip
+  // construction pulls the hand down to a ready point instead.
+  for (const [pattern, handCount] of [['045', 2], ['3', 3]] as const) {
+    it(`${pattern} n_h=${handCount}: the throwing hand does not follow its self-throw`, () => {
+      const values = parse(pattern);
+      const timeline = buildTimeline(values, { beatCount: 24, params: { ...DEFAULT_PARAMS, handCount } });
+      const kinematics = buildKinematics(timeline, { values, handCount });
+      const flight = selfThrowFlight(kinematics, handCount);
+      expect(flight).toBeDefined();
+      if (!flight) return;
+      const { ballId, hand, startTime, endTime } = flight;
+      const catchHeight = kinematics.geometry.catchPoint(hand).y;
+      let maxSep = 0;
+      let handApex = -Infinity;
+      let handDip = Infinity;
+      let ballApex = -Infinity;
+      const samples = 80;
+      for (let i = 0; i <= samples; i++) {
+        const t = startTime + (i / samples) * (endTime - startTime);
+        const ball = kinematics.ballState(ballId, t).position;
+        const handP = kinematics.handState(hand, t).position;
+        maxSep = Math.max(maxSep, magnitude(subtract(ball, handP)));
+        handApex = Math.max(handApex, handP.y);
+        handDip = Math.min(handDip, handP.y);
+        ballApex = Math.max(ballApex, ball.y);
+      }
+      const ballApexHeight = ballApex - catchHeight; // apex above the hand line
+      expect(ballApexHeight).toBeGreaterThan(0.1); // a real airborne self-throw
+      // Separation is LARGE — the empty hand is nowhere near the ball (was ~0).
+      expect(maxSep).toBeGreaterThan(0.5 * ballApexHeight);
+      // The hand apex stays near the line — it does NOT rise to the ball's apex.
+      expect(handApex).toBeLessThan(ballApex - 0.25 * ballApexHeight);
+      expect(handApex).toBeLessThan(catchHeight + 0.1);
+      // The hand dips to the ready point: catch height − holdDepth.
+      expect(handDip).toBeCloseTo(catchHeight - kinematics.holdDepth, 2);
+    });
+  }
+
+  it('1155 n_h=3: each empty-hand return stays local (no wild travel)', () => {
+    // Owner: the wild hand travel in 1155/n_h=3 — hand 0 lunged to |z| ≈ 0.74
+    // (past the far hand at z ≈ 0.51) on the fast zip's inherited release
+    // velocity. The dip scoop keeps every hand's return within ~0.35 m of its own
+    // points, and hand 0's z well short of the neighbour column.
+    const values = parse('1155');
+    const geometry = makeHandGeometry(
+      [vec3(-0.1, 1, 0), vec3(0.0524, 1, 0.349), vec3(0.1, 1, 0)],
+      [vec3(-0.3, 1, 0), vec3(0.08, 1, 0.5118), vec3(0.3, 1, 0)],
+    );
+    const farHandZ = 0.5118;
+    const timeline = buildTimeline(values, {
+      beatCount: 28,
+      params: { beatPeriod: 0.25, dwellTime: 0.3, handCount: 3 },
+    });
+    const kinematics = buildKinematics(timeline, { values, handCount: 3, geometry, holdDepth: 0.2568 });
+    let hand0MaxAbsZ = 0;
+    for (let hand = 0; hand < 3; hand++) {
+      const cp = geometry.catchPoint(hand);
+      const tp = geometry.throwPoint(hand);
+      let excursion = 0;
+      for (let t = 1; t < 7; t += 0.004) {
+        const p = kinematics.handState(hand, t).position;
+        excursion = Math.max(excursion, Math.min(magnitude(subtract(p, cp)), magnitude(subtract(p, tp))));
+        if (hand === 0) hand0MaxAbsZ = Math.max(hand0MaxAbsZ, Math.abs(p.z));
+      }
+      // Every hand's return stays within half a metre of its own points (was
+      // ~0.82 m for hand 0).
+      expect(excursion).toBeLessThan(0.5);
+    }
+    // Hand 0 (the zip thrower) no longer lunges toward the far hand.
+    expect(hand0MaxAbsZ).toBeLessThan(farHandZ);
+  });
+});
+
+describe('regression: held-2 continuity at the shallow-dip / high-g breach corner (§4.3)', () => {
+  // The held-2 rest brings the hand to v = 0 at the dip, cramming the horizontal
+  // reposition into a flank timed to the vertical descent (2·holdDepth/v_y). In
+  // the shallow-dip / fast-catch corner (holdDepth ≈ 0.02, gravity 30) that flank
+  // collapses, so the held 2 scoops through instead of resting (the rest would
+  // breach the 1e-9 acceleration-continuity budget — measured 3.7e-8 at holdDepth
+  // 0.0015). Either way the hand-joint accelerations must stay continuous. Pinned
+  // so the fallback threshold and the flank conditioning cannot regress silently.
+  for (const pattern of ['522', '423']) {
+    it(`${pattern} n_h=2 holdDepth 0.02 gravity 30: hand-joint acceleration continuous`, () => {
+      const values = parse(pattern);
+      const timeline = buildTimeline(values, { beatCount: 20, params: DEFAULT_PARAMS });
+      const kinematics = buildKinematics(timeline, { values, handCount: 2, gravity: 30, holdDepth: 0.02 });
+      for (let hand = 0; hand < 2; hand++) {
+        for (const { left, right } of jointStates(kinematics.handSegments(hand))) {
+          expect(vecDiff(left.position, right.position)).toBeLessThan(1e-10);
+          expect(vecDiff(left.velocity, right.velocity)).toBeLessThan(1e-10);
+          expect(vecDiff(left.acceleration, right.acceleration)).toBeLessThan(1e-9);
+        }
+      }
+    });
+  }
 });
 
 // --- Kinematics epochs: future-only edits (§4.6) — property + unit tests -------
