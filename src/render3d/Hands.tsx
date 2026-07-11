@@ -23,6 +23,7 @@ import {
   Line,
   LineBasicMaterial,
   type Mesh,
+  type MeshStandardMaterial,
 } from 'three';
 import { useAppStore } from '../state';
 import { firstBeatAtOrAfter } from '../state/simulation';
@@ -46,6 +47,9 @@ const CUP_WIDTH_SEGMENTS = 24;
 const CUP_HEIGHT_SEGMENTS = 12;
 /** Cup translucency (subtle so it never competes with the balls). */
 const CUP_OPACITY = 0.55;
+/** Highlighted-cup opacity + emissive boost on chart-legend hover (owner req. 3). */
+const CUP_HOVER_OPACITY = 0.92;
+const CUP_HOVER_EMISSIVE = 0.7;
 /** Hand-path line translucency (a faint guide, not a solid trace). */
 const HAND_PATH_OPACITY = 0.55;
 
@@ -68,11 +72,18 @@ export function Hands({ color }: { readonly color: string }): ReactElement | nul
   useFrame(() => {
     // Read the clock + kinematics fresh (a horizon extension mid-frame replaces
     // `sim`); hand indices are stable across it. Empty map ⇒ a no-op when hidden.
-    const { simTime, sim } = useAppStore.getState();
+    // `hoveredHandIndex` (set by the chart legend, DESIGN.md §2 view-only) makes the
+    // hovered hand's cup pop — brighter (emissive) and more opaque — so it stands out
+    // from its neighbors. Scalars only (no per-frame allocation, no string parsing).
+    const { simTime, sim, hoveredHandIndex } = useAppStore.getState();
     const k = sim.kinematics;
     meshes.current.forEach((mesh, hand) => {
       const { position } = k.handState(hand, simTime);
       mesh.position.set(position.x, position.y - drop, position.z);
+      const material = mesh.material as MeshStandardMaterial;
+      const highlighted = hand === hoveredHandIndex;
+      material.emissiveIntensity = highlighted ? CUP_HOVER_EMISSIVE : 0;
+      material.opacity = highlighted ? CUP_HOVER_OPACITY : CUP_OPACITY;
     });
   });
 
@@ -107,9 +118,13 @@ export function Hands({ color }: { readonly color: string }): ReactElement | nul
               HAND_CUP_THETA_LENGTH,
             ]}
           />
-          {/* DoubleSide so the open shell reads from inside and out. */}
+          {/* DoubleSide so the open shell reads from inside and out. emissive is the
+              cup color at intensity 0 (no glow) until a legend hover boosts it in
+              useFrame, so the highlight needs no per-frame color allocation. */}
           <meshStandardMaterial
             color={color}
+            emissive={color}
+            emissiveIntensity={0}
             side={DoubleSide}
             transparent
             opacity={CUP_OPACITY}

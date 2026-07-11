@@ -67,6 +67,51 @@ describe('energyRows — panel aggregation (§4.5, §6)', () => {
   });
 });
 
+describe('Net column removal (owner req. 1) — verified against core/energy', () => {
+  // The panel drops the per-hand Net column. Its stated justification ("always 0")
+  // holds for the WHOLE pattern: over a full spatial period the system returns to
+  // steady state, so total contact work is ~0. These tests pin that, and record the
+  // corner the owner should know about: per-hand net is NOT always zero.
+  const scale = (report: EnergyReport): number =>
+    Math.max(1, ...report.perHand.map((hand) => hand.workPositive));
+
+  it('total net over a spatial period is ~0 for every pattern (the caption claim)', () => {
+    for (const [text, handCount] of [
+      ['3', 2],
+      ['5', 2],
+      ['531', 2],
+      ['531', 3],
+      ['423', 2],
+      ['97531', 2],
+    ] as const) {
+      const report = reportFor(text, handCount);
+      expect(Math.abs(report.totalNet) / scale(report)).toBeLessThan(1e-9);
+    }
+  });
+
+  it('per-hand net is ~0 for symmetric patterns (each hand self-balances)', () => {
+    const report = reportFor('3');
+    for (const hand of report.perHand) {
+      expect(Math.abs(hand.net) / scale(report)).toBeLessThan(1e-9);
+    }
+  });
+
+  it('per-hand net can be LARGE for an asymmetric multi-hand pattern (531, n_h=3)', () => {
+    // Finding: 531 with 3 hands does ±9.58 J/kg of net work per hand — one hand
+    // pumps energy, another absorbs it — summing to zero. Net is thus meaningful but
+    // fully recoverable from the two kept columns as W⁺ − |W⁻|, so dropping the
+    // column loses no information. This asserts the premise "always 0" is per-total,
+    // not per-hand, so the caption is worded accordingly.
+    const report = reportFor('531', 3);
+    const maxAbsNet = Math.max(...report.perHand.map((hand) => Math.abs(hand.net)));
+    expect(maxAbsNet).toBeGreaterThan(1); // decisively non-zero
+    for (const hand of report.perHand) {
+      // Net stays exactly the difference of the two columns the panel still shows.
+      expect(hand.net).toBeCloseTo(hand.workPositive - hand.workNegativeMagnitude, 9);
+    }
+  });
+});
+
 describe('formatEnergy', () => {
   it('formats to three decimals by default', () => {
     expect(formatEnergy(1.23456)).toBe('1.235');

@@ -11,6 +11,11 @@ import { useEffect, useRef, type CSSProperties, type ReactElement, type ReactNod
 import { usePalette, type Palette } from './theme';
 
 const SLIDER_STEPS = 1000;
+/**
+ * Internal steps a single wheel event nudges the slider (owner 2026-07-11: the old
+ * ±1 was "prohibitively slow"; ~3× more sensitive). Still clamped to min/max.
+ */
+const WHEEL_STEP = 3;
 
 /**
  * A subtle ↺ affordance that resets one control to its default. Rendered only when
@@ -88,7 +93,7 @@ export interface SliderProps {
 /**
  * A compact labeled slider with a value readout on the right. Two extras beyond a
  * plain range input (redesign 2026-07-11, owner requests):
- *   • Wheel-scroll while hovering nudges the slider one internal step — wheel up /
+ *   • Wheel-scroll while hovering nudges the slider a few internal steps — wheel up /
  *     away increases (moves right), wheel down / toward decreases. The listener is
  *     attached non-passively so it can preventDefault (the page never scrolls).
  *   • A per-control ↺ reset appears when `value` ≠ `defaultValue`.
@@ -126,7 +131,7 @@ export function Slider({
       const current = latest.current;
       const pos = Math.round(positionOf(current.value, current.min, current.max, current.scale) * SLIDER_STEPS);
       // Scroll up / away (deltaY < 0) → increase (right); down / toward → decrease.
-      const nextPos = Math.min(SLIDER_STEPS, Math.max(0, pos + (event.deltaY < 0 ? 1 : -1)));
+      const nextPos = Math.min(SLIDER_STEPS, Math.max(0, pos + (event.deltaY < 0 ? WHEEL_STEP : -WHEEL_STEP)));
       if (nextPos !== pos) {
         current.onChange(valueOf(nextPos / SLIDER_STEPS, current.min, current.max, current.scale));
       }

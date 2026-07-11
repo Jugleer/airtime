@@ -1,7 +1,8 @@
 // src/ui/SharePanel — save / share + audio controls (DESIGN.md §6, Phase 9).
-// Rendered inside the Settings drawer by the redesign (2026-07-10); the component
-// and all its labels are unchanged so its standalone test still holds — only the
-// styling is now theme-aware (dark-first).
+// Docked in the right column beneath the ladder diagram (owner 2026-07-11: the
+// Settings drawer was removed so nothing hides behind a menu); the component and
+// all its labels are unchanged so its standalone test still holds — only the
+// styling is theme-aware (dark-first).
 //
 // - Copy share link: builds the versioned URL from the current config (including
 //   the live camera), copies it to the clipboard (with a visible fallback field),

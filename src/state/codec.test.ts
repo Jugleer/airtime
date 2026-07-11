@@ -65,6 +65,10 @@ const shareConfigArb: fc.Arbitrary<ShareConfig> = fc
           position: fc.tuple(coord, coord, coord),
           target: fc.tuple(coord, coord, coord),
         }),
+        // Optional playhead-time bookmark (present or absent).
+        time: fc.option(fc.double({ min: 0, max: 120, noNaN: true, noDefaultInfinity: true }), {
+          nil: undefined,
+        }),
       })
       .map((rest) => ({ ...rest, handCount })),
   );
@@ -122,6 +126,13 @@ describe('URL codec round-trip (encode → decode = identity to codec precision)
           expect(Math.abs((decoded.camera?.position[i] ?? NaN) - config.camera.position[i]!)).toBeLessThanOrEqual(TOL);
           expect(Math.abs((decoded.camera?.target[i] ?? NaN) - config.camera.target[i]!)).toBeLessThanOrEqual(TOL);
         }
+
+        // Optional time bookmark: absent stays absent; present round-trips to 3 dp.
+        if (config.time === undefined) {
+          expect(decoded.time).toBeUndefined();
+        } else {
+          expect(decoded.time).toBeCloseTo(config.time, 3);
+        }
       }),
       { numRuns: 300 },
     );
@@ -168,6 +179,13 @@ describe('URL codec versioning + graceful degradation', () => {
   it('drops a non-hex ball color', () => {
     expect(decodeConfig('v=1&bc=nothex').ballColor).toBeUndefined();
     expect(decodeConfig('v=1&bc=2f6fed').ballColor).toBe('#2f6fed');
+  });
+
+  it('reads the optional t= playhead bookmark (absent = undefined, clamped ≥ 0)', () => {
+    expect(decodeConfig('v=1&t=5.321').time).toBeCloseTo(5.321, 3);
+    expect(decodeConfig('v=1&p=531').time).toBeUndefined();
+    expect(decodeConfig('v=1&t=-4').time).toBe(0); // negative times clamp to 0
+    expect(decodeConfig('v=1&t=notanumber').time).toBeUndefined();
   });
 
   it('never throws on arbitrary versioned junk', () => {

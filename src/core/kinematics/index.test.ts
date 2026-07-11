@@ -18,6 +18,7 @@ import {
   defaultHandGeometry,
   evaluateSegment,
   lineHandGeometry,
+  lineUnitPositions,
   magnitude,
   makeHandGeometry,
   quinticHermite,
@@ -142,6 +143,46 @@ describe('hand geometry', () => {
     const geo = defaultHandGeometry(2);
     expect(geo.throwPoint(2)).toEqual(geo.throwPoint(0));
     expect(geo.catchPoint(-1)).toEqual(geo.catchPoint(1));
+  });
+
+  // Owner item (2026-07-11): raising the line-preset hand count preserves the
+  // existing hands and appends the new one on the OUTSIDE, alternating +, −.
+  describe('line-preset alternating-outward layout (owner item)', () => {
+    it('grows 1 → 5 hands outward, alternating sides at a constant 2-unit spacing', () => {
+      expect(lineUnitPositions(1)).toEqual([0]);
+      expect(lineUnitPositions(2)).toEqual([-1, 1]);
+      expect(lineUnitPositions(3)).toEqual([-1, 1, 3]);
+      expect(lineUnitPositions(4)).toEqual([-1, 1, 3, -3]);
+      expect(lineUnitPositions(5)).toEqual([-1, 1, 3, -3, 5]);
+    });
+
+    it('is prefix-stable for n ≥ 2 (increasing preserves; decreasing drops the last)', () => {
+      for (let n = 2; n <= 8; n++) {
+        const smaller = lineUnitPositions(n);
+        const larger = lineUnitPositions(n + 1);
+        // Every existing hand keeps its exact unit position; one hand is appended.
+        expect(larger.slice(0, n)).toEqual(smaller);
+        expect(larger).toHaveLength(n + 1);
+        // The appended hand sits strictly outside every earlier hand ON ITS SIDE
+        // (a +3/−3 pair share magnitude, but each is outward on its own side).
+        const appended = larger[n] as number;
+        const sameSide = smaller.filter((u) => Math.sign(u) === Math.sign(appended));
+        const sideExtent = sameSide.length === 0 ? 0 : Math.max(...sameSide.map(Math.abs));
+        expect(Math.abs(appended)).toBeGreaterThan(sideExtent);
+      }
+    });
+
+    it('scales the unit positions into meters via throwHalf / catchHalf', () => {
+      const geo = lineHandGeometry(5); // throwHalf 0.1, catchHalf 0.3
+      const units = lineUnitPositions(5);
+      for (let hand = 0; hand < 5; hand++) {
+        expect(geo.throwPoint(hand)).toEqual(vec3((units[hand] as number) * 0.1, 1, 0));
+        expect(geo.catchPoint(hand)).toEqual(vec3((units[hand] as number) * 0.3, 1, 0));
+      }
+      // Distinct hands never collide (a strictly-monotone-in-|u| outward spread).
+      const xs = new Set(Array.from({ length: 5 }, (_, h) => geo.catchPoint(h).x));
+      expect(xs.size).toBe(5);
+    });
   });
 
   it('places circle-preset hands on the requested radius, throws inset', () => {

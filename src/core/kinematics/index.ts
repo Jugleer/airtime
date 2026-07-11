@@ -78,10 +78,44 @@ export function makeHandGeometry(
 }
 
 /**
- * Hands evenly spaced on a line along x at height `y`, z = 0: throw points inset
- * (±throwHalf) and catch points outset (±catchHalf). For n_h = 2 this is exactly
- * the DESIGN.md §7 default (throws x = ±0.10, catches x = ±0.30, y = 1.00). For
- * n_h = 1 both points sit at the origin column (straight-up throws).
+ * Unit x-positions (in half-pair-width units) for line-preset hands, following the
+ * ALTERNATING-OUTWARD rule (owner 2026-07-11). A single hand sits on the center
+ * column (u = 0); the canonical pair straddles it at ∓1 (n_h = 2, the DESIGN §7
+ * default); every additional hand is appended on the OUTSIDE, alternating
+ * +, −, +, − at a constant 2-unit spacing (hand 2 → +3, hand 3 → −3, hand 4 → +5…).
+ *
+ * Consequence: `lineUnitPositions(n)` is a strict PREFIX of `lineUnitPositions(n+1)`
+ * for every n ≥ 2, so raising the hand count preserves the existing hands and adds
+ * the new one strictly outward, and lowering it drops the most-recently-added hand.
+ * (The 1 → 2 step is the one exception: a solo center hand becomes the ∓1 pair.)
+ * Scaled by throwHalf / catchHalf into meters by {@link lineHandGeometry}.
+ */
+export function lineUnitPositions(handCount: number): number[] {
+  const n = Math.max(0, Math.floor(handCount));
+  if (n === 0) {
+    return [];
+  }
+  if (n === 1) {
+    return [0];
+  }
+  const units: number[] = [-1, 1];
+  for (let hand = 2; hand < n; hand++) {
+    const pairIndex = Math.floor((hand - 2) / 2); // 0, 0, 1, 1, 2, 2, …
+    const magnitude = 3 + 2 * pairIndex; // 3, 3, 5, 5, 7, 7, …
+    const sign = hand % 2 === 0 ? 1 : -1; // hand 2 → +, hand 3 → −, …
+    units.push(sign * magnitude);
+  }
+  return units;
+}
+
+/**
+ * Hands on a line along x at height `y`, z = 0: throw points inset (u·throwHalf)
+ * and catch points outset (u·catchHalf), with the per-hand unit offsets u from the
+ * alternating-outward {@link lineUnitPositions}. For n_h = 2 this is exactly the
+ * DESIGN.md §7 default (throws x = ±0.10, catches x = ±0.30, y = 1.00); for n_h = 1
+ * both points sit at the origin column (straight-up throws). For n_h ≥ 3 each added
+ * hand is placed on the outside (alternating sides) so the earlier hands keep their
+ * positions as the count grows (owner item, 2026-07-11).
  */
 export function lineHandGeometry(
   handCount: number,
@@ -89,9 +123,7 @@ export function lineHandGeometry(
 ): HandGeometry {
   const throwPoints: Vec3[] = [];
   const catchPoints: Vec3[] = [];
-  for (let hand = 0; hand < Math.max(1, handCount); hand++) {
-    // u ∈ [-1, 1] spreads hands symmetrically about the center line.
-    const u = handCount <= 1 ? 0 : (hand / (handCount - 1)) * 2 - 1;
+  for (const u of lineUnitPositions(handCount)) {
     throwPoints.push(vec3(u * throwHalf, y, 0));
     catchPoints.push(vec3(u * catchHalf, y, 0));
   }

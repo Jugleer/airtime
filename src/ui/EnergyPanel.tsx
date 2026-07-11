@@ -69,7 +69,6 @@ export function EnergyPanel(): ReactElement {
               <th style={{ ...thStyle(palette), textAlign: 'left' }}>Hand</th>
               <HeaderCell label="Throw work" symbol="W⁺ (J/kg)" palette={palette} />
               <HeaderCell label="Catch absorption" symbol="|W⁻| (J/kg)" palette={palette} />
-              <HeaderCell label="Net" symbol="W (J/kg)" palette={palette} />
               <HeaderCell label="Average power" symbol="(W/kg)" palette={palette} />
             </tr>
           </thead>
@@ -77,18 +76,13 @@ export function EnergyPanel(): ReactElement {
             {hands.map((row) =>
               rowCells(
                 row.label,
-                [row.workPositive, row.workNegativeMagnitude, row.net, row.averagePower],
+                [row.workPositive, row.workNegativeMagnitude, row.averagePower],
                 false,
               ),
             )}
             {rowCells(
               total.label,
-              [
-                total.workPositive,
-                total.workNegativeMagnitude,
-                total.net,
-                total.averagePower,
-              ],
+              [total.workPositive, total.workNegativeMagnitude, total.averagePower],
               true,
             )}
           </tbody>
@@ -96,8 +90,11 @@ export function EnergyPanel(): ReactElement {
       </div>
       <p style={captionStyle(palette)}>
         Per hand over one spatial period (beats 0–{periodEndBeat}; repeats every{' '}
-        {report.periodTime.toFixed(3)} s). Net = throw work − catch absorption. Contact force is
-        zero at every catch and release, so net = ΔKE + g·Δy over the carry (work–energy theorem).
+        {report.periodTime.toFixed(3)} s). A hand&apos;s net contact work is W⁺ − |W⁻| = ΔKE + g·Δy
+        over its carries (work–energy theorem; contact force is zero at every catch and release).
+        Over a full period the pattern returns to steady state, so net summed across all hands is
+        zero — a symmetric pattern already balances W⁺ and |W⁻| on each hand, while an asymmetric
+        multi-hand pattern can split the load (one hand adds net energy, another absorbs it).
         Figures reflect the parameters in force at the start of the pattern; a live gravity or
         geometry change applies to future beats and does not move a past period&apos;s numbers.
       </p>
@@ -110,15 +107,15 @@ export function EnergyPanel(): ReactElement {
 function tableStyle(palette: Palette): CSSProperties {
   return {
     borderCollapse: 'collapse',
-    fontSize: '0.82rem',
-    minWidth: '29rem',
+    fontSize: '0.72rem',
+    minWidth: '19rem',
     color: palette.textPrimary,
   };
 }
 
 function thStyle(palette: Palette): CSSProperties {
   return {
-    padding: '0.3rem 0.6rem',
+    padding: '0.22rem 0.42rem',
     color: palette.textSecondary,
     fontWeight: 600,
     borderBottom: `1px solid ${palette.border}`,
@@ -127,12 +124,12 @@ function thStyle(palette: Palette): CSSProperties {
 }
 
 function symbolStyle(palette: Palette): CSSProperties {
-  return { color: palette.textMuted, fontWeight: 400, fontSize: '0.72rem' };
+  return { color: palette.textMuted, fontWeight: 400, fontSize: '0.64rem' };
 }
 
 function tdStyle(palette: Palette): CSSProperties {
   return {
-    padding: '0.22rem 0.6rem',
+    padding: '0.16rem 0.42rem',
     textAlign: 'right',
     fontVariantNumeric: 'tabular-nums',
     color: palette.textPrimary,

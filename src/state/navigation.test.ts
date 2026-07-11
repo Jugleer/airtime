@@ -280,12 +280,75 @@ describe('navigateToState', () => {
     expect(state.transition).not.toBeNull();
   });
 
-  it('clicking a state on the current cycle keeps the running pattern', () => {
+  it('an on-cycle node is still the goal — settles into its shortest cycle, not the running pattern', () => {
+    // Owner 2026-07-11: clicking a node the running pattern already flows
+    // through must behave like any other click (make it the goal, establish the
+    // minimum loop), NOT silently keep the running pattern. Juggle 441 (cycle
+    // 1110000 → 1101000 → 1011000) and click the ground node, whose shortest
+    // cycle is the 3-cascade '3' — a strictly shorter, different pattern.
+    useAppStore.getState().navigateToPattern('441');
+    useAppStore.getState().hardReset(); // clean periodic 441 at t = 0
     useAppStore.setState({ simTime: 1.1 });
+    useAppStore.getState().navigateToState(groundState(3));
+    const state = useAppStore.getState();
+    expect(state.sim.patternText).toBe('3'); // shortest cycle through the ground node
+    expect(state.pattern).toBe('3');
+    expect(state.sim.ballCount).toBe(3);
+    expect(state.sim.schedule).toBeDefined();
+  });
+
+  it('a different on-cycle node settles into that node\'s own shortest cycle', () => {
+    // The 1101000 node of 441 has shortest cycle '24' (also shorter than 441),
+    // proving the goal is the CLICKED node, not a fixed re-entry into 441.
+    useAppStore.getState().navigateToPattern('441');
+    useAppStore.getState().hardReset();
+    useAppStore.setState({ simTime: 1.1 });
+    // 1101000 = bits 0,1,3 set.
+    useAppStore.getState().navigateToState(
+      stateToBits([true, true, false, true, false, false, false]),
+    );
+    expect(useAppStore.getState().sim.patternText).toBe('24');
+  });
+
+  it('clicking the current node whose shortest cycle IS the running pattern is idempotent (timeline intact)', () => {
+    // Edge case (b): on '3', the ground node's shortest cycle is '3' itself —
+    // the splice reproduces the pattern and must not corrupt the (bit-identical)
+    // past.
+    const t0 = 2.13; // mid-pattern
+    useAppStore.setState({ simTime: t0 });
+    const before = useAppStore.getState().sim;
     useAppStore.getState().navigateToState(groundState(3));
     const state = useAppStore.getState();
     expect(state.sim.patternText).toBe('3');
     expect(state.pattern).toBe('3');
+    // Past events strictly before the splice are bit-identical.
+    const spliceBeat = earliestGlitchFreeSpliceBeat(before, t0);
+    const spliceTime = before.timeline.beatTime(spliceBeat);
+    const isBefore = (e: TimelineEvent): boolean =>
+      e.kind !== 'hold' && eventTime(e) < spliceTime - 1e-9;
+    expect(state.sim.timeline.events.filter(isBefore)).toEqual(
+      before.timeline.events.filter(isBefore),
+    );
+  });
+
+  it('clicking mid-flight keeps the past bit-identical (edge case c — splice timing reused)', () => {
+    // The clicked instant is mid-beat; earliestGlitchFreeSpliceBeat picks the
+    // safe boundary. Juggle 441, click the ground node mid-flight.
+    useAppStore.getState().navigateToPattern('441');
+    useAppStore.getState().hardReset();
+    const t0 = 2.37;
+    useAppStore.setState({ simTime: t0 });
+    const before = useAppStore.getState().sim;
+    useAppStore.getState().navigateToState(groundState(3));
+    const after = useAppStore.getState().sim;
+    const spliceBeat = earliestGlitchFreeSpliceBeat(before, t0);
+    const spliceTime = before.timeline.beatTime(spliceBeat);
+    const isBefore = (e: TimelineEvent): boolean =>
+      e.kind !== 'hold' && eventTime(e) < spliceTime - 1e-9;
+    expect(after.timeline.events.filter(isBefore)).toEqual(
+      before.timeline.events.filter(isBefore),
+    );
+    expect(after.patternText).toBe('3');
   });
 
   it('ignores a click on a non-node (wrong popcount)', () => {

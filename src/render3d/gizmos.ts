@@ -40,12 +40,25 @@ const CATCH_HOT_COLOR = '#1fd873';
 const THROW_COLOR = '#e8710a'; // orange — where a ball is released
 const THROW_HOT_COLOR = '#ff9433';
 
+/**
+ * The GLOBAL ("whole hand") node color — a neutral grey, distinct from the green
+ * catch and orange throw markers (owner item, 2026-07-11). Dragging it translates
+ * the hand's catch AND throw points together as a rigid pair.
+ */
+export const GLOBAL_COLOR = '#8a94a6'; // grey — moves the whole hand
+export const GLOBAL_HOT_COLOR = '#c2cad6';
+
 /** The marker fill color for a kind and hover/drag state. */
 export function markerColorOf(kind: HandPointKind, hot: boolean): string {
   if (kind === 'catch') {
     return hot ? CATCH_HOT_COLOR : CATCH_COLOR;
   }
   return hot ? THROW_HOT_COLOR : THROW_COLOR;
+}
+
+/** The grey global-node color for a hover/drag state. */
+export function globalColorOf(hot: boolean): string {
+  return hot ? GLOBAL_HOT_COLOR : GLOBAL_COLOR;
 }
 
 /**
@@ -55,4 +68,51 @@ export function markerColorOf(kind: HandPointKind, hot: boolean): string {
  */
 export function markerLabel(hand: number, kind: HandPointKind): string {
   return `${hand}${kind === 'catch' ? 'C' : 'T'}`;
+}
+
+/**
+ * The per-hand GLOBAL-node label: hand index + "G" (e.g. "0G" = hand 0 whole-hand
+ * mover), matching the "0C"/"0T" style and unique across every marker of a hand.
+ */
+export function globalMarkerLabel(hand: number): string {
+  return `${hand}G`;
+}
+
+/** A point in the horizontal hand plane (x, z); y is fixed at hand height. */
+export interface PlanarXZ {
+  readonly x: number;
+  readonly z: number;
+}
+
+/**
+ * The anchor point for a hand's global node: the midpoint of its catch and throw
+ * points in the x–z plane (owner's "sensible anchor"). Dragging the global node to
+ * a new anchor translates both points by the same delta — see {@link translatedPair}.
+ */
+export function globalAnchor(catchPoint: PlanarXZ, throwPoint: PlanarXZ): PlanarXZ {
+  return {
+    x: 0.5 * (catchPoint.x + throwPoint.x),
+    z: 0.5 * (catchPoint.z + throwPoint.z),
+  };
+}
+
+/**
+ * Move a hand's catch/throw pair rigidly so its {@link globalAnchor} lands on
+ * `(anchorX, anchorZ)`: both points shift by the same delta = new anchor − old
+ * anchor, preserving their relative offset. Pure math for the grey global node's
+ * drag; the store applies the result as a future-only geometry epoch.
+ */
+export function translatedPair(
+  catchPoint: PlanarXZ,
+  throwPoint: PlanarXZ,
+  anchorX: number,
+  anchorZ: number,
+): { catch: PlanarXZ; throw: PlanarXZ } {
+  const anchor = globalAnchor(catchPoint, throwPoint);
+  const dx = anchorX - anchor.x;
+  const dz = anchorZ - anchor.z;
+  return {
+    catch: { x: catchPoint.x + dx, z: catchPoint.z + dz },
+    throw: { x: throwPoint.x + dx, z: throwPoint.z + dz },
+  };
 }

@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { validatePattern } from '../core/siteswap';
 import {
+  DEFAULT_BALL_RADIUS,
   DEFAULT_BEAT_PERIOD,
   DEFAULT_DWELL_TIME,
   DEFAULT_GRAVITY_VALUE,
   DEFAULT_HAND_COUNT,
   DEFAULT_HOLD_DEPTH_VALUE,
+  DEFAULT_PLAYBACK_SPEED,
+  DEFAULT_TRAIL_LENGTH,
   carryPathOf,
   presetGeometry,
   sampleHandPoints,
@@ -22,6 +25,7 @@ beforeEach(() => {
     simTime: 0,
     playing: true,
     epochs: [],
+    theme: 'dark',
     orbitColoring: false,
     handCount: DEFAULT_HAND_COUNT,
     gravity: DEFAULT_GRAVITY_VALUE,
@@ -66,9 +70,6 @@ describe('Controls (ui layer)', () => {
     render(<Controls />);
     expect(screen.getByText(/3 balls/)).toBeTruthy();
   });
-
-  // Redesign 2026-07-10: the 3D view controls (ball radius, ball color, per-ball
-  // coloring) moved to the Settings drawer. Those assertions moved to Settings.test.
 
   it('exposes the runtime physics sliders (gravity, hold depth) in the sidebar', () => {
     render(<Controls />);
@@ -212,5 +213,59 @@ describe('Controls reset-to-defaults', () => {
     expect(state.gravity).toBeCloseTo(DEFAULT_GRAVITY_VALUE, 9);
     expect(state.holdDepth).toBeCloseTo(DEFAULT_HOLD_DEPTH_VALUE, 9);
     expect(state.carryPathKind).toBe('quintic');
+  });
+});
+
+// The View group + theme moved from the deleted Settings drawer into the sidebar
+// (2026-07-11 owner requirement: no Settings menu). These are the relocated Settings
+// assertions — now always visible, no drawer to open first (an honest relocation).
+describe('Controls view group (relocated from Settings)', () => {
+  it('exposes the view controls always-visible in the sidebar', () => {
+    render(<Controls />);
+    expect(screen.getByLabelText('Playback speed')).toBeTruthy();
+    expect(screen.getByLabelText('Ball radius')).toBeTruthy();
+    expect(screen.getByLabelText('Ball color')).toBeTruthy();
+    expect(screen.getByText('View')).toBeTruthy();
+  });
+
+  it('toggles per-ball coloring through the store', () => {
+    render(<Controls />);
+    const toggle = screen.getByLabelText('Colour balls individually');
+    expect(useAppStore.getState().orbitColoring).toBe(false); // fixture baseline
+    fireEvent.click(toggle);
+    expect(useAppStore.getState().orbitColoring).toBe(true);
+  });
+
+  it('switches the theme (dark ↔ light) through the store', () => {
+    render(<Controls />);
+    expect(useAppStore.getState().theme).toBe('dark');
+    fireEvent.click(screen.getByRole('button', { name: 'Theme: Light' }));
+    expect(useAppStore.getState().theme).toBe('light');
+    fireEvent.click(screen.getByRole('button', { name: 'Theme: Dark' }));
+    expect(useAppStore.getState().theme).toBe('dark');
+  });
+});
+
+describe('Controls view reset-to-defaults', () => {
+  it('per-control ↺ restores a view default and hides the affordance', () => {
+    render(<Controls />);
+    act(() => useAppStore.getState().setBallRadius(0.08));
+    fireEvent.click(screen.getByLabelText('Reset Ball radius'));
+    expect(useAppStore.getState().ballRadius).toBeCloseTo(DEFAULT_BALL_RADIUS, 9);
+    expect(screen.queryByLabelText('Reset Ball radius')).toBeNull();
+  });
+
+  it('Reset all restores the whole View group', () => {
+    render(<Controls />);
+    act(() => {
+      useAppStore.getState().setBallRadius(0.08);
+      useAppStore.getState().setPlaybackSpeed(1.5);
+      useAppStore.getState().setTrailLength(3);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all view settings' }));
+    const state = useAppStore.getState();
+    expect(state.ballRadius).toBeCloseTo(DEFAULT_BALL_RADIUS, 9);
+    expect(state.playbackSpeed).toBeCloseTo(DEFAULT_PLAYBACK_SPEED, 9);
+    expect(state.trailLength).toBeCloseTo(DEFAULT_TRAIL_LENGTH, 9);
   });
 });

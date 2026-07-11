@@ -66,6 +66,13 @@ export interface ShareConfig {
   readonly catchTickEnabled: boolean;
   readonly audioVolume: number;
   readonly camera: CameraPose;
+  /**
+   * Optional playhead time bookmark in seconds (owner-approved 2026-07-11, codec
+   * key `t`, ~3 decimals). When present, loading the config seeks the clock here;
+   * when absent the scene loads at t = 0. Optional so old `v=1` links without it
+   * still decode (backward compatible) and the round-trip stays lossless.
+   */
+  readonly time?: number;
 }
 
 /** The current codec version. Bump only with a decode migration (never silently). */
@@ -79,6 +86,16 @@ function fixed(value: number): string {
     return '0';
   }
   return String(Number(value.toFixed(FLOAT_DECIMALS)));
+}
+
+/** Playhead-time precision (3 dp): a time bookmark needs ~ms, not sub-µs. */
+const TIME_DECIMALS = 3;
+
+function fixedTime(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '0';
+  }
+  return String(Number(value.toFixed(TIME_DECIMALS)));
 }
 
 /** Parse a finite number, or null when absent/malformed (graceful ignore). */
@@ -180,6 +197,10 @@ export function encodeConfig(config: ShareConfig): string {
   params.set('av', fixed(config.audioVolume));
   const cam = [...config.camera.position, ...config.camera.target].map(fixed).join(',');
   params.set('cam', cam);
+  // Optional playhead-time bookmark. Key `t` is free (no collision with tp/tw/tl).
+  if (config.time !== undefined && Number.isFinite(config.time)) {
+    params.set('t', fixedTime(config.time));
+  }
   return params.toString();
 }
 
@@ -291,6 +312,12 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
     }
   }
 
+  // Optional playhead-time bookmark (key `t`); clamp to t ≥ 0, ignore if malformed.
+  const time = parseNum(params.get('t'));
+  if (time !== null) {
+    out.time = Math.max(0, time);
+  }
+
   return out as Partial<ShareConfig>;
 }
 
@@ -381,6 +408,10 @@ export function isShareConfigLike(raw: unknown): raw is ShareConfig {
     return false;
   }
   if (!isChartAxisMode(config.chartAxisMode)) {
+    return false;
+  }
+  // `time` is optional; if present it must be a finite number (absent = load at 0).
+  if (config.time !== undefined && !isFiniteNumber(config.time)) {
     return false;
   }
   return (

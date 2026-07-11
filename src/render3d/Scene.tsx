@@ -26,6 +26,7 @@ import { Balls } from './Balls';
 import { Tracers } from './Tracers';
 import { Hands, HandPaths } from './Hands';
 import { HandGizmos } from './HandGizmos';
+import { Triad } from './Triad';
 import { useAppStore } from '../state';
 import { setCameraSampler, setCanvasElement } from '../state/sceneBridge';
 import type { CameraPose } from '../state/codec';
@@ -243,6 +244,9 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
         <Balls />
         <Hands color={colors.handCup} />
         <HandGizmos />
+        {/* Always-visible orientation triad (bottom-right corner), tracking the
+            camera; shows the right-handed Z-up display frame (X/Y/Z). */}
+        <Triad />
       </Canvas>
 
       {/* Camera presets: top-right (DESIGN.md §6; graph toggle sits top-left, in App). */}

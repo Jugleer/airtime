@@ -1,23 +1,43 @@
-// src/ui/App — the redesigned app shell (owner layout override 2026-07-10, recorded
-// in BUILD_LOG; DESIGN.md §6 view CONTENT/behavior specs still hold). A single
-// no-scroll grid sized for a ~2000×1300 landscape window:
+// src/ui/App — the redesigned app shell (owner layout override 2026-07-10; Settings
+// drawer removed + panels made resizable 2026-07-11, recorded in BUILD_LOG;
+// DESIGN.md §6 view CONTENT/behavior specs still hold). A single no-scroll grid
+// sized for a ~2000×1300 landscape window:
 //
-//   ┌─────────────────────────── top bar (title · Settings · Help) ───────────┐
-//   │ left sidebar │        stage (3D scene + docked timeline)      │ ladder   │
-//   │  (Controls)  │  graph overlay & camera presets live in-scene  │ (right)  │
+//   ┌─────────────────────────────── top bar (title · Help) ──────────────────┐
+//   │ sidebar │┃│      stage (3D scene + docked timeline)     │┃│ ladder       │
+//   │(Controls││┃│  graph overlay & camera presets in-scene   │┃│ + Save/Share │
+//   │ + View) │┃│                                             │┃│ + Audio      │
 //   ├──────────────── bottom dock: charts & energy (collapsible) ──────────────┤
 //
-// Everything renders from the one global clock (DESIGN.md §2). The dock starts
-// collapsed and the graph overlay starts off, so the scene + ladder get the height.
+// The ┃ columns are draggable splitters (ui/panels): the sidebar + ladder columns
+// resize and collapse to thin strips; the dock resizes vertically. Sizes + collapse
+// flags persist in localStorage only — never the store or the URL codec. Everything
+// renders from the one global clock (DESIGN.md §2). The dock starts collapsed and
+// the graph overlay starts off, so the scene + ladder get the height.
 
-import { useEffect, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { useAppStore } from '../state';
 import { Scene, type SceneColors } from '../render3d';
 import { Charts } from './Charts';
 import { Controls } from './Controls';
 import { Help } from './Help';
 import { Ladder } from './Ladder';
-import { Settings } from './Settings';
+import {
+  COLLAPSED_STRIP,
+  CollapseButton,
+  CollapsedStrip,
+  DOCK_MAX,
+  DOCK_MIN,
+  GUTTER,
+  LADDER_MAX,
+  LADDER_MIN,
+  SIDEBAR_MAX,
+  SIDEBAR_MIN,
+  Splitter,
+  useLayout,
+  type LayoutController,
+} from './panels';
+import { SharePanel } from './SharePanel';
 import { StateGraph } from './StateGraph';
 import { TimelineBar } from './TimelineBar';
 import { THEME_CSS, usePalette, type Palette } from './theme';
@@ -94,7 +114,7 @@ function useSpacebarPlayPause(): void {
   }, []);
 }
 
-/** The thin top bar: product title + the Settings and Help entry points. */
+/** The thin top bar: product title + the Help entry point (Settings drawer removed). */
 function TopBar(): ReactElement {
   const palette = usePalette();
   return (
@@ -114,7 +134,6 @@ function TopBar(): ReactElement {
         Siteswap 3D visualizer &amp; kinematics lab
       </span>
       <div style={{ flex: 1 }} />
-      <Settings />
       <Help />
     </header>
   );
@@ -124,7 +143,7 @@ function TopBar(): ReactElement {
 function Stage(): ReactElement {
   const palette = usePalette();
   return (
-    <div style={{ gridColumn: 2, gridRow: 2, minWidth: 0, minHeight: 0 }}>
+    <div style={{ gridColumn: 3, gridRow: 2, minWidth: 0, minHeight: 0 }}>
       <div
         style={{
           height: '100%',
@@ -149,14 +168,30 @@ function Stage(): ReactElement {
   );
 }
 
-/** The right column: the ladder diagram, filling the height that matches the scene. */
-function LadderColumn(): ReactElement {
+/**
+ * The right column: the ladder diagram (fills the height that matches the scene)
+ * with Save/Share & audio docked beneath it (relocated from the deleted Settings
+ * drawer, 2026-07-11). A chevron collapses the whole column to a thin strip.
+ */
+function RightColumn({ onCollapse }: { onCollapse(): void }): ReactElement {
   const palette = usePalette();
   return (
-    <div style={{ gridColumn: 3, gridRow: 2, minWidth: 0, minHeight: 0 }}>
+    <div
+      style={{
+        gridColumn: 5,
+        gridRow: 2,
+        minWidth: 0,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.55rem',
+        overflow: 'hidden',
+      }}
+    >
       <section
         style={{
-          height: '100%',
+          flex: 1,
+          minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
           gap: '0.4rem',
@@ -167,9 +202,12 @@ function LadderColumn(): ReactElement {
           overflow: 'hidden',
         }}
       >
-        <h2 style={{ margin: 0, fontSize: '0.8rem', color: palette.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
-          Ladder diagram
-        </h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+          <h2 style={{ margin: 0, fontSize: '0.8rem', color: palette.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 700 }}>
+            Ladder diagram
+          </h2>
+          <CollapseButton side="right" label="ladder column" onCollapse={onCollapse} />
+        </div>
         {/* The ladder box takes all remaining height so the (vertical) SVG fills it. */}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: 'hidden' }}>
           <div
@@ -192,6 +230,95 @@ function LadderColumn(): ReactElement {
           </p>
         </div>
       </section>
+      {/* Save/Share & audio, beneath the ladder (owner 2026-07-11: no Settings menu). */}
+      <div style={{ flexShrink: 0, overflowY: 'auto', minHeight: 0 }}>
+        <SharePanel />
+      </div>
+    </div>
+  );
+}
+
+/** Left sidebar: a pinned collapse header over the scrollable Controls (which now
+ *  also carries the View group). Inner scroll is the last-resort overflow path
+ *  (owner 2026-07-11) — the app shell itself never scrolls. */
+function Sidebar({ onCollapse }: { onCollapse(): void }): ReactElement {
+  const palette = usePalette();
+  return (
+    <aside
+      style={{ gridColumn: 1, gridRow: 2, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.5rem',
+          padding: '0 0.15rem 0.4rem 0.1rem',
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: palette.textMuted }}>
+          Controls
+        </span>
+        <CollapseButton side="left" label="controls sidebar" onCollapse={onCollapse} />
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingRight: '0.15rem' }}>
+        <Controls />
+      </div>
+    </aside>
+  );
+}
+
+/** The bottom dock (charts + energy). The top-edge splitter appears only when the
+ *  dock is expanded; before any drag the dock is natural height (reproduces the
+ *  pre-splitter layout). Once dragged it takes a fixed height and scrolls inside. */
+function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
+  const chartsVisible = useAppStore((state) => state.chartsVisible);
+  const dockRef = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState(240);
+
+  // Track the dock's natural height so a first drag starts from where it sits.
+  useLayoutEffect(() => {
+    const element = dockRef.current;
+    if (!element) {
+      return;
+    }
+    const read = (): void => setMeasured(element.offsetHeight);
+    read();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(read);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+    return undefined;
+  }, [chartsVisible]);
+
+  const fixedHeight = chartsVisible && layout.dockHeight != null ? layout.dockHeight : null;
+  return (
+    <div
+      style={{
+        gridColumn: '1 / -1',
+        gridRow: 3,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        height: fixedHeight != null ? `${fixedHeight}px` : 'auto',
+      }}
+    >
+      {chartsVisible ? (
+        <Splitter
+          orientation="horizontal"
+          value={layout.dockHeight ?? measured}
+          min={DOCK_MIN}
+          max={DOCK_MAX}
+          sign={-1}
+          ariaLabel="Resize charts dock"
+          onChange={layout.setDockHeight}
+        />
+      ) : null}
+      <div ref={dockRef} style={{ flex: 1, minHeight: 0, overflowY: fixedHeight != null ? 'auto' : 'visible' }}>
+        <Charts />
+      </div>
     </div>
   );
 }
@@ -204,42 +331,76 @@ export function App(): ReactElement {
   useThemeChrome();
   useSpacebarPlayPause();
   const palette = usePalette();
+  const layout = useLayout();
 
   return (
-    <div style={rootGridStyle(palette)}>
+    <div style={rootGridStyle(palette, layout)}>
       <TopBar />
 
-      {/* Left sidebar: pattern, library, tempo/physics, hands/geometry. */}
-      <aside
-        style={{
-          gridColumn: 1,
-          gridRow: 2,
-          minHeight: 0,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          paddingRight: '0.15rem',
-        }}
-      >
-        <Controls />
-      </aside>
+      {/* Left column: the controls sidebar (pattern, physics, hands, view) or, when
+          collapsed, a thin strip with a chevron to reopen it. */}
+      {layout.leftCollapsed ? (
+        <div style={{ gridColumn: 1, gridRow: 2, minHeight: 0 }}>
+          <CollapsedStrip side="left" label="controls" onExpand={layout.toggleLeftCollapsed} />
+        </div>
+      ) : (
+        <Sidebar onCollapse={layout.toggleLeftCollapsed} />
+      )}
+
+      {/* Left splitter (disabled while the sidebar is collapsed). */}
+      <div style={{ gridColumn: 2, gridRow: 2, minHeight: 0 }}>
+        <Splitter
+          orientation="vertical"
+          value={layout.sidebarWidth}
+          min={SIDEBAR_MIN}
+          max={SIDEBAR_MAX}
+          sign={1}
+          ariaLabel="Resize controls sidebar"
+          disabled={layout.leftCollapsed}
+          onChange={layout.setSidebarWidth}
+        />
+      </div>
 
       <Stage />
-      <LadderColumn />
 
-      {/* Bottom dock: charts + energy, collapsible (starts collapsed → ~no height). */}
-      <div style={{ gridColumn: '1 / -1', gridRow: 3, minWidth: 0 }}>
-        <Charts />
+      {/* Right splitter (disabled while the ladder column is collapsed). */}
+      <div style={{ gridColumn: 4, gridRow: 2, minHeight: 0 }}>
+        <Splitter
+          orientation="vertical"
+          value={layout.ladderWidth}
+          min={LADDER_MIN}
+          max={LADDER_MAX}
+          sign={-1}
+          ariaLabel="Resize ladder column"
+          disabled={layout.ladderCollapsed}
+          onChange={layout.setLadderWidth}
+        />
       </div>
+
+      {/* Right column: ladder + Save/Share, or a thin strip when collapsed. */}
+      {layout.ladderCollapsed ? (
+        <div style={{ gridColumn: 5, gridRow: 2, minHeight: 0 }}>
+          <CollapsedStrip side="right" label="ladder" onExpand={layout.toggleLadderCollapsed} />
+        </div>
+      ) : (
+        <RightColumn onCollapse={layout.toggleLadderCollapsed} />
+      )}
+
+      <BottomDock layout={layout} />
     </div>
   );
 }
 
-function rootGridStyle(palette: Palette): CSSProperties {
+function rootGridStyle(palette: Palette, layout: LayoutController): CSSProperties {
+  const leftTrack = layout.leftCollapsed ? COLLAPSED_STRIP : layout.sidebarWidth;
+  const rightTrack = layout.ladderCollapsed ? COLLAPSED_STRIP : layout.ladderWidth;
   return {
     display: 'grid',
-    gridTemplateColumns: '300px minmax(0, 1fr) 440px',
+    // sidebar | splitter | stage | splitter | ladder. The splitter tracks ARE the
+    // gutters (columnGap 0); the stage keeps a hard minimum so no panel crushes it.
+    gridTemplateColumns: `${leftTrack}px ${GUTTER}px minmax(380px, 1fr) ${GUTTER}px ${rightTrack}px`,
     gridTemplateRows: 'auto minmax(0, 1fr) auto',
-    gap: '0.6rem',
+    gap: '0.6rem 0',
     padding: '0.6rem 0.75rem',
     height: '100vh',
     width: '100vw',

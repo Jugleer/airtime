@@ -16,9 +16,11 @@
 // and passed into the draw.
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type ReactElement,
 } from 'react';
@@ -28,20 +30,24 @@ import { EnergyPanel } from './EnergyPanel';
 import { usePalette, type Palette } from './theme';
 import { Button } from './widgets';
 import {
+  CHART_MIN_HEIGHT,
+  chartCanvasHeight,
   foldSampleRange,
   formatTick,
+  gridSampleTime,
+  gridStep,
   handColor,
   isFiniteSample,
   niceScale,
   quantityMeta,
   SAMPLE_COUNT,
   scalarFromState,
-  windowSampleTime,
   type ChartQuantity,
 } from './charts';
 
-// Chart canvas CSS geometry (logical px; the backing store scales by dpr).
-const CHART_HEIGHT = 176;
+// Chart canvas CSS geometry (logical px; the backing store scales by dpr). The
+// canvas HEIGHT is responsive: it follows the dock's height splitter (measured by
+// a ResizeObserver in ChartsBody) with CHART_MIN_HEIGHT as the floor.
 const MARGIN_LEFT = 46;
 const MARGIN_RIGHT = 10;
 const MARGIN_TOP = 20;
@@ -92,14 +98,15 @@ function drawQuantity(
   simTime: number,
   mode: ChartAxisMode,
   colors: ChartColors,
+  hiddenHands: ReadonlySet<number>,
+  cssHeight: number,
 ): void {
   const ctx = get2dContext(canvas);
   if (!ctx || !canvas) {
     return;
   }
   const cssWidth = canvas.clientWidth;
-  const cssHeight = CHART_HEIGHT;
-  if (cssWidth <= 0) {
+  if (cssWidth <= 0 || cssHeight <= 0) {
     return;
   }
   const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
@@ -123,8 +130,12 @@ function drawQuantity(
   ctx.fillStyle = colors.plotBg;
   ctx.fillRect(plotLeft, plotTop, plotWidth, plotHeight);
 
+  // Range folds only the SHOWN hands, so hiding the tallest trace rescales the axis.
   const acc = { min: Infinity, max: -Infinity };
   for (let hand = 0; hand < hands; hand++) {
+    if (hiddenHands.has(hand)) {
+      continue;
+    }
     foldSampleRange(buffer, hand * SAMPLE_COUNT, SAMPLE_COUNT, acc);
   }
   const rawMin = Number.isFinite(acc.min) ? acc.min : 0;
@@ -160,6 +171,9 @@ function drawQuantity(
   ctx.lineWidth = 1.5;
   ctx.lineJoin = 'round';
   for (let hand = 0; hand < hands; hand++) {
+    if (hiddenHands.has(hand)) {
+      continue;
+    }
     const base = hand * SAMPLE_COUNT;
     ctx.strokeStyle = handColor(hand);
     ctx.beginPath();
@@ -212,7 +226,7 @@ function drawQuantity(
 }
 
 /** The three canvases + the per-frame sampling/draw effect (mounted only when shown). */
-function ChartsBody(): ReactElement {
+function ChartsBody({ hiddenHands }: { readonly hiddenHands: ReadonlySet<number> }): ReactElement {
   const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const simTime = useAppStore((state) => state.simTime);
@@ -223,6 +237,29 @@ function ChartsBody(): ReactElement {
   const velocityRef = useRef<HTMLCanvasElement>(null);
   const accelerationRef = useRef<HTMLCanvasElement>(null);
   const jerkRef = useRef<HTMLCanvasElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Responsive canvas height: the dock's height splitter (App.tsx BottomDock)
+  // imposes this container's height (the row stretches it, see the layout in
+  // <Charts/>); a ResizeObserver measures it ON RESIZE ONLY — never per frame —
+  // and the canvases render at that height with CHART_MIN_HEIGHT as the floor.
+  // The equality guard stops the observe→setState→layout loop at its fixed point.
+  const [canvasHeight, setCanvasHeight] = useState(CHART_MIN_HEIGHT);
+  useEffect(() => {
+    const element = bodyRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') {
+      return; // jsdom / no observer: stay at the CHART_MIN_HEIGHT default
+    }
+    const observer = new ResizeObserver((entries) => {
+      const measured = entries[0]?.contentRect.height ?? element.clientHeight;
+      setCanvasHeight((previous) => {
+        const next = chartCanvasHeight(measured);
+        return next === previous ? previous : next;
+      });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const buffers = useMemo(
     () => ({
@@ -240,10 +277,17 @@ function ChartsBody(): ReactElement {
     const kinematics = sim.kinematics;
     const hands = Math.min(handCount, HAND_COUNT_MAX);
 
+    // Sample on the ABSOLUTE lattice (gridSampleTime), not the sliding window, so a
+    // sample's time — and its value — is invariant to the playhead. The trace then
+    // scrolls without re-phasing, which kills the jerk shimmer (owner requirement 4).
+    const step = gridStep(timelineWindow, SAMPLE_COUNT);
     for (let i = 0; i < SAMPLE_COUNT; i++) {
-      buffers.time[i] = windowSampleTime(i, SAMPLE_COUNT, windowStart, timelineWindow);
+      buffers.time[i] = gridSampleTime(i, windowStart, step);
     }
     for (let hand = 0; hand < hands; hand++) {
+      if (hiddenHands.has(hand)) {
+        continue; // hidden series: skip the per-sample handState work entirely
+      }
       const base = hand * SAMPLE_COUNT;
       for (let i = 0; i < SAMPLE_COUNT; i++) {
         const state = kinematics.handState(hand, buffers.time[i] ?? windowStart);
@@ -253,17 +297,27 @@ function ChartsBody(): ReactElement {
       }
     }
 
-    const args = [hands, windowStart, timelineWindow, simTime, chartAxisMode, colors] as const;
+    const args = [
+      hands,
+      windowStart,
+      timelineWindow,
+      simTime,
+      chartAxisMode,
+      colors,
+      hiddenHands,
+      canvasHeight,
+    ] as const;
     drawQuantity(velocityRef.current, 'velocity', buffers.velocity, buffers.time, ...args);
     drawQuantity(accelerationRef.current, 'acceleration', buffers.acceleration, buffers.time, ...args);
     drawQuantity(jerkRef.current, 'jerk', buffers.jerk, buffers.time, ...args);
-  }, [sim, simTime, handCount, timelineWindow, chartAxisMode, buffers, palette]);
+  }, [sim, simTime, handCount, timelineWindow, chartAxisMode, buffers, palette, hiddenHands, canvasHeight]);
 
+  const canvasSizedStyle = { ...canvasStyle, height: `${canvasHeight}px` };
   return (
-    <div style={{ display: 'flex', flex: '2 1 0%', minWidth: 0, gap: '0.5rem' }}>
-      <canvas ref={velocityRef} aria-label="Hand speed chart" style={canvasStyle} />
-      <canvas ref={accelerationRef} aria-label="Hand acceleration chart" style={canvasStyle} />
-      <canvas ref={jerkRef} aria-label="Hand jerk chart" style={canvasStyle} />
+    <div ref={bodyRef} style={{ display: 'flex', flex: '3 1 0%', minWidth: 0, gap: '0.5rem' }}>
+      <canvas ref={velocityRef} aria-label="Hand speed chart" style={canvasSizedStyle} />
+      <canvas ref={accelerationRef} aria-label="Hand acceleration chart" style={canvasSizedStyle} />
+      <canvas ref={jerkRef} aria-label="Hand jerk chart" style={canvasSizedStyle} />
     </div>
   );
 }
@@ -275,16 +329,57 @@ const AXIS_OPTIONS: readonly { readonly value: ChartAxisMode; readonly label: st
   { value: 'z', label: 'Z' },
 ];
 
-/** The color legend: a swatch + label per active hand (shared across charts). */
-function Legend({ handCount }: { readonly handCount: number }): ReactElement {
+/**
+ * The color legend: a toggle button per active hand (shared across all three charts).
+ *
+ * Clicking a hand toggles its series on/off in the charts (owner requirement 2):
+ * when off the label fades and the swatch goes HOLLOW (a colored border, transparent
+ * fill). The toggle state is component-local (never persisted to the store or URL) —
+ * a transient view of the charts, not a shared setting. Hovering (or keyboard-focusing)
+ * an item highlights the corresponding hand's cup in the 3D scene via the store's
+ * `hoveredHandIndex` (owner requirement 3), cleared on leave/blur.
+ */
+function Legend({
+  handCount,
+  hiddenHands,
+  onToggle,
+}: {
+  readonly handCount: number;
+  readonly hiddenHands: ReadonlySet<number>;
+  readonly onToggle: (hand: number) => void;
+}): ReactElement {
   const palette = usePalette();
+  const setHoveredHandIndex = useAppStore((state) => state.setHoveredHandIndex);
   const items: ReactElement[] = [];
   for (let hand = 0; hand < handCount; hand++) {
+    const color = handColor(hand);
+    const shown = !hiddenHands.has(hand);
     items.push(
-      <span key={hand} style={legendItemStyle}>
-        <span style={{ ...legendSwatchStyle, background: handColor(hand) }} />
+      <button
+        key={hand}
+        type="button"
+        aria-pressed={shown}
+        aria-label={`Hand ${hand} series: ${shown ? 'shown' : 'hidden'} (click to toggle, hover to highlight in scene)`}
+        onClick={() => onToggle(hand)}
+        onMouseEnter={() => setHoveredHandIndex(hand)}
+        onMouseLeave={() => setHoveredHandIndex(null)}
+        onFocus={() => setHoveredHandIndex(hand)}
+        onBlur={() => setHoveredHandIndex(null)}
+        style={{
+          ...legendItemStyle,
+          color: shown ? palette.textSecondary : palette.textMuted,
+          opacity: shown ? 1 : 0.6,
+        }}
+      >
+        <span
+          style={{
+            ...legendSwatchStyle,
+            background: shown ? color : 'transparent',
+            border: `1.5px solid ${color}`,
+          }}
+        />
         Hand {hand}
-      </span>,
+      </button>,
     );
   }
   return (
@@ -310,6 +405,23 @@ export function Charts(): ReactElement {
   const handCount = useAppStore((state) => state.handCount);
   const toggleCharts = useAppStore((state) => state.toggleCharts);
   const setChartAxisMode = useAppStore((state) => state.setChartAxisMode);
+  const setHoveredHandIndex = useAppStore((state) => state.setHoveredHandIndex);
+
+  // Which hand series are toggled OFF in the charts (owner requirement 2). Kept
+  // component-local: it is a transient view of the charts, not a shared setting, so
+  // it is deliberately NOT persisted to the store or the URL codec.
+  const [hiddenHands, setHiddenHands] = useState<ReadonlySet<number>>(() => new Set<number>());
+  const toggleHand = useCallback((hand: number) => {
+    setHiddenHands((prev) => {
+      const next = new Set(prev);
+      if (next.has(hand)) {
+        next.delete(hand);
+      } else {
+        next.add(hand);
+      }
+      return next;
+    });
+  }, []);
 
   return (
     <section
@@ -322,8 +434,17 @@ export function Charts(): ReactElement {
         borderRadius: '0.55rem',
         border: `1px solid ${palette.border}`,
         width: '100%',
+        // Fill the dock wrapper so the height splitter reaches the charts: once the
+        // dock is dragged the wrapper's height is definite and 100% fills it; before
+        // any drag the wrapper is auto-height, a percentage against auto resolves to
+        // auto (CSS), and the section stays natural — the pre-splitter layout.
+        // Global border-box (ui/theme) keeps the padding inside the 100%.
+        height: '100%',
       }}
       aria-label="Charts and energy panel"
+      // Clear the scene highlight when the pointer leaves the whole dock, in case it
+      // slips off a legend item onto a gap rather than firing the item's leave.
+      onMouseLeave={() => setHoveredHandIndex(null)}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem 1rem', flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0, fontSize: '0.85rem', color: palette.textPrimary, fontWeight: 700 }}>
@@ -353,7 +474,7 @@ export function Charts(): ReactElement {
                 })}
               </div>
             </div>
-            <Legend handCount={handCount} />
+            <Legend handCount={handCount} hiddenHands={hiddenHands} onToggle={toggleHand} />
           </>
         ) : (
           <span style={{ fontSize: '0.76rem', color: palette.textMuted }}>
@@ -372,11 +493,30 @@ export function Charts(): ReactElement {
       </div>
 
       {chartsVisible ? (
-        <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'stretch', flexWrap: 'wrap' }}>
-          <ChartsBody />
-          {/* Real basis + shrink allowed: a max-content basis here starves the
-              chart canvases at very wide viewports (owner-reported collapse). */}
-          <div style={{ flex: '1 1 30rem', minWidth: 0 }}>
+        // flex '1 1 auto' + minHeight 0: the row takes the section's leftover height
+        // when the dock height is fixed (content-sized before any drag, since basis
+        // auto never collapses in an auto-height column). alignItems stretch hands
+        // that height to the ChartsBody container, where the ResizeObserver reads it.
+        // NO flexWrap here: in a wrapped container a line's cross-size never drops
+        // below its items' content height, so the canvases would RATCHET the measured
+        // height (grow-only; verified headless). Single-line stretch tracks the row
+        // height both ways; wrap was vestigial anyway (both children have basis 0%).
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.8rem',
+            alignItems: 'stretch',
+            flex: '1 1 auto',
+            minHeight: 0,
+          }}
+        >
+          <ChartsBody hiddenHands={hiddenHands} />
+          {/* 60/40 split (owner requirement 1): charts get flex-grow 3, energy 2, both
+              on a 0% basis so the ratio holds at every width. minWidth 0 keeps the
+              energy panel SHRINKABLE — a real/max-content basis here would let the
+              (non-wrapping) table starve the chart canvases at very wide viewports
+              (the owner-reported collapse; verified fixed at ~2000px and ≥2400px). */}
+          <div style={{ flex: '2 1 0%', minWidth: 0 }}>
             <EnergyPanel />
           </div>
         </div>
@@ -387,12 +527,13 @@ export function Charts(): ReactElement {
 
 // --- Inline styling ----------------------------------------------------------
 
+// Height is applied dynamically in ChartsBody (splitter-responsive, floor
+// CHART_MIN_HEIGHT); everything else about the canvas geometry is static.
 const canvasStyle: CSSProperties = {
   display: 'block',
   flex: 1,
   minWidth: 0,
   width: '100%',
-  height: `${CHART_HEIGHT}px`,
 };
 
 const legendRowStyle: CSSProperties = {
@@ -407,6 +548,14 @@ const legendItemStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: '0.3rem',
+  // Reset native <button> chrome so the toggle reads as a plain legend entry.
+  background: 'transparent',
+  border: 'none',
+  padding: 0,
+  margin: 0,
+  font: 'inherit',
+  lineHeight: 1.2,
+  cursor: 'pointer',
 };
 
 const legendSwatchStyle: CSSProperties = {

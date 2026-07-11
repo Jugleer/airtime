@@ -26,6 +26,31 @@ export const SAMPLE_COUNT = 320;
 export const QUANTITIES = ['velocity', 'acceleration', 'jerk'] as const;
 export type ChartQuantity = (typeof QUANTITIES)[number];
 
+/**
+ * Minimum (and default) chart canvas CSS height in px — the pre-splitter fixed
+ * height, kept as the floor so a small dock never squashes the plots unreadably
+ * (the dock wrapper scrolls instead; see App.tsx BottomDock, DOCK_MIN 120).
+ */
+export const CHART_MIN_HEIGHT = 176;
+
+/**
+ * The chart canvas CSS height for a measured ChartsBody container height (the
+ * dock's height splitter imposes the container height; the canvases fill it).
+ * Floored to whole px so the dpr-scaled backing store stays integral, clamped to
+ * {@link CHART_MIN_HEIGHT} from below, and total on junk input (NaN/±∞/negative →
+ * the floor) so a transient zero-height measurement can never draw a degenerate
+ * canvas. Pure math — unit-tested without a DOM.
+ */
+export function chartCanvasHeight(
+  measuredHeight: number,
+  minHeight: number = CHART_MIN_HEIGHT,
+): number {
+  if (!Number.isFinite(measuredHeight)) {
+    return minHeight;
+  }
+  return Math.max(minHeight, Math.floor(measuredHeight));
+}
+
 /** Per-hand line colors (shared with the legend); wraps for n_h up to 8. */
 export const HAND_PALETTE: readonly string[] = [
   '#2f6fed',
@@ -97,6 +122,13 @@ export function scalarFromState(
  * Sim time of sample `index` of `count`, uniformly spanning the visible window
  * [windowStart, windowStart + timelineWindow]. Index 0 is exactly the left edge
  * and `count − 1` exactly the right edge (mirrors render3d/tracers `sampleTimeAt`).
+ *
+ * NOTE: this is a WINDOW-relative grid — every sample time slides continuously with
+ * `windowStart` (i.e. with the playhead). For a scrolling live chart that aliases a
+ * piecewise quantity (the quintic's jerk STEPS at segment boundaries): the same
+ * pixel column shows a different absolute time every frame, so past samples re-phase
+ * and the jerk trace shimmers. Use {@link gridSampleTime} for the live charts and
+ * keep this only where exact window endpoints are wanted (e.g. tests).
  */
 export function windowSampleTime(
   index: number,
@@ -108,6 +140,33 @@ export function windowSampleTime(
     return windowStart;
   }
   return windowStart + timelineWindow * (index / (count - 1));
+}
+
+/** Guard so a `windowStart` sitting exactly on a lattice point is not nudged off it. */
+const LATTICE_EPS = 1e-9;
+
+/** Spacing (s) of the absolute sampling lattice for `count` samples over the window. */
+export function gridStep(timelineWindow: number, count: number): number {
+  return count > 1 ? timelineWindow / (count - 1) : timelineWindow;
+}
+
+/**
+ * Sim time of sample `index` on the ABSOLUTE lattice {k·step : k ∈ ℤ}, anchored to
+ * t = 0 rather than to the (sliding) window. The first sample is the first lattice
+ * point ≥ `windowStart`; successive samples step by `step`. As the playhead advances
+ * the window slides, so which lattice points fall inside it shifts, but each point's
+ * absolute time — and therefore its sampled value — is invariant to the playhead:
+ * scrolling merely TRANSLATES the points across the plot, it never resamples history.
+ * This is what removes the jerk-trace aliasing (owner requirement 4): a fixed grid is
+ * phase-locked to the quantity's discontinuities instead of drifting through them.
+ * Determinism is preserved — the value is still evaluated at an explicit time.
+ */
+export function gridSampleTime(index: number, windowStart: number, step: number): number {
+  if (!(step > 0)) {
+    return windowStart;
+  }
+  const first = Math.ceil(windowStart / step - LATTICE_EPS);
+  return (first + index) * step;
 }
 
 /** True iff a sampled value is a real, finite number safe to send to a path. */

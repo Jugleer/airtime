@@ -11,8 +11,14 @@ import {
   GIZMO_LABEL_RENDER_ORDER,
   GIZMO_MARKER_RADIUS,
   GIZMO_RENDER_ORDER,
+  GLOBAL_COLOR,
+  GLOBAL_HOT_COLOR,
+  globalAnchor,
+  globalColorOf,
+  globalMarkerLabel,
   markerColorOf,
   markerLabel,
+  translatedPair,
 } from './gizmos';
 
 const KINDS: readonly HandPointKind[] = ['catch', 'throw'];
@@ -70,5 +76,55 @@ describe('markerColorOf', () => {
       KINDS.flatMap((kind) => [markerColorOf(kind, false), markerColorOf(kind, true)]),
     );
     expect(colors.size).toBe(4); // catch/throw x idle/hot, all distinct
+  });
+});
+
+// --- Global ("whole hand") node (owner item, 2026-07-11) ---------------------
+
+describe('global hand-position node', () => {
+  it('labels the global node "<hand>G", unique against the C/T markers of every hand', () => {
+    expect(globalMarkerLabel(0)).toBe('0G');
+    expect(globalMarkerLabel(7)).toBe('7G');
+    const labels = new Set<string>();
+    for (let hand = 0; hand < HAND_COUNT_MAX; hand++) {
+      labels.add(markerLabel(hand, 'catch'));
+      labels.add(markerLabel(hand, 'throw'));
+      labels.add(globalMarkerLabel(hand));
+    }
+    expect(labels.size).toBe(HAND_COUNT_MAX * 3); // C, T, G per hand, all distinct
+  });
+
+  it('uses a grey color distinct from catch/throw, brightening when hot', () => {
+    expect(globalColorOf(false)).toBe(GLOBAL_COLOR);
+    expect(globalColorOf(true)).toBe(GLOBAL_HOT_COLOR);
+    const all = new Set([
+      GLOBAL_COLOR,
+      GLOBAL_HOT_COLOR,
+      markerColorOf('catch', false),
+      markerColorOf('catch', true),
+      markerColorOf('throw', false),
+      markerColorOf('throw', true),
+    ]);
+    expect(all.size).toBe(6); // grey idle/hot never collides with catch/throw
+  });
+
+  it('anchors at the midpoint of the catch and throw points', () => {
+    expect(globalAnchor({ x: -0.3, z: 0 }, { x: -0.1, z: 0 })).toEqual({ x: -0.2, z: 0 });
+    expect(globalAnchor({ x: 0.2, z: 0.4 }, { x: 0.6, z: -0.2 })).toEqual({ x: 0.4, z: 0.1 });
+  });
+
+  it('translates the catch/throw pair rigidly so the anchor lands on the drag target', () => {
+    const catchPoint = { x: -0.3, z: 0 };
+    const throwPoint = { x: -0.1, z: 0 };
+    // Old anchor is (−0.2, 0); dragging it to (0.5, 0.25) shifts both by (+0.7, +0.25).
+    const moved = translatedPair(catchPoint, throwPoint, 0.5, 0.25);
+    expect(moved.catch.x).toBeCloseTo(0.4, 12);
+    expect(moved.catch.z).toBeCloseTo(0.25, 12);
+    expect(moved.throw.x).toBeCloseTo(0.6, 12);
+    expect(moved.throw.z).toBeCloseTo(0.25, 12);
+    // The pair's relative offset is preserved, and the new midpoint IS the target.
+    const newAnchor = globalAnchor(moved.catch, moved.throw);
+    expect(newAnchor.x).toBeCloseTo(0.5, 12);
+    expect(newAnchor.z).toBeCloseTo(0.25, 12);
   });
 });

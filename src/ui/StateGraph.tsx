@@ -516,8 +516,8 @@ function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
       style={minimapCardStyle(palette)}
     >
       {body}
-      <span aria-hidden style={minimapExpandGlyphStyle(palette)}>
-        ⤢
+      <span aria-hidden style={minimapExpandLabelStyle(palette)}>
+        click to expand
       </span>
     </button>
   );
@@ -656,15 +656,27 @@ function minimapCardStyle(palette: Palette): CSSProperties {
   };
 }
 
-/** The small ⤢ expand glyph pinned in the minimap's corner. */
-function minimapExpandGlyphStyle(palette: Palette): CSSProperties {
+/**
+ * The "click to expand" hint (owner 2026-07-11, replacing the ⤢ glyph): a small,
+ * muted caption pinned to the minimap's bottom edge. A faint chip behind it keeps
+ * it legible over the ring graph without drawing attention; the whole card stays
+ * the click target (this span is aria-hidden and pointer-transparent).
+ */
+function minimapExpandLabelStyle(palette: Palette): CSSProperties {
   return {
     position: 'absolute',
-    top: '0.15rem',
-    right: '0.3rem',
-    fontSize: '0.8rem',
+    bottom: '0.3rem',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    fontSize: '0.6rem',
     lineHeight: 1,
+    fontWeight: 600,
+    letterSpacing: '0.02em',
+    whiteSpace: 'nowrap',
     color: palette.textSecondary,
+    background: palette.name === 'dark' ? 'rgba(15, 23, 42, 0.55)' : 'rgba(255, 255, 255, 0.6)',
+    padding: '0.12rem 0.35rem',
+    borderRadius: '0.25rem',
     pointerEvents: 'none',
   };
 }

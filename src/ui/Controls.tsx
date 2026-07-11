@@ -1,28 +1,40 @@
-// src/ui/Controls — the LEFT SIDEBAR (redesign 2026-07-10, owner layout override).
+// src/ui/Controls — the LEFT SIDEBAR (redesign 2026-07-10; Settings drawer removed
+// 2026-07-11, owner requirement — every control is now always visible, no menu).
 //
-// Tightly grouped: pattern entry (live validation + ball-count / error line),
-// the pattern library, the Tempo & physics group (beat period, dwell, gravity,
-// hold depth, carry path — all future-only via kinematics epochs, DESIGN.md §4.6),
-// and the Hands & geometry group (n_h stepper with line/circle presets + the
-// numeric hand-positions editor). Full words in labels (NOTATION.md); the dwell
-// readout turns amber when the effective-dwell clamp is active.
+// Tightly grouped, top to bottom: pattern entry (live validation + ball-count /
+// error line), the pattern library, the Tempo & physics group (beat period, dwell,
+// gravity, hold depth, carry path — all future-only via kinematics epochs,
+// DESIGN.md §4.6), the Hands & geometry group (n_h stepper with line/circle presets
+// + the numeric hand-positions editor), and — moved here from the deleted Settings
+// drawer — the View group (theme, playback speed, ball radius/color, per-ball
+// coloring, timeline window, trail length, ghosts, hand/graph overlays).
 //
-// Relocated by the redesign (see BUILD_LOG): play/pause + restart → ui/Transport
-// (docked in the timeline strip); playback speed, ball radius/color, per-ball
-// coloring, timeline window, trail length, ghosts → the Settings drawer. Tempo
-// (physics) stays here; playback speed (viewing) lives in Settings — the two are
-// never on the same panel, so they can't be confused (DESIGN.md §6).
+// Full words in labels (NOTATION.md); the dwell readout turns amber when the
+// effective-dwell clamp is active. Tempo (physics) and playback speed (viewing)
+// stay in distinct groups so they can't be confused (DESIGN.md §6). Save/Share &
+// audio moved to the right column beneath the ladder (see App / SharePanel).
 
 import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import { spatialPeriodBeats, validatePattern } from '../core/siteswap';
 import {
+  BALL_RADIUS_MAX,
+  BALL_RADIUS_MIN,
   BEAT_PERIOD_MAX,
   BEAT_PERIOD_MIN,
+  DEFAULT_BALL_COLOR,
+  DEFAULT_BALL_RADIUS,
   DEFAULT_BEAT_PERIOD,
   DEFAULT_CARRY_PATH_KIND,
   DEFAULT_DWELL_TIME,
+  DEFAULT_GHOSTS_ENABLED,
+  DEFAULT_GRAPH_MINIMAP,
   DEFAULT_GRAVITY_VALUE,
   DEFAULT_HOLD_DEPTH_VALUE,
+  DEFAULT_ORBIT_COLORING,
+  DEFAULT_PLAYBACK_SPEED,
+  DEFAULT_SHOW_HANDS,
+  DEFAULT_SHOW_HAND_PATHS,
+  DEFAULT_TRAIL_LENGTH,
   DWELL_CLAMP_BETA,
   DWELL_MIN,
   GRAVITY_MAX,
@@ -31,12 +43,22 @@ import {
   HAND_COUNT_MIN,
   HOLD_DEPTH_MAX,
   HOLD_DEPTH_MIN,
+  PLAYBACK_MAX,
+  PLAYBACK_MIN,
+  TRAIL_LENGTH_MAX,
+  TRAIL_LENGTH_MIN,
   dwellCap,
   useAppStore,
   type CarryPathKind,
   type HandPreset,
   type HandPointKind,
+  type ThemeName,
 } from '../state';
+import {
+  DEFAULT_TIMELINE_WINDOW,
+  TIMELINE_WINDOW_MAX,
+  TIMELINE_WINDOW_MIN,
+} from '../state/simulation';
 import { PATTERN_LIBRARY, type LibraryEntry } from './library';
 import { usePalette, type Palette } from './theme';
 import {
@@ -72,7 +94,17 @@ function dwellClampActive(values: readonly number[], dwellTime: number, beatPeri
   return dwellTime > DWELL_CLAMP_BETA * hMin * beatPeriod;
 }
 
-/** The x/z numeric editor for one hand's catch + throw points (y stays fixed). */
+/**
+ * The horizontal-plane numeric editor for one hand's catch + throw points.
+ *
+ * Display convention is Z-VERTICAL (owner 2026-07-11): X = the line the hands sit
+ * along, Y = front–back horizontal, Z = up. The store is y-up internally, so the
+ * internal key 'x' is display X (along) and the internal key 'z' (front–back) is
+ * shown to the user as "Y". The height (internal y) is the up axis Z and stays
+ * fixed at 1.00 m, so it isn't editable here. Display Y = −internal z (the
+ * right-handed z-up display frame; see render3d/displayFrame.ts), so this table
+ * negates on both read and write.
+ */
 function HandPositionsTable(): ReactElement {
   const palette = usePalette();
   const handCount = useAppStore((state) => state.handCount);
@@ -80,22 +112,23 @@ function HandPositionsTable(): ReactElement {
   const catchPoints = useAppStore((state) => state.handCatchPoints);
   const setHandPoint = useAppStore((state) => state.setHandPoint);
 
-  const cell = (hand: number, kind: HandPointKind, axis: 'x' | 'z'): ReactElement => {
+  const cell = (hand: number, kind: HandPointKind, axisKey: 'x' | 'z', display: string): ReactElement => {
     const point = (kind === 'throw' ? throwPoints : catchPoints)[hand];
-    const value = point ? point[axis] : 0;
+    const rawValue = point ? point[axisKey] : 0;
+    const value = axisKey === 'z' ? -rawValue : rawValue;
     return (
       <input
         type="number"
         step={0.01}
         value={Number.isFinite(value) ? Number(value.toFixed(3)) : 0}
-        aria-label={`Hand ${hand} ${kind} ${axis}`}
+        aria-label={`Hand ${hand} ${kind} ${display}`}
         onChange={(event) => {
           const next = event.target.valueAsNumber;
           if (!Number.isFinite(next) || !point) {
             return;
           }
-          const x = axis === 'x' ? next : point.x;
-          const z = axis === 'z' ? next : point.z;
+          const x = axisKey === 'x' ? next : point.x;
+          const z = axisKey === 'z' ? -next : point.z;
           setHandPoint(hand, kind, x, z);
         }}
         style={{ ...insetInputStyle(palette), width: '3.6rem', fontSize: '0.78rem' }}
@@ -108,10 +141,10 @@ function HandPositionsTable(): ReactElement {
     rows.push(
       <tr key={hand}>
         <td style={tdStyle(palette)}>{hand}</td>
-        <td style={tdStyle(palette)}>{cell(hand, 'catch', 'x')}</td>
-        <td style={tdStyle(palette)}>{cell(hand, 'catch', 'z')}</td>
-        <td style={tdStyle(palette)}>{cell(hand, 'throw', 'x')}</td>
-        <td style={tdStyle(palette)}>{cell(hand, 'throw', 'z')}</td>
+        <td style={tdStyle(palette)}>{cell(hand, 'catch', 'x', 'x')}</td>
+        <td style={tdStyle(palette)}>{cell(hand, 'catch', 'z', 'y')}</td>
+        <td style={tdStyle(palette)}>{cell(hand, 'throw', 'x', 'x')}</td>
+        <td style={tdStyle(palette)}>{cell(hand, 'throw', 'z', 'y')}</td>
       </tr>,
     );
   }
@@ -122,20 +155,208 @@ function HandPositionsTable(): ReactElement {
         <thead>
           <tr>
             <th style={thStyle(palette)}>Hand</th>
-            <th style={thStyle(palette)}>Catch x</th>
-            <th style={thStyle(palette)}>Catch z</th>
-            <th style={thStyle(palette)}>Throw x</th>
-            <th style={thStyle(palette)}>Throw z</th>
+            <th style={thStyle(palette)}>Catch X</th>
+            <th style={thStyle(palette)}>Catch Y</th>
+            <th style={thStyle(palette)}>Throw X</th>
+            <th style={thStyle(palette)}>Throw Y</th>
           </tr>
         </thead>
         <tbody>{rows}</tbody>
       </table>
       <p style={{ margin: '0.35rem 0 0', color: palette.textMuted, fontSize: '0.72rem', lineHeight: 1.4 }}>
         Drag the green (catch) / orange (throw) markers in the 3D scene (0C = hand 0 catch, 0T =
-        hand 0 throw), or edit x/z here (meters; height y stays 1.00 m). In-flight balls keep the
-        path they were aimed with — edits affect future throws only.
+        hand 0 throw), or edit X (along the hand line) / Y (front–back) here (meters; the up axis Z
+        stays 1.00 m). In-flight balls keep the path they were aimed with — edits affect future
+        throws only.
       </p>
     </div>
+  );
+}
+
+/**
+ * The View group (relocated from the deleted Settings drawer, 2026-07-11). Theme +
+ * every VIEWING preference: playback-speed rescale (NOT tempo, DESIGN.md §2), ball
+ * radius / coloring, timeline window, trail length, future ghosts, hand + graph
+ * overlays. Each control has a ↺ (via the widgets); "Reset all" restores the whole
+ * group. Theme has its own ↺ but is deliberately left OUT of the bulk reset so a
+ * slider reset never flips the app light/dark unexpectedly (theme is not persisted).
+ */
+function ViewGroup(): ReactElement {
+  const palette = usePalette();
+  const theme = useAppStore((state) => state.theme);
+  const playbackSpeed = useAppStore((state) => state.playbackSpeed);
+  const ballRadius = useAppStore((state) => state.ballRadius);
+  const orbitColoring = useAppStore((state) => state.orbitColoring);
+  const ballColor = useAppStore((state) => state.ballColor);
+  const showHands = useAppStore((state) => state.showHands);
+  const showHandPaths = useAppStore((state) => state.showHandPaths);
+  const graphMinimap = useAppStore((state) => state.graphMinimap);
+  const timelineWindow = useAppStore((state) => state.timelineWindow);
+  const trailLength = useAppStore((state) => state.trailLength);
+  const ghostsEnabled = useAppStore((state) => state.ghostsEnabled);
+
+  const toggleTheme = useAppStore((state) => state.toggleTheme);
+  const setPlaybackSpeed = useAppStore((state) => state.setPlaybackSpeed);
+  const setBallRadius = useAppStore((state) => state.setBallRadius);
+  const toggleOrbitColoring = useAppStore((state) => state.toggleOrbitColoring);
+  const setOrbitColoring = useAppStore((state) => state.setOrbitColoring);
+  const setBallColor = useAppStore((state) => state.setBallColor);
+  const toggleShowHands = useAppStore((state) => state.toggleShowHands);
+  const setShowHands = useAppStore((state) => state.setShowHands);
+  const toggleShowHandPaths = useAppStore((state) => state.toggleShowHandPaths);
+  const setShowHandPaths = useAppStore((state) => state.setShowHandPaths);
+  const toggleGraphMinimap = useAppStore((state) => state.toggleGraphMinimap);
+  const setGraphMinimap = useAppStore((state) => state.setGraphMinimap);
+  const setTimelineWindow = useAppStore((state) => state.setTimelineWindow);
+  const setTrailLength = useAppStore((state) => state.setTrailLength);
+  const toggleGhosts = useAppStore((state) => state.toggleGhosts);
+  const setGhostsEnabled = useAppStore((state) => state.setGhostsEnabled);
+
+  const viewDirty =
+    playbackSpeed !== DEFAULT_PLAYBACK_SPEED ||
+    ballRadius !== DEFAULT_BALL_RADIUS ||
+    timelineWindow !== DEFAULT_TIMELINE_WINDOW ||
+    trailLength !== DEFAULT_TRAIL_LENGTH ||
+    orbitColoring !== DEFAULT_ORBIT_COLORING ||
+    ghostsEnabled !== DEFAULT_GHOSTS_ENABLED ||
+    showHands !== DEFAULT_SHOW_HANDS ||
+    showHandPaths !== DEFAULT_SHOW_HAND_PATHS ||
+    graphMinimap !== DEFAULT_GRAPH_MINIMAP ||
+    ballColor !== DEFAULT_BALL_COLOR;
+  const resetView = (): void => {
+    setPlaybackSpeed(DEFAULT_PLAYBACK_SPEED);
+    setBallRadius(DEFAULT_BALL_RADIUS);
+    setTimelineWindow(DEFAULT_TIMELINE_WINDOW);
+    setTrailLength(DEFAULT_TRAIL_LENGTH);
+    setOrbitColoring(DEFAULT_ORBIT_COLORING);
+    setGhostsEnabled(DEFAULT_GHOSTS_ENABLED);
+    setShowHands(DEFAULT_SHOW_HANDS);
+    setShowHandPaths(DEFAULT_SHOW_HAND_PATHS);
+    setGraphMinimap(DEFAULT_GRAPH_MINIMAP);
+    setBallColor(DEFAULT_BALL_COLOR);
+  };
+
+  return (
+    <section style={groupStyle(palette)}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+        <SectionLabel>View</SectionLabel>
+        <Button
+          variant="ghost"
+          onClick={resetView}
+          disabled={!viewDirty}
+          ariaLabel="Reset all view settings"
+          style={resetAllStyle}
+        >
+          ↺ Reset all
+        </Button>
+      </div>
+      <Segmented<ThemeName>
+        label="Theme"
+        value={theme}
+        options={[
+          { value: 'dark', label: 'Dark' },
+          { value: 'light', label: 'Light' },
+        ]}
+        defaultValue="dark"
+        onChange={(value) => {
+          if (value !== theme) {
+            toggleTheme();
+          }
+        }}
+      />
+      <Slider
+        label="Playback speed"
+        value={playbackSpeed}
+        min={PLAYBACK_MIN}
+        max={PLAYBACK_MAX}
+        scale="linear"
+        readout={`${playbackSpeed.toFixed(2)}× (viewing)`}
+        defaultValue={DEFAULT_PLAYBACK_SPEED}
+        onChange={setPlaybackSpeed}
+      />
+      <Slider
+        label="Ball radius"
+        value={ballRadius}
+        min={BALL_RADIUS_MIN}
+        max={BALL_RADIUS_MAX}
+        scale="linear"
+        readout={`${(ballRadius * 100).toFixed(1)} cm`}
+        defaultValue={DEFAULT_BALL_RADIUS}
+        onChange={setBallRadius}
+      />
+      <Slider
+        label="Timeline window"
+        value={timelineWindow}
+        min={TIMELINE_WINDOW_MIN}
+        max={TIMELINE_WINDOW_MAX}
+        scale="linear"
+        readout={`${timelineWindow.toFixed(1)} s`}
+        defaultValue={DEFAULT_TIMELINE_WINDOW}
+        onChange={setTimelineWindow}
+      />
+      <Slider
+        label="Trail length"
+        value={trailLength}
+        min={TRAIL_LENGTH_MIN}
+        max={TRAIL_LENGTH_MAX}
+        scale="linear"
+        readout={`${trailLength.toFixed(2)} s`}
+        defaultValue={DEFAULT_TRAIL_LENGTH}
+        onChange={setTrailLength}
+      />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem 1rem', alignItems: 'center' }}>
+        <CheckToggle
+          label="Colour balls individually"
+          checked={orbitColoring}
+          defaultChecked={DEFAULT_ORBIT_COLORING}
+          onChange={toggleOrbitColoring}
+        />
+        <CheckToggle
+          label="Future ghosts"
+          checked={ghostsEnabled}
+          defaultChecked={DEFAULT_GHOSTS_ENABLED}
+          onChange={toggleGhosts}
+        />
+        <CheckToggle
+          label="Show hands"
+          checked={showHands}
+          defaultChecked={DEFAULT_SHOW_HANDS}
+          onChange={toggleShowHands}
+        />
+        <CheckToggle
+          label="Hand paths"
+          checked={showHandPaths}
+          defaultChecked={DEFAULT_SHOW_HAND_PATHS}
+          onChange={toggleShowHandPaths}
+        />
+        <CheckToggle
+          label="State-graph minimap"
+          checked={graphMinimap}
+          defaultChecked={DEFAULT_GRAPH_MINIMAP}
+          onChange={toggleGraphMinimap}
+        />
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            fontWeight: 600,
+            fontSize: '0.8rem',
+            color: palette.textPrimary,
+          }}
+        >
+          <span>Ball color</span>
+          <input
+            type="color"
+            value={ballColor}
+            aria-label="Ball color"
+            disabled={orbitColoring}
+            onChange={(event) => setBallColor(event.target.value)}
+            style={{ width: '2.4rem', height: '1.7rem', padding: 0, cursor: 'pointer', background: 'none', border: 'none' }}
+          />
+        </label>
+      </div>
+    </section>
   );
 }
 
@@ -425,6 +646,10 @@ export function Controls(): ReactElement {
         />
         {positionsEditorOpen ? <HandPositionsTable /> : null}
       </section>
+
+      {/* View group (theme + viewing preferences), relocated here from the deleted
+          Settings drawer per the 2026-07-11 owner requirement. */}
+      <ViewGroup />
     </div>
   );
 }

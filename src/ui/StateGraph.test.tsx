@@ -155,6 +155,14 @@ describe('StateGraph minimap (always-visible corner preview)', () => {
     expect(screen.getByLabelText('Max throw N')).toBeTruthy();
   });
 
+  it('labels the minimap "click to expand" (owner 2026-07-11, replacing the arrow glyph)', () => {
+    useAppStore.setState({ graphVisible: false, graphMinimap: true });
+    render(<StateGraph />);
+    expect(screen.getByText('click to expand')).toBeTruthy();
+    // The old ⤢ arrow glyph is gone.
+    expect(screen.queryByText('⤢')).toBeNull();
+  });
+
   it('hides the minimap entirely when graphMinimap is off (toggle still opens the overlay)', () => {
     useAppStore.setState({ graphVisible: false, graphMinimap: false });
     render(<StateGraph />);

@@ -43,9 +43,15 @@ import {
   GIZMO_LABEL_RENDER_ORDER,
   GIZMO_MARKER_RADIUS,
   GIZMO_RENDER_ORDER,
+  globalAnchor,
+  globalColorOf,
+  globalMarkerLabel,
   markerColorOf,
   markerLabel,
 } from './gizmos';
+
+/** What a drag targets: one endpoint (catch/throw) or the whole-hand global node. */
+type NodeKind = HandPointKind | 'global';
 
 // --- Label sprites (synthesized, self-contained — no external font fetch) ----
 
@@ -93,7 +99,7 @@ function setDocumentCursor(cursor: string): void {
 
 interface DragTarget {
   readonly hand: number;
-  readonly kind: HandPointKind;
+  readonly kind: NodeKind;
 }
 
 /** A minimal view of the default controls we toggle while dragging. */
@@ -104,15 +110,17 @@ interface ToggleableControls {
 /** One draggable marker; delegates the actual point update to the parent. */
 function Marker({
   position,
-  hand,
-  kind,
+  label,
+  colorIdle,
+  colorHot,
   onDragStart,
   onDrag,
   onDragEnd,
 }: {
   readonly position: Vector3;
-  readonly hand: number;
-  readonly kind: HandPointKind;
+  readonly label: string;
+  readonly colorIdle: string;
+  readonly colorHot: string;
   onDragStart(): void;
   onDrag(point: Vector3): void;
   onDragEnd(): void;
@@ -127,7 +135,6 @@ function Marker({
   const plane = useMemo(() => new Plane(new Vector3(0, 1, 0), -HAND_Y), []);
   const hit = useMemo(() => new Vector3(), []);
 
-  const label = markerLabel(hand, kind);
   const labelTexture = useMemo(() => makeLabelTexture(label), [label]);
   useEffect(() => () => labelTexture.dispose(), [labelTexture]);
 
@@ -200,7 +207,7 @@ function Marker({
       <mesh scale={hot ? GIZMO_HOVER_SCALE : 1} renderOrder={GIZMO_RENDER_ORDER}>
         <sphereGeometry args={[GIZMO_MARKER_RADIUS, 16, 12]} />
         <meshBasicMaterial
-          color={markerColorOf(kind, hot)}
+          color={hot ? colorHot : colorIdle}
           transparent
           opacity={hot ? 1 : 0.85}
           depthTest={false}
@@ -226,6 +233,7 @@ export function HandGizmos(): ReactElement | null {
   const throwPoints = useAppStore((state) => state.handThrowPoints);
   const catchPoints = useAppStore((state) => state.handCatchPoints);
   const setHandPoint = useAppStore((state) => state.setHandPoint);
+  const setHandAnchor = useAppStore((state) => state.setHandAnchor);
 
   const controls = useThree((state) => state.controls) as ToggleableControls | null;
   const [dragging, setDragging] = useState<DragTarget | null>(null);
@@ -247,7 +255,13 @@ export function HandGizmos(): ReactElement | null {
     }
   };
   const update = (target: DragTarget, point: Vector3): void => {
-    setHandPoint(target.hand, target.kind, point.x, point.z);
+    // The grey global node moves the whole hand (catch + throw as a rigid pair);
+    // the catch/throw nodes move their single point. Both are future-only epochs.
+    if (target.kind === 'global') {
+      setHandAnchor(target.hand, point.x, point.z);
+    } else {
+      setHandPoint(target.hand, target.kind, point.x, point.z);
+    }
   };
 
   const markers: ReactElement[] = [];
@@ -259,8 +273,9 @@ export function HandGizmos(): ReactElement | null {
         <Marker
           key={`catch-${hand}`}
           position={new Vector3(catchPoint.x, catchPoint.y, catchPoint.z)}
-          hand={hand}
-          kind="catch"
+          label={markerLabel(hand, 'catch')}
+          colorIdle={markerColorOf('catch', false)}
+          colorHot={markerColorOf('catch', true)}
           onDragStart={() => beginDrag({ hand, kind: 'catch' })}
           onDrag={(point) => update({ hand, kind: 'catch' }, point)}
           onDragEnd={endDrag}
@@ -272,10 +287,28 @@ export function HandGizmos(): ReactElement | null {
         <Marker
           key={`throw-${hand}`}
           position={new Vector3(throwPoint.x, throwPoint.y, throwPoint.z)}
-          hand={hand}
-          kind="throw"
+          label={markerLabel(hand, 'throw')}
+          colorIdle={markerColorOf('throw', false)}
+          colorHot={markerColorOf('throw', true)}
           onDragStart={() => beginDrag({ hand, kind: 'throw' })}
           onDrag={(point) => update({ hand, kind: 'throw' }, point)}
+          onDragEnd={endDrag}
+        />,
+      );
+    }
+    // Grey whole-hand ("global") node at the midpoint of catch and throw; drags
+    // both together as a rigid pair (owner item, 2026-07-11).
+    if (catchPoint && throwPoint) {
+      const anchor = globalAnchor(catchPoint, throwPoint);
+      markers.push(
+        <Marker
+          key={`global-${hand}`}
+          position={new Vector3(anchor.x, HAND_Y, anchor.z)}
+          label={globalMarkerLabel(hand)}
+          colorIdle={globalColorOf(false)}
+          colorHot={globalColorOf(true)}
+          onDragStart={() => beginDrag({ hand, kind: 'global' })}
+          onDrag={(point) => update({ hand, kind: 'global' }, point)}
           onDragEnd={endDrag}
         />,
       );

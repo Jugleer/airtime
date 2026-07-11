@@ -188,17 +188,23 @@ export const DEFAULT_SHOW_HAND_PATHS = false;
 // (as the ladder already does).
 
 /**
- * Trailing tracer length in seconds (DESIGN.md §6). Default 0.8 s: a "tasteful
- * ~1 s" trail that at the default 3 s window (past span 0.9 s) leaves the detach
- * handle just inside the left edge — draggable, not yet pinned. The handle drags
- * to at most the past span; longer trails (up to {@link TRAIL_LENGTH_MAX}) are set
- * via the slider and pin the handle to the left edge with a numeric readout.
+ * Trailing tracer length in seconds (DESIGN.md §6). Default 0.15 s (owner override
+ * 2026-07-11): a short, unobtrusive trail so a fresh boot reads cleanly; the slider
+ * grows it up to {@link TRAIL_LENGTH_MAX}. (Longer trails past the window's past
+ * span pin the detach handle to the left edge with a numeric readout.) Old shared
+ * links that explicitly encode `tl` still decode to their exact value — only the
+ * fresh-boot default changed.
  */
-export const DEFAULT_TRAIL_LENGTH = 0.8;
+export const DEFAULT_TRAIL_LENGTH = 0.15;
 export const TRAIL_LENGTH_MIN = 0;
 export const TRAIL_LENGTH_MAX = 8;
-/** Future ghost paths on by default so the forward preview is visible (DESIGN.md §6). */
-export const DEFAULT_GHOSTS_ENABLED = true;
+/**
+ * Future ghost paths OFF by default (owner override 2026-07-11): the forward
+ * preview is opt-in via Settings › View, so a fresh boot shows only the live
+ * pattern. Old shared links that explicitly encode `gh` still decode identically;
+ * only the fresh-boot default changed.
+ */
+export const DEFAULT_GHOSTS_ENABLED = false;
 
 // --- Charts & energy panel settings (DESIGN.md §6) — presentation only --------
 // The charts panel plots per-hand |v|/|a|/|j| over the same window as the
@@ -336,6 +342,12 @@ export interface AppStore {
   readonly showHands: boolean;
   /** Whether each hand's closed path over one spatial period is drawn (a subtle line). */
   readonly showHandPaths: boolean;
+  /**
+   * The hand whose 3D cup is highlighted on chart-legend hover, or null. Transient
+   * UI state only (set on legend hover/focus, cleared on leave/blur); it is NOT in
+   * ShareConfig and never touches the sim (DESIGN.md §2). See ui/Charts + render3d/Hands.
+   */
+  readonly hoveredHandIndex: number | null;
 
   // timeline-bar settings (DESIGN.md §6) — presentation only, no sim rebuild.
   /** Visible window width (s) for the timeline bar + ladder (1–15, DESIGN.md §7). */
@@ -448,6 +460,13 @@ export interface AppStore {
   setHandPreset(preset: HandPreset): void;
   /** Move one hand's catch/throw point (x, z; y fixed). Future throws only (epoch). */
   setHandPoint(hand: number, kind: HandPointKind, x: number, z: number): void;
+  /**
+   * Move a WHOLE hand: translate its catch AND throw points together so their
+   * midpoint anchor lands on (x, z), preserving their relative offset (the grey
+   * "global" gizmo node). Future throws only (one geometry epoch), like
+   * {@link setHandPoint}.
+   */
+  setHandAnchor(hand: number, x: number, z: number): void;
   /** Open/close the hand-positions editor (gizmos show only when open, §6). */
   setPositionsEditorOpen(open: boolean): void;
   togglePositionsEditor(): void;
@@ -461,6 +480,8 @@ export interface AppStore {
   /** Show/hide the persistent per-hand path lines (presentation only, no rebuild). */
   setShowHandPaths(showHandPaths: boolean): void;
   toggleShowHandPaths(): void;
+  /** Highlight (or clear, with null) a hand's 3D cup on chart-legend hover/focus. */
+  setHoveredHandIndex(hoveredHandIndex: number | null): void;
   setTimelineWindow(timelineWindow: number): void;
   setTrailLength(trailLength: number): void;
   setGhostsEnabled(ghostsEnabled: boolean): void;
@@ -746,6 +767,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     ballColor: DEFAULT_BALL_COLOR,
     showHands: DEFAULT_SHOW_HANDS,
     showHandPaths: DEFAULT_SHOW_HAND_PATHS,
+    hoveredHandIndex: null,
 
     timelineWindow: DEFAULT_TIMELINE_WINDOW,
     trailLength: DEFAULT_TRAIL_LENGTH,
@@ -894,22 +916,17 @@ export const useAppStore = create<AppStore>((set, get) => {
       if (!graph.has(target) || !graph.has(source)) {
         return; // not a node of this (b, N) graph — ignore the click
       }
-      // A state on the current pattern's cycle re-enters the pattern at that
-      // node's phase; a bare state holds the SHORTEST cycle through it, which
-      // becomes the running pattern (DESIGN.md §5).
-      const cycle = patternCycle(state.sim.values, graphMaxHeight);
-      let holdValues: number[];
-      let holdPhase: number;
-      let holdText: string;
-      if (cycle.nodeSet.has(target)) {
-        holdValues = state.sim.values;
-        holdPhase = cycle.phaseOf.get(target) ?? 0;
-        holdText = state.sim.patternText;
-      } else {
-        holdValues = shortestCycle(graph, target);
-        holdPhase = 0;
-        holdText = formatPattern(holdValues);
-      }
+      // Every click treats the clicked node as the GOAL (DESIGN.md §5; owner
+      // 2026-07-11): bridge to it (lex-min reverse-BFS), then settle into the
+      // SHORTEST cycle through it — identically whether or not the node already
+      // lies on the running pattern's cycle. (Previously an on-cycle node
+      // re-entered the running pattern instead, which read as "nothing happens"
+      // when that pattern already flowed through the clicked node.) When the
+      // clicked node's shortest cycle IS the running pattern the splice is
+      // bit-identical — an idempotent no-op that leaves the timeline intact.
+      const holdValues = shortestCycle(graph, target);
+      const holdPhase = 0;
+      const holdText = formatPattern(holdValues);
       const plan = planTransition(graph, source, [target]);
       assertBridgeLegal(source, plan, graphMaxHeight);
       const { sim, transition } = spliceIntoSim(
@@ -1036,20 +1053,70 @@ export const useAppStore = create<AppStore>((set, get) => {
       });
     },
 
+    // Whole-hand move (the grey "global" gizmo node, owner item 2026-07-11):
+    // translate a hand's catch AND throw points together so their midpoint lands
+    // on (x, z), preserving the relative offset. One future-only geometry epoch
+    // (same mechanism as setHandPoint) so both markers move as a rigid pair.
+    setHandAnchor: (hand, x, z) => {
+      const state = get();
+      if (hand < 0 || hand >= state.handCount) {
+        return;
+      }
+      const throwPoints = state.handThrowPoints.slice();
+      const catchPoints = state.handCatchPoints.slice();
+      const previousThrow = throwPoints[hand];
+      const previousCatch = catchPoints[hand];
+      if (!previousThrow || !previousCatch) {
+        return;
+      }
+      // Delta = target anchor − current midpoint; shift both points by it.
+      const anchorX = 0.5 * (previousCatch.x + previousThrow.x);
+      const anchorZ = 0.5 * (previousCatch.z + previousThrow.z);
+      const dx = x - anchorX;
+      const dz = z - anchorZ;
+      throwPoints[hand] = vec3(previousThrow.x + dx, previousThrow.y, previousThrow.z + dz);
+      catchPoints[hand] = vec3(previousCatch.x + dx, previousCatch.y, previousCatch.z + dz);
+      const geometry = makeHandGeometry(throwPoints, catchPoints);
+      set({
+        handThrowPoints: throwPoints,
+        handCatchPoints: catchPoints,
+        ...applyKinematicsChange({ geometry }),
+      });
+    },
+
     // n_h and the preset are the exception: they cannot be epochs (an in-flight
     // ball's frozen landing hand and the new beat→hand map cannot both hold —
     // BUILD_LOG Phase 1). A FULL rebuild through the store: the clock and pattern
-    // carry over; geometry resets to the current preset for the new n_h; the
-    // current gravity/holdDepth/carryPath fold into the fresh base (kinematics
-    // epochs are cleared, since geometry epochs are tied to the old hand indices).
+    // carry over; the current gravity/holdDepth/carryPath fold into the fresh base
+    // (kinematics epochs are cleared, since geometry epochs are tied to the old
+    // hand indices).
+    //
+    // Geometry on a count change (owner item, 2026-07-11): for the LINE preset,
+    // increasing the count PRESERVES the existing hands (custom-dragged or not) and
+    // appends the new hand(s) on the OUTSIDE, alternating +,− (the line preset's
+    // alternating-outward layout guarantees the appended positions extend outward);
+    // decreasing DROPS the most-recently-added hand(s). For the CIRCLE preset the
+    // hand angles depend on the count, so it recomputes the whole ring.
     setHandCount: (raw) => {
       const state = get();
       const handCount = clamp(Math.round(raw), HAND_COUNT_MIN, HAND_COUNT_MAX);
       if (handCount === state.handCount) {
         return;
       }
-      const geometry = presetGeometry(state.handPreset, handCount);
-      const { throwPoints, catchPoints } = sampleHandPoints(geometry, handCount);
+      const preset = presetGeometry(state.handPreset, handCount);
+      const sampled = sampleHandPoints(preset, handCount);
+      let throwPoints: Vec3[];
+      let catchPoints: Vec3[];
+      if (state.handPreset === 'line') {
+        // Keep the first min(old, new) hands where they are; append/truncate the rest.
+        const keep = Math.min(state.handCount, handCount);
+        throwPoints = [...state.handThrowPoints.slice(0, keep), ...sampled.throwPoints.slice(keep)];
+        catchPoints = [...state.handCatchPoints.slice(0, keep), ...sampled.catchPoints.slice(keep)];
+      } else {
+        throwPoints = sampled.throwPoints;
+        catchPoints = sampled.catchPoints;
+      }
+      const geometry = makeHandGeometry(throwPoints, catchPoints);
       const baseParams: TimelineParams = { ...state.baseParams, handCount };
       const baseKinematics: Omit<KinematicsConfig, 'epochs'> = {
         gravity: state.gravity,
@@ -1121,6 +1188,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     toggleShowHands: () => set((state) => ({ showHands: !state.showHands })),
     setShowHandPaths: (showHandPaths) => set({ showHandPaths }),
     toggleShowHandPaths: () => set((state) => ({ showHandPaths: !state.showHandPaths })),
+    setHoveredHandIndex: (hoveredHandIndex) => set({ hoveredHandIndex }),
 
     // Timeline-bar settings. Trail length + ghost toggle are pure presentation
     // (never touch the sim). A wider window may need more future generated, so it
@@ -1238,6 +1306,10 @@ export const useAppStore = create<AppStore>((set, get) => {
         catchTickEnabled: s.catchTickEnabled,
         audioVolume: s.audioVolume,
         camera,
+        // Time bookmark (owner-approved 2026-07-11): the live playhead travels with
+        // the share link / preset / JSON so opening it seeks to the same moment.
+        // Optional in the codec — a link without `t` simply loads at t = 0.
+        time: s.simTime,
       };
     },
 
@@ -1290,6 +1362,28 @@ export const useAppStore = create<AppStore>((set, get) => {
         kinematicsConfigOf(baseKinematics, []),
       );
 
+      const timelineWindow = clamp(config.timelineWindow, TIMELINE_WINDOW_MIN, TIMELINE_WINDOW_MAX);
+      // Time bookmark (owner-approved 2026-07-11): seek to the config's playhead
+      // time when present (a URL/preset/JSON &t=). Clamp to t ≥ 0, and extend the
+      // generated horizon so a bookmark past the initial range is fully realized
+      // (the same append-only mechanism the clock uses — the past stays immutable).
+      // A t-load arrives PLAYING, matching how the app otherwise starts (§7).
+      const seekTime =
+        typeof config.time === 'number' && Number.isFinite(config.time)
+          ? Math.max(0, config.time)
+          : 0;
+      const seekedSim =
+        seekTime > 0
+          ? extendedIfNeeded(
+              sim,
+              baseParams,
+              [],
+              seekTime,
+              windowSpans(timelineWindow).futureSpan,
+              kinematicsConfigOf(baseKinematics, []),
+            )
+          : sim;
+
       // N floor = the pattern's max throw (so its cycle stays representable),
       // unless it is off-graph (then the panel just shows "unavailable").
       const targetMax = maxThrowOf(values);
@@ -1315,7 +1409,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         ballColor: config.ballColor,
         showHands: config.showHands,
         showHandPaths: config.showHandPaths,
-        timelineWindow: clamp(config.timelineWindow, TIMELINE_WINDOW_MIN, TIMELINE_WINDOW_MAX),
+        timelineWindow,
         trailLength: clamp(config.trailLength, TRAIL_LENGTH_MIN, TRAIL_LENGTH_MAX),
         ghostsEnabled: config.ghostsEnabled,
         chartsVisible: config.chartsVisible,
@@ -1331,8 +1425,8 @@ export const useAppStore = create<AppStore>((set, get) => {
         epochs: [],
         baseKinematics,
         kinematicsEpochs: [],
-        sim,
-        simTime: 0,
+        sim: seekedSim,
+        simTime: seekTime,
         playing: true,
         transition: null,
         graphNotice: null,

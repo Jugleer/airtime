@@ -41,6 +41,34 @@ describe('Charts (ui layer)', () => {
     expect(screen.getByText('Total')).toBeTruthy();
   });
 
+  it('drops the Net column (owner req. 1 — recoverable as W+ − |W−|)', () => {
+    render(<Charts />);
+    // "Net" was a former header cell; it must no longer appear in the table head.
+    expect(screen.queryByRole('columnheader', { name: /Net/i })).toBeNull();
+  });
+
+  it('toggles a hand series on/off from the legend, updating aria-pressed', () => {
+    render(<Charts />);
+    const legend = within(screen.getByRole('group', { name: 'Chart legend' }));
+    const hand0 = legend.getByRole('button', { name: /Hand 0 series/ });
+    expect(hand0.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(hand0);
+    expect(hand0.getAttribute('aria-pressed')).toBe('false'); // now hidden
+    fireEvent.click(hand0);
+    expect(hand0.getAttribute('aria-pressed')).toBe('true'); // shown again
+  });
+
+  it('highlights the hovered hand in the 3D scene, clearing on leave (owner req. 3)', () => {
+    render(<Charts />);
+    const legend = within(screen.getByRole('group', { name: 'Chart legend' }));
+    const hand1 = legend.getByRole('button', { name: /Hand 1 series/ });
+    expect(useAppStore.getState().hoveredHandIndex).toBeNull();
+    fireEvent.mouseEnter(hand1);
+    expect(useAppStore.getState().hoveredHandIndex).toBe(1);
+    fireEvent.mouseLeave(hand1);
+    expect(useAppStore.getState().hoveredHandIndex).toBeNull();
+  });
+
   it('hides the charts (unmounts the canvases) when the toggle is clicked', () => {
     render(<Charts />);
     expect(screen.queryByLabelText('Hand speed chart')).toBeTruthy();

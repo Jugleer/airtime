@@ -40,6 +40,14 @@ describe('Slider wheel-scroll', () => {
     expect(Number(screen.getByTestId('val').textContent)).toBeCloseTo(0.5, 9);
   });
 
+  it('moves ~3 internal steps per wheel event (owner: 3× more sensitive)', () => {
+    // 1000 internal steps span [0, 1], so one wheel event = 3/1000 = 0.003.
+    render(<SliderHarness initial={0.5} />);
+    const slider = screen.getByLabelText('Test');
+    fireEvent.wheel(slider, { deltaY: -100 });
+    expect(Number(screen.getByTestId('val').textContent)).toBeCloseTo(0.503, 9);
+  });
+
   it('clamps at the maximum (scroll up at max is a no-op)', () => {
     render(<SliderHarness initial={1} />);
     fireEvent.wheel(screen.getByLabelText('Test'), { deltaY: -100 });
