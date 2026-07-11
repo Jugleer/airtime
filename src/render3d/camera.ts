@@ -5,6 +5,8 @@
 // scene is meters, y-up (NOTATION.md); hands live near y ≈ 1.0 and balls arc
 // above them, so every preset frames a point a little above hand height.
 
+import { clamp } from '../core/math';
+
 /** A camera placement: eye position and the point it looks at (orbit target). */
 export interface CameraView {
   /** Eye position [x, y, z] in meters. */
@@ -79,10 +81,6 @@ export const CAMERA_TARGET_MIN: readonly [number, number, number] = [-2, 0, -2];
 /** Orbit-target box, maximum corner [x, y, z] (m). Contains every preset target. */
 export const CAMERA_TARGET_MAX: readonly [number, number, number] = [2, 3, 2];
 
-function clampScalar(value: number, lo: number, hi: number): number {
-  return Math.min(Math.max(value, lo), hi);
-}
-
 /**
  * Below this eye-to-target distance (m) the viewing direction is numerically
  * meaningless (subnormal offsets normalize badly), so the pose is treated as
@@ -102,9 +100,9 @@ const DEGENERATE_DISTANCE = 1e-6;
  */
 export function clampCameraView(view: CameraView): CameraView {
   const target: readonly [number, number, number] = [
-    clampScalar(view.target[0], CAMERA_TARGET_MIN[0], CAMERA_TARGET_MAX[0]),
-    clampScalar(view.target[1], CAMERA_TARGET_MIN[1], CAMERA_TARGET_MAX[1]),
-    clampScalar(view.target[2], CAMERA_TARGET_MIN[2], CAMERA_TARGET_MAX[2]),
+    clamp(view.target[0], CAMERA_TARGET_MIN[0], CAMERA_TARGET_MAX[0]),
+    clamp(view.target[1], CAMERA_TARGET_MIN[1], CAMERA_TARGET_MAX[1]),
+    clamp(view.target[2], CAMERA_TARGET_MIN[2], CAMERA_TARGET_MAX[2]),
   ];
   const dx = view.position[0] - target[0];
   const dy = view.position[1] - target[1];
@@ -121,7 +119,7 @@ export function clampCameraView(view: CameraView): CameraView {
   }
   // Rescale via the normalized direction (never a raw scale factor, which
   // overflows for subnormal distances): eye = target + unit · clampedDistance.
-  const clampedDistance = clampScalar(distance, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE);
+  const clampedDistance = clamp(distance, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE);
   const unitX = dx / distance;
   const unitY = dy / distance;
   const unitZ = dz / distance;

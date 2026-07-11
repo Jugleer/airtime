@@ -480,3 +480,82 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   internal collapsed slim-tab branch now unreachable in-app (comment updated;
   removal is optional cleanup); explorer query params not in the URL;
   workspace is one shared spec (per-hand overrides future); presets carry time.
+
+## Round 3 wave 3a — sync & multiplex; GIF/WebM export            DONE
+- Commit: 4eccfc6 — Gate: (2026-07-11, "npm run gate", green — 51 files / 662 tests; orchestrator-run)
+- Sync (l,r)/x/*, multiplex [..], combined; vanilla path bit-identical (extended
+  input routes to a separate compiled pipeline); union-find ball identity proven
+  stable under horizon extension; sync 2x is a real crossing flight (NOTATION
+  identity 1 exception). Clean-restart in/out of extended notation; sync forces
+  AND locks n_h=2; honest vanilla-only state-graph placeholder; 7 library
+  classics; stacked ladder/timeline marks. Continuity + work-energy properties
+  swept over the new pattern space.
+- Export: frame-exact offline capture (half-open schedule = seamless loop),
+  frozen camera or one-orbit turntable, full state restore incl. cancel, GIF
+  via bundled gifenc (centisecond-accumulated delays), WebM via WebCodecs
+  where present; refuses mid-slew export with a friendly error.
+- Review (3 dimensions + skeptics): feared multiplex offset discontinuity
+  REFUTED (offset applied to all of a ball's segments); CONFIRMED + fixed
+  pre-commit: multiplex held-2 hand-path freeze (occupancy now tiled), sync
+  hand-count stepper not locked, async 'x' silently ignored (now rejects —
+  crossing is sync-only in v1, owner may prefer honoring it later), GIF
+  centisecond tempo drift, mid-slew export, Help drift, Export button naming.
+- NOTATION.md amended (owner-authorized): sync/multiplex glossary + identities,
+  z-up display-frame convention. DESIGN §1/§6 amended.
+
+## Round 3 wave 3b — a11y pass, polish, final audit            DONE
+- Commit: (this commit) — Gate: orchestrator-run, see commit message.
+- A11y easy wins: shared theme-aware :focus-visible ring; dialog focus-on-open/
+  restore-on-close (Help/Export/Workspace via useModalFocus); splitter keyboard
+  focus visibility; tab-order smoke test. RAISED for owner (not built):
+  keyboard gizmo nudging, timeline keyboard scrubbing, state-graph node tabbing
+  (roving tabindex), full modal focus traps, 3D-scene narration, textMuted
+  contrast retune (each with cost/impact in the wave-3b agent report).
+- Non-watertight STL now draws the tested bounding box (muted wireframe) in
+  overlay + preview; Charts dead collapsed branch removed (dock switch is the
+  single visibility path).
+- Final audit (3 auditors): e2e drive of the DEPLOYED site — all three owner
+  repro URLs verified fixed on-screen, held-2 v=0 bathtubs in the charts,
+  sync/multiplex/explorer/workspace/export/panels/&t=/theme all pass, ZERO
+  console errors across 7 sessions; owner-item completeness — 25/25 done (4
+  deliberate deviations surfaced below); code health — "unusually clean", 7
+  minor items (all fixed in this commit: explorer dock-crush at 500 results,
+  THREE.Clock deprecation, gcd/clamp/Vec3Tuple dedup, PAST_SPAN dead export,
+  multiplexCupOffset test, export-path code split).
+- Deviations for owner sign-off: (1) STL meshes are session-only (URL encodes
+  disabled); (2) workspace is ONE shared spec instantiated per hand (per-hand
+  overrides deferred); (3) "pyramid" = regular tetrahedron (square-base is a
+  small change if preferred); (4) sync/multiplex is sim/ladder/timeline-only —
+  state graph, explorer, and live splicing stay vanilla (clean restart at the
+  boundary); (5) async multiplex 'x' rejects rather than crossing (sync-only).
+
+## Round 3 — operator visual checklist (one sweep, live site)
+- [ ] 045 and 3-with-3-hands: hands dip low while balls arc — no ball-shadowing.
+- [ ] 1155 URL (owner repro): no lunges; hands stay near their own columns.
+- [ ] 441 URL (owner repro): hand-path overlay hugs the actual cup motion.
+- [ ] 522/423: hand stops DEAD at the dip bottom (no slide); charts show v=0 flats.
+- [ ] Very low dwell (0.02): trails smooth, no flicker/splitting.
+- [ ] Cups tilt into catches and throws; upright between.
+- [ ] Left sidebar: VIEW below HANDS & GEOMETRY; Save/Share/Audio under ladder;
+      no Settings button; panel splitters drag; collapse strips; layout survives
+      reload.
+- [ ] Charts: no Net column; 60/40 split; legend click = hollow square + faded;
+      legend hover lights the cup; jerk plot stable while playing.
+- [ ] Wheel on sliders ~3x faster; every control has ↺ when off-default.
+- [ ] Triad bottom-right: Z up, X along hands, Y front-back; hand editor Y
+      matches scene direction (type +Y, ball moves toward triad +Y).
+- [ ] Add hands 2→5 on line preset: new hands appear outside, alternating.
+- [ ] Edit-hands mode: grey nG node below each pair drags catch+throw together.
+- [ ] State graph: click a node ON the current cycle → it becomes the goal
+      (note: pattern box may rewrite to a rotation, e.g. 441→144).
+- [ ] Minimap says "click to expand".
+- [ ] Explorer: tri-state dock; big domain (period 9, throw 12) scrolls
+      internally without crushing the 3D stage; chip click transitions live.
+- [ ] Workspace: enable, shrink → red spans + H badges; STL upload; pyramid =
+      tetrahedron (flag if you want square-base).
+- [ ] Sync/multiplex: (4,4), (6x,4)*, [33]33, 24[54] — juggle plausibly; sync
+      locks hands at 2; graph shows honest placeholder; entering/leaving = clean
+      restart.
+- [ ] Export GIF: 1 loop loops seamlessly; turntable orbits once; cancel
+      restores; on a desktop Chrome, WebM option appears.
+- [ ] &t= in a shared URL seeks; keyboard: tab ring visible, Esc closes dialogs.

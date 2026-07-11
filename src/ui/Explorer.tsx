@@ -73,8 +73,17 @@ function PatternChip({
   );
 }
 
-/** The siteswap explorer panel (a bottom-dock body; see App's BottomDock). */
-export function Explorer(): ReactElement {
+/**
+ * The siteswap explorer panel (a bottom-dock body; see App's BottomDock).
+ *
+ * `capNaturalHeight` is set while the dock is at its natural (undragged) height:
+ * a large domain (e.g. period 9 / max throw 12 → hundreds of chips) would grow the
+ * dock's auto height without bound and crush the 3D stage row. When capped, the
+ * results grid takes a bounded max-height and scrolls internally (controls stay
+ * pinned); once the user drags the dock splitter the dock gets a fixed height, the
+ * cap is dropped, and the results flex to fill it — so the splitter still overrides.
+ */
+export function Explorer({ capNaturalHeight = false }: { readonly capNaturalHeight?: boolean } = {}): ReactElement {
   const palette = usePalette();
   const navigateToPattern = useAppStore((state) => state.navigateToPattern);
   const currentText = useCurrentCanonicalText();
@@ -161,7 +170,7 @@ export function Explorer(): ReactElement {
         </div>
       </div>
 
-      <div aria-label="Siteswap results" style={resultsStyle(palette)}>
+      <div aria-label="Siteswap results" style={resultsStyle(palette, capNaturalHeight)}>
         {result.patterns.length === 0 ? (
           <p style={{ margin: 0, color: palette.textMuted, fontSize: '0.8rem' }}>
             No valid siteswaps for {ballCount} ball{ballCount === 1 ? '' : 's'}, period {period}, max
@@ -214,10 +223,19 @@ const controlsRowStyle: CSSProperties = {
   flexWrap: 'wrap',
 };
 
-function resultsStyle(palette: Palette): CSSProperties {
+/**
+ * `capNaturalHeight` bounds the results box so the undragged dock can't grow without
+ * limit on a large domain (crushing the 3D stage). The box already scrolls
+ * (`overflowY: auto`); the cap just gives that scroll something to bite on. The clamp
+ * keeps a small domain unaffected (content shorter than the cap never scrolls) and
+ * tops out at ~22rem so the default 2000×1300 layout is unchanged. Uncapped (dock
+ * dragged to a fixed height) the box flexes to fill, so the splitter still overrides.
+ */
+function resultsStyle(palette: Palette, capNaturalHeight: boolean): CSSProperties {
   return {
     flex: '1 1 auto',
     minHeight: 0,
+    ...(capNaturalHeight ? { maxHeight: 'clamp(12rem, 30vh, 22rem)' } : null),
     overflowY: 'auto',
     background: palette.chartPlotBg,
     border: `1px solid ${palette.border}`,

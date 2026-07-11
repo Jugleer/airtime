@@ -389,7 +389,10 @@ function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
           ref={dockRef}
           style={{ flex: 1, minHeight: 0, overflowY: fixedHeight != null ? 'auto' : 'visible' }}
         >
-          {dockMode === 'charts' ? <Charts /> : <Explorer />}
+          {/* Explorer caps its results box while the dock is at natural (undragged)
+              height so a large domain can't crush the stage; a dragged (fixed) dock
+              drops the cap and the results flex to fill it (see Explorer). */}
+          {dockMode === 'charts' ? <Charts /> : <Explorer capNaturalHeight={fixedHeight == null} />}
         </div>
       ) : (
         <p style={{ margin: '0 0.15rem 0.2rem', fontSize: '0.74rem', color: palette.textMuted }}>

@@ -1,8 +1,9 @@
-// src/ui/Charts — the per-hand kinematics charts + energy DOCK (DESIGN.md §6;
-// redesign 2026-07-10, owner requirement 6). A collapsible bottom dock: a slim
-// tab bar when collapsed (≈ no height, no per-frame sampling), the three charts
-// (|v|, |a|, |j|) laid out side-by-side across the wide dock plus the per-hand
-// energy table when expanded. Starts COLLAPSED (DEFAULT_CHARTS_VISIBLE = false).
+// src/ui/Charts — the per-hand kinematics charts + energy DOCK BODY (DESIGN.md §6;
+// redesign 2026-07-10, owner requirement 6). The three charts (|v|, |a|, |j|) laid
+// out side-by-side across the wide dock plus the per-hand energy table. Since the
+// tri-state bottom dock (round 3), App mounts this ONLY when dockMode === 'charts'
+// and the DockModeSwitch (App) owns visibility — so this component has no internal
+// collapse: pick "None" in the dock switch to hide it (which unmounts this).
 //
 // Every hand is overlaid (a color per hand + a shared legend). The per-axis toggle
 // (Magnitude / X / Y / Z) switches all three from vector magnitude to a single
@@ -11,9 +12,9 @@
 //
 // Hot path: the charts redraw every frame while playing. handState is sampled per
 // hand over the window into Float32Arrays allocated ONCE and overwritten in place.
-// When the dock is collapsed the body unmounts, so nothing is sampled or drawn.
-// Canvas cannot read CSS variables, so the theme colors are read from the palette
-// and passed into the draw.
+// When the dock switches away from 'charts' the whole component unmounts, so nothing
+// is sampled or drawn. Canvas cannot read CSS variables, so the theme colors are
+// read from the palette and passed into the draw.
 
 import {
   useCallback,
@@ -28,7 +29,6 @@ import { HAND_COUNT_MAX, useAppStore, type ChartAxisMode } from '../state';
 import { CURSOR_FRACTION } from '../state/simulation';
 import { EnergyPanel } from './EnergyPanel';
 import { usePalette, type Palette } from './theme';
-import { Button } from './widgets';
 import {
   CHART_MIN_HEIGHT,
   chartCanvasHeight,
@@ -399,18 +399,15 @@ function Legend({
 
 /**
  * The charts + energy DOCK body. Since the tri-state bottom dock (round 3), App
- * mounts this only when dockMode === 'charts', so chartsVisible is always true
- * here and the internal collapsed slim-tab branch is unreachable in-app (kept
- * for its isolated tests; the Hide button now collapses the dock to None).
- * When unmounted, no per-frame sampling runs. The header never subscribes to
- * simTime, so it never re-renders per frame.
+ * mounts this only when dockMode === 'charts' and the DockModeSwitch (App) owns
+ * visibility — so there is no internal Show/Hide toggle: choosing "None" in the dock
+ * switch unmounts this, which is where the per-frame sampling stops. The header
+ * never subscribes to simTime, so it never re-renders per frame.
  */
 export function Charts(): ReactElement {
   const palette = usePalette();
-  const chartsVisible = useAppStore((state) => state.chartsVisible);
   const chartAxisMode = useAppStore((state) => state.chartAxisMode);
   const handCount = useAppStore((state) => state.handCount);
-  const toggleCharts = useAppStore((state) => state.toggleCharts);
   const setChartAxisMode = useAppStore((state) => state.setChartAxisMode);
   const setHoveredHandIndex = useAppStore((state) => state.setHoveredHandIndex);
 
@@ -436,7 +433,7 @@ export function Charts(): ReactElement {
         display: 'flex',
         flexDirection: 'column',
         gap: '0.5rem',
-        padding: chartsVisible ? '0.5rem 0.7rem 0.6rem' : '0.3rem 0.7rem',
+        padding: '0.5rem 0.7rem 0.6rem',
         background: palette.panel,
         borderRadius: '0.55rem',
         border: `1px solid ${palette.border}`,
@@ -457,77 +454,58 @@ export function Charts(): ReactElement {
         <h2 style={{ margin: 0, fontSize: '0.85rem', color: palette.textPrimary, fontWeight: 700 }}>
           Charts &amp; energy
         </h2>
-        {chartsVisible ? (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.78rem', color: palette.textSecondary }}>
-                Component
-              </span>
-              <div style={{ display: 'flex', gap: '0.3rem' }}>
-                {AXIS_OPTIONS.map((option) => {
-                  const active = option.value === chartAxisMode;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      aria-label={`Chart component: ${option.label}`}
-                      aria-pressed={active}
-                      onClick={() => setChartAxisMode(option.value)}
-                      style={axisButtonStyle(palette, active)}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <Legend handCount={handCount} hiddenHands={hiddenHands} onToggle={toggleHand} />
-          </>
-        ) : (
-          <span style={{ fontSize: '0.76rem', color: palette.textMuted }}>
-            per-hand |v| · |a| · |j| and the energy table
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <span style={{ fontWeight: 600, fontSize: '0.78rem', color: palette.textSecondary }}>
+            Component
           </span>
-        )}
-        <div style={{ flex: 1 }} />
-        <Button
-          onClick={toggleCharts}
-          ariaLabel="Toggle charts and energy panel"
-          ariaPressed={chartsVisible}
-          variant={chartsVisible ? 'default' : 'primary'}
-        >
-          {chartsVisible ? 'Hide charts ▾' : 'Show charts ▴'}
-        </Button>
-      </div>
-
-      {chartsVisible ? (
-        // flex '1 1 auto' + minHeight 0: the row takes the section's leftover height
-        // when the dock height is fixed (content-sized before any drag, since basis
-        // auto never collapses in an auto-height column). alignItems stretch hands
-        // that height to the ChartsBody container, where the ResizeObserver reads it.
-        // NO flexWrap here: in a wrapped container a line's cross-size never drops
-        // below its items' content height, so the canvases would RATCHET the measured
-        // height (grow-only; verified headless). Single-line stretch tracks the row
-        // height both ways; wrap was vestigial anyway (both children have basis 0%).
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.8rem',
-            alignItems: 'stretch',
-            flex: '1 1 auto',
-            minHeight: 0,
-          }}
-        >
-          <ChartsBody hiddenHands={hiddenHands} />
-          {/* 60/40 split (owner requirement 1): charts get flex-grow 3, energy 2, both
-              on a 0% basis so the ratio holds at every width. minWidth 0 keeps the
-              energy panel SHRINKABLE — a real/max-content basis here would let the
-              (non-wrapping) table starve the chart canvases at very wide viewports
-              (the owner-reported collapse; verified fixed at ~2000px and ≥2400px). */}
-          <div style={{ flex: '2 1 0%', minWidth: 0 }}>
-            <EnergyPanel />
+          <div style={{ display: 'flex', gap: '0.3rem' }}>
+            {AXIS_OPTIONS.map((option) => {
+              const active = option.value === chartAxisMode;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-label={`Chart component: ${option.label}`}
+                  aria-pressed={active}
+                  onClick={() => setChartAxisMode(option.value)}
+                  style={axisButtonStyle(palette, active)}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
           </div>
         </div>
-      ) : null}
+        <Legend handCount={handCount} hiddenHands={hiddenHands} onToggle={toggleHand} />
+      </div>
+
+      {/* flex '1 1 auto' + minHeight 0: the row takes the section's leftover height
+          when the dock height is fixed (content-sized before any drag, since basis
+          auto never collapses in an auto-height column). alignItems stretch hands
+          that height to the ChartsBody container, where the ResizeObserver reads it.
+          NO flexWrap here: in a wrapped container a line's cross-size never drops
+          below its items' content height, so the canvases would RATCHET the measured
+          height (grow-only; verified headless). Single-line stretch tracks the row
+          height both ways; wrap was vestigial anyway (both children have basis 0%). */}
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.8rem',
+          alignItems: 'stretch',
+          flex: '1 1 auto',
+          minHeight: 0,
+        }}
+      >
+        <ChartsBody hiddenHands={hiddenHands} />
+        {/* 60/40 split (owner requirement 1): charts get flex-grow 3, energy 2, both
+            on a 0% basis so the ratio holds at every width. minWidth 0 keeps the
+            energy panel SHRINKABLE — a real/max-content basis here would let the
+            (non-wrapping) table starve the chart canvases at very wide viewports
+            (the owner-reported collapse; verified fixed at ~2000px and ≥2400px). */}
+        <div style={{ flex: '2 1 0%', minWidth: 0 }}>
+          <EnergyPanel />
+        </div>
+      </div>
     </section>
   );
 }

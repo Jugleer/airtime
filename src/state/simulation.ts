@@ -155,8 +155,6 @@ export function windowSpans(timelineWindow: number): {
 
 /** Default window width (kept for back-compat; equals {@link DEFAULT_TIMELINE_WINDOW}). */
 export const WINDOW_SECONDS = DEFAULT_TIMELINE_WINDOW;
-/** Seconds of history shown left of the simTime cursor at the default window. */
-export const PAST_SPAN = windowSpans(WINDOW_SECONDS).pastSpan;
 /** Seconds of future shown right of the simTime cursor at the default window. */
 export const FUTURE_SPAN = windowSpans(WINDOW_SECONDS).futureSpan;
 /** Extra seconds kept generated beyond the window so scrolling never runs dry. */

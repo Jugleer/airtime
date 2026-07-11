@@ -3,6 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { App } from './ui/App';
 import { useAppStore } from './state';
 import { decodeConfig } from './state/codec';
+import { installThreeConsoleFilter } from './render3d/threeConsole';
+
+// Filter r3f's one-time deprecated-THREE.Clock warning before any <Canvas> mounts
+// (see render3d/threeConsole). Must run before the first render.
+installThreeConsoleFilter();
 
 // Boot order: URL > defaults (DESIGN.md §6, §7). The shared config is read ONCE
 // here, before the first render, and applied over the store's defaults so the sim

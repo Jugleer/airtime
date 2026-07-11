@@ -29,6 +29,7 @@ import {
 import { WorkspaceShapeView } from '../render3d/WorkspaceOverlay';
 import { Triad } from '../render3d/Triad';
 import { usePalette, type Palette } from './theme';
+import { useModalFocus } from './useModalFocus';
 import { Button, CheckToggle, SectionLabel, Slider } from './widgets';
 
 /** Whether a WebGL context can be created (false in jsdom); mirrors Scene's guard. */
@@ -109,6 +110,9 @@ export function WorkspacePanel({ onClose }: { onClose(): void }): ReactElement {
   const resetWorkspace = useAppStore((state) => state.resetWorkspace);
 
   const [stlError, setStlError] = useState<string | null>(null);
+  // The panel mounts only while open, so focus into it on mount and restore to the
+  // "Workspace…" launcher on unmount (open is constant-true for this subtree).
+  const dialogRef = useModalFocus<HTMLDivElement>(true);
 
   // Escape closes (standard dialog dismissal); only while mounted.
   useEffect(() => {
@@ -150,9 +154,11 @@ export function WorkspacePanel({ onClose }: { onClose(): void }): ReactElement {
   return (
     <div style={backdropStyle} onClick={onClose}>
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Hand workspace"
+        tabIndex={-1}
         style={panelStyle(palette)}
         onClick={(event) => event.stopPropagation()}
       >
@@ -220,7 +226,11 @@ export function WorkspacePanel({ onClose }: { onClose(): void }): ReactElement {
           </label>
           {mesh ? (
             <p style={{ margin: 0, fontSize: '0.72rem', color: palette.textMuted }}>
-              STL loaded: {mesh.triangleCount} triangles{mesh.watertight ? '' : ' · not watertight (bounding-box fallback)'}.
+              STL loaded: {mesh.triangleCount} triangles
+              {mesh.watertight
+                ? ''
+                : ' · not watertight — the muted bounding box shows the region treated as inside'}
+              .
             </p>
           ) : null}
           {stlError ? (

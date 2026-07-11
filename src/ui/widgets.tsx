@@ -444,6 +444,7 @@ export function insetInputStyle(palette: Palette): CSSProperties {
     background: palette.inset,
     color: palette.textPrimary,
     fontVariantNumeric: 'tabular-nums',
-    outline: 'none',
+    // No inline outline reset: the shared :focus-visible ring (ui/theme) is the
+    // single focus indicator, and an inline outline:none would suppress it.
   };
 }

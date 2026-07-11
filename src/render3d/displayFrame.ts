@@ -18,8 +18,10 @@
 // (+sim z would give a left-handed frame.) The mapping is a proper rotation
 // (determinant +1), so it preserves orientation/handedness — verified in the test.
 
-/** A 3-vector as an [x, y, z] tuple (frame-agnostic; the functions carry meaning). */
-export type Vec3Tuple = readonly [number, number, number];
+// A 3-vector as an [x, y, z] tuple (frame-agnostic; the functions carry meaning).
+// Defined once in core/math and re-exported here so existing importers keep working.
+import type { Vec3Tuple } from '../core/math';
+export type { Vec3Tuple };
 
 /** Map a sim-frame (y-up) vector or point to the display frame (right-handed Z-up). */
 export function simToDisplay([x, y, z]: Vec3Tuple): [number, number, number] {

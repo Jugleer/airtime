@@ -21,6 +21,7 @@
 // NOTATION.md symbols in comments: b = ball count, h = throw value, L = period (beats),
 // n_h = hand count.
 
+import { greatestCommonDivisor } from '../math';
 import { digitToValue, validatePattern, valueToDigit } from './index';
 
 /** One thrown ball within a beat. */
@@ -426,22 +427,12 @@ export function compiledBallCount(compiled: CompiledPattern): number {
   return sum / compiled.period;
 }
 
-/** Greatest common divisor. */
-function gcd(a: number, b: number): number {
-  let x = Math.abs(a);
-  let y = Math.abs(b);
-  while (y !== 0) {
-    [x, y] = [y, x % y];
-  }
-  return x;
-}
-
 /** Least common multiple. */
 function lcm(a: number, b: number): number {
   if (a === 0 || b === 0) {
     return 0;
   }
-  return Math.abs((a / gcd(a, b)) * b);
+  return Math.abs((a / greatestCommonDivisor(a, b)) * b);
 }
 
 /** Whether two beats' throw lists are identical (for minimal-period reduction). */

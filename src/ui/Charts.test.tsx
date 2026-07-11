@@ -11,7 +11,10 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  useAppStore.setState({ simTime: 0, playing: false, chartsVisible: true, chartAxisMode: 'magnitude' });
+  // App mounts <Charts /> only when dockMode === 'charts'; the component itself no
+  // longer reads chartsVisible or has an internal collapse, so the test just renders
+  // it directly and asserts its always-on content.
+  useAppStore.setState({ simTime: 0, playing: false, chartAxisMode: 'magnitude' });
   useAppStore.getState().setHandCount(2);
   useAppStore.getState().setPattern('3');
 });
@@ -81,14 +84,11 @@ describe('Charts (ui layer)', () => {
     expect(useAppStore.getState().hoveredHandIndex).toBeNull();
   });
 
-  it('hides the charts (unmounts the canvases) when the toggle is clicked', () => {
+  it('has no internal Show/Hide toggle (the dock switch owns visibility)', () => {
+    // The tri-state DockModeSwitch (App) collapses the dock to None; the removed
+    // in-header toggle would have been a redundant second path (dead branch removed).
     render(<Charts />);
-    expect(screen.queryByLabelText('Hand speed chart')).toBeTruthy();
-    fireEvent.click(screen.getByLabelText('Toggle charts and energy panel'));
-    expect(useAppStore.getState().chartsVisible).toBe(false);
-    // Body unmounted: no canvases, no energy table ⇒ no per-frame sampling.
-    expect(screen.queryByLabelText('Hand speed chart')).toBeNull();
-    expect(screen.queryByText('Throw work')).toBeNull();
+    expect(screen.queryByLabelText('Toggle charts and energy panel')).toBeNull();
   });
 
   it('switches the axis mode via the component selector', () => {

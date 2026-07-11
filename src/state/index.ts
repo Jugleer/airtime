@@ -10,6 +10,7 @@
 // (NOTATION.md conventions), so changing it never rebuilds the timeline.
 
 import { create } from 'zustand';
+import { clamp } from '../core/math';
 import { DWELL_CAP_FRACTION, effectiveDwell } from '../core/timing';
 import {
   formatPattern,
@@ -317,10 +318,6 @@ export const DEFAULT_CAMERA_POSE: CameraPose = {
 /** The t_d slider cap = 0.9·n_h·τ_b (NOTATION.md identity 4; DESIGN.md §7). */
 export function dwellCap(handCount: number, beatPeriod: number): number {
   return DWELL_CAP_FRACTION * handCount * beatPeriod;
-}
-
-function clamp(value: number, lo: number, hi: number): number {
-  return Math.min(Math.max(value, lo), hi);
 }
 
 // --- Store shape ------------------------------------------------------------

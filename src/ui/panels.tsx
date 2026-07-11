@@ -25,6 +25,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactElement,
 } from 'react';
+import { clamp } from '../core/math';
 import { usePalette } from './theme';
 
 // --- Layout constants (px) ---------------------------------------------------
@@ -50,10 +51,6 @@ export const COLLAPSED_STRIP = 30;
 export const KEYBOARD_STEP = 16;
 
 export const LAYOUT_STORAGE_KEY = 'airtime.layout.v1';
-
-function clamp(value: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, value));
-}
 
 // --- Persisted layout state --------------------------------------------------
 
@@ -221,6 +218,7 @@ export function Splitter({
   const vertical = orientation === 'vertical';
   const [dragging, setDragging] = useState(false);
   const [hover, setHover] = useState(false);
+  const [focused, setFocused] = useState(false);
 
   // Latest props for the window-level drag listeners (attached once; read fresh).
   const latest = useRef({ min, max, sign, onChange });
@@ -281,7 +279,10 @@ export function Splitter({
     onChange(clamp(value + step * sign, min, max));
   };
 
-  const highlighted = dragging || hover;
+  // The grab line brightens on hover / drag AND on keyboard focus, so a keyboard
+  // user tabbing to the divider sees where they are; the thin gutter keeps its own
+  // outline:none because a full-height 6px outline reads worse than the bright line.
+  const highlighted = dragging || hover || focused;
   return (
     <div
       role="separator"
@@ -296,6 +297,8 @@ export function Splitter({
       onKeyDown={onKeyDown}
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => setHover(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       style={{
         width: vertical ? `${GUTTER}px` : '100%',
         height: vertical ? '100%' : `${GUTTER}px`,

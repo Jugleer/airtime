@@ -499,7 +499,8 @@ export function Controls(): ReactElement {
                 }`,
                 background: palette.inset,
                 color: palette.textPrimary,
-                outline: 'none',
+                // The validity/dirty border is not a focus cue; the shared
+                // :focus-visible ring (ui/theme) shows focus, so no outline:none here.
               }}
             />
             <Button

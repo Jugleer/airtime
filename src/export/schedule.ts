@@ -11,8 +11,10 @@
 // The turntable angle schedule is the same construction on [0, 2π): it ends one
 // step short of a full turn, so the orbit also closes seamlessly.
 
-/** A 3-vector as an [x, y, z] tuple (frame-agnostic). */
-export type Vec3Tuple = readonly [number, number, number];
+// A 3-vector as an [x, y, z] tuple (frame-agnostic). Defined once in core/math and
+// re-exported here so existing importers (capture, index, the tests) keep working.
+import type { Vec3Tuple } from '../core/math';
+export type { Vec3Tuple };
 
 /** Everything the capture loop needs, derived from the loop parameters. */
 export interface ExportSchedule {

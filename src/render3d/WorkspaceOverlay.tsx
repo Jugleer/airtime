@@ -29,6 +29,7 @@ import {
 } from 'three';
 import { HAND_Y, useAppStore } from '../state';
 import { firstBeatAtOrAfter } from '../state/simulation';
+import { boxEdgePositions } from './boxWireframe';
 import {
   TETRA_FACES,
   TETRA_VERTICES,
@@ -54,6 +55,10 @@ const WIRE_OPACITY = 0.42;
 const VOLUME_COLOR = '#5b9bff';
 /** Red used for out-of-volume path spans + a nonzero badge. */
 const VIOLATION_COLOR = '#f2555a';
+/** Muted, clearly-secondary color for the bounding-box wireframe drawn when a
+ *  non-watertight STL falls back to bbox containment (a11y/honesty pass). */
+const BBOX_COLOR = '#94a3b8';
+const BBOX_OPACITY = 0.5;
 
 // --- Canonical unit geometry per shape (display-local; the group scales/rotates) --
 
@@ -131,9 +136,51 @@ function boxUnitGeometry(): BufferGeometry {
 }
 
 /**
+ * The muted bounding-box wireframe drawn ALONGSIDE a non-watertight STL mesh. Such a
+ * mesh has an open surface, so containment can't use ray parity and falls back to the
+ * mesh's axis-aligned bounding box (src/workspace pointInsideMesh) — but the overlay
+ * still draws the OPEN mesh, so the drawn shape and the tested volume diverge. This
+ * box makes the region actually treated as "inside" visible. It lives in the same
+ * scale+rotation group as the mesh, so bounds (canonical frame) map exactly to the
+ * tested region. Built once per bounds identity; zero per-frame allocation.
+ */
+function BoundingBoxWire({
+  bounds,
+}: {
+  readonly bounds: ParsedStl['bounds'];
+}): ReactElement {
+  const line = useMemo(() => {
+    const positions = boxEdgePositions(bounds.min, bounds.max);
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+    const material = new LineBasicMaterial({
+      color: BBOX_COLOR,
+      transparent: true,
+      opacity: BBOX_OPACITY,
+      depthWrite: false,
+    });
+    const built = new LineSegments(geometry, material);
+    built.frustumCulled = false;
+    return built;
+  }, [bounds]);
+  useEffect(
+    () => () => {
+      line.geometry.dispose();
+      (line.material as LineBasicMaterial).dispose();
+    },
+    [line],
+  );
+  return <primitive object={line} />;
+}
+
+/**
  * A reusable translucent + wireframe view of the workspace volume, centered at
  * `center` (sim frame), scaled per display axis and oriented into the y-up scene.
  * Shared by the main-scene overlay and the popup preview.
+ *
+ * For a NON-watertight STL a muted bounding-box wireframe is drawn alongside the open
+ * mesh: containment falls back to that box, so it shows the region actually treated
+ * as inside (which the open mesh alone would misrepresent).
  */
 export function WorkspaceShapeView({
   kind,
@@ -150,6 +197,7 @@ export function WorkspaceShapeView({
 }): ReactElement {
   const geometry = useMemo(() => buildWorkspaceGeometry(kind, mesh), [kind, mesh]);
   useEffect(() => () => geometry.dispose(), [geometry]);
+  const showBbox = kind === 'stl' && mesh !== null && mesh.triangleCount > 0 && !mesh.watertight;
   return (
     <group position={[center[0], center[1], center[2]]}>
       {/* Scale in display-local axes, then rotate the whole thing into sim (y-up). */}
@@ -166,6 +214,7 @@ export function WorkspaceShapeView({
         <mesh geometry={geometry}>
           <meshBasicMaterial color={color} wireframe transparent opacity={WIRE_OPACITY} depthWrite={false} />
         </mesh>
+        {showBbox && mesh ? <BoundingBoxWire bounds={mesh.bounds} /> : null}
       </group>
     </group>
   );

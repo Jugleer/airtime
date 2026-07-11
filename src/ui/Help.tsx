@@ -4,6 +4,7 @@
 
 import { useEffect, useState, type CSSProperties, type ReactElement } from 'react';
 import { usePalette, type Palette } from './theme';
+import { useModalFocus } from './useModalFocus';
 
 interface Section {
   readonly heading: string;
@@ -116,6 +117,8 @@ function SectionList({
 export function Help(): ReactElement {
   const palette = usePalette();
   const [open, setOpen] = useState(false);
+  // Move focus into the dialog on open, restore it to the "?" button on close.
+  const dialogRef = useModalFocus<HTMLDivElement>(open);
 
   // Escape closes the modal (the standard dialog-dismissal affordance). Only listens
   // while open, so it never competes with the global Space/other handlers otherwise.
@@ -146,9 +149,11 @@ export function Help(): ReactElement {
 
       {open ? (
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label="Help"
+          tabIndex={-1}
           style={backdropStyle(palette)}
           onClick={() => setOpen(false)}
         >

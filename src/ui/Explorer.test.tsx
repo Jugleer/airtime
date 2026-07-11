@@ -85,4 +85,26 @@ describe('Explorer (ui layer)', () => {
     fireEvent.click(screen.getByLabelText('Max throw decrease')); // 4 -> 3
     expect(screen.getByText(/No valid siteswaps/i)).toBeTruthy();
   });
+
+  it('caps the results box height only while the dock is at natural height', () => {
+    // Undragged dock (capNaturalHeight): a bounded max-height so a large domain
+    // scrolls internally instead of growing the dock and crushing the 3D stage.
+    const { rerender } = render(<Explorer capNaturalHeight />);
+    let results = screen.getByLabelText('Siteswap results') as HTMLElement;
+    expect(results.style.maxHeight).toBe('clamp(12rem, 30vh, 22rem)');
+    expect(results.style.overflowY).toBe('auto');
+
+    // Dragged dock (fixed height): no cap, so the box flexes to fill the dock and
+    // the splitter fully overrides.
+    rerender(<Explorer capNaturalHeight={false} />);
+    results = screen.getByLabelText('Siteswap results') as HTMLElement;
+    expect(results.style.maxHeight).toBe('');
+    expect(results.style.overflowY).toBe('auto');
+  });
+
+  it('defaults to no height cap when the prop is omitted', () => {
+    render(<Explorer />);
+    const results = screen.getByLabelText('Siteswap results') as HTMLElement;
+    expect(results.style.maxHeight).toBe('');
+  });
 });

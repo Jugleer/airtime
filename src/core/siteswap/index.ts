@@ -7,6 +7,8 @@
 // NOTATION.md symbols in comments: b = ball count, h = throw value, L = pattern
 // length, n_h = hand count. Identifiers use descriptive names.
 
+import { greatestCommonDivisor } from '../math';
+
 /** Smallest throw value a digit can encode. */
 export const MIN_THROW = 0;
 /** Largest throw value a single character can encode (`z` = 35). */
@@ -338,15 +340,6 @@ export function orbits(values: readonly number[]): number[][] {
 }
 
 // --- Spatial period ---------------------------------------------------------
-
-function greatestCommonDivisor(a: number, b: number): number {
-  let x = Math.abs(a);
-  let y = Math.abs(b);
-  while (y !== 0) {
-    [x, y] = [y, x % y];
-  }
-  return x;
-}
 
 function leastCommonMultiple(a: number, b: number): number {
   if (a === 0 || b === 0) {

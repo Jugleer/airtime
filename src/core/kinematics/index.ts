@@ -16,6 +16,7 @@
 //
 // Pure and deterministic: no Date.now / Math.random / performance.
 
+import { greatestCommonDivisor } from '../math';
 import { compiledSpatialPeriodBeats, spatialPeriodBeats, type CompiledPattern } from '../siteswap';
 import type { Flight, Timeline } from '../timeline';
 import { Polynomial } from './poly';
@@ -1444,20 +1445,10 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
   };
 }
 
-/** Greatest common divisor (for the held-forever span). */
-function gcdOf(a: number, b: number): number {
-  let x = Math.abs(a);
-  let y = Math.abs(b);
-  while (y !== 0) {
-    [x, y] = [y, x % y];
-  }
-  return x;
-}
-
-/** Least common multiple. */
+/** Least common multiple (for the held-forever span). */
 function lcmOf(a: number, b: number): number {
   if (a === 0 || b === 0) {
     return 0;
   }
-  return Math.abs((a / gcdOf(a, b)) * b);
+  return Math.abs((a / greatestCommonDivisor(a, b)) * b);
 }

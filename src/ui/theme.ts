@@ -177,6 +177,20 @@ body {
 }
 input[type="range"] { accent-color: var(--at-accent); }
 input[type="checkbox"] { accent-color: var(--at-accent); }
+/* One shared, theme-aware keyboard-focus ring (a11y pass). Pointer focus stays
+   ringless; keyboard focus — and text-field focus, which the UA always flags as
+   focus-visible — shows the accent outline. Author origin beats the UA default even
+   at zero specificity (:where), so a control need not opt in; the few inputs that
+   set an inline outline:none were dropped so the ring can show. tabindex="-1"
+   holders (the programmatically-focused dialog containers) are excluded so moving
+   focus into a modal never draws a ring around the whole card. */
+:where(a[href], button, input, select, textarea, [role="button"], [role="separator"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--at-accent);
+  outline-offset: 2px;
+}
+:where(a[href], button, input, select, textarea, [role="button"], [role="separator"], [tabindex]):focus:not(:focus-visible) {
+  outline: none;
+}
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--at-scrollbar); border-radius: 5px; }
