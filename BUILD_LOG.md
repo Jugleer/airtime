@@ -353,3 +353,71 @@ Owner reported 6 problems + a UI overhaul request. Each problem diagnosed read-o
   - [ ] Space pauses/resumes (not while typing); wheel nudges sliders; per-control ↺ and section Reset-all work.
   - [ ] Library grouped by ball count; Settings drawer doesn't darken the app; minimap always on (toggleable), expands to full graph.
   - [ ] Charts dock no longer collapses at very wide windows (was ≥ ~2340 px).
+
+## Round 3 — Owner feedback (2026-07-11): plan
+Owner delivered ~20 items + ruled on the round-2 proposals: build #1 siteswap
+explorer (bottom dock: none | charts | explorer), #2 sync & multiplex (YES),
+#3 GIF/WebM export (design answered: one-period seamless loop, current camera,
+offscreen deterministic frames, in-browser encode), #4 &t= bookmarks, #5 a11y
+pass (easy wins only); #6–8 declined for now. New major feature: per-hand
+workspace volumes (popup 3D editor, sphere/cube/pyramid/STL, xyz scale) —
+orchestrator ruling: ADVISORY-first (violations highlighted; constraint solving
+raised separately). Display convention ruled Z-UP user-facing (right-handed;
+display X = sim x, Y = −sim z, Z = sim y); core stays y-up per CLAUDE.md with
+one mapping module at the presentation boundary. Waves: 1 = UI/state/graph
+(4 fenced builders) + diagnosis workflow (3 clusters, diagnose→skeptic-verify);
+2a = core carry/return fixes + render trail/tilt + review fixups; 2b =
+workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
+
+## Round 3 wave 1 — layout, charts, frame, state graph            DONE
+- Commit: f73732e — Gate: (2026-07-11, "npm run gate", green — 38 files / 493 tests; orchestrator-run)
+- Track α charts/energy: Net column removed (probe: per-hand net is NONZERO in
+  asymmetric multi-hand patterns, e.g. 531@3h = ±9.58 J/kg summing to 0 — total
+  row is ~0; caption rewritten, one-line revert if owner wants it back); compact
+  table; exact 60/40 flex split stable at all widths; legend click-toggles per
+  hand (hollow swatch + faded when off); legend hover → cup emissive highlight
+  (store hoveredHandIndex); jerk jitter root-caused as playhead-anchored chart
+  sampling → absolute-time-grid (scroll translates, never resamples history);
+  chart heights follow the dock splitter (ResizeObserver; found+removed a
+  flexWrap ratchet that let canvases grow but never shrink).
+- Track β layout: Settings drawer deleted; VIEW under HANDS & GEOMETRY (theme
+  incl.); Save/Share/Audio beneath ladder; wheel ×3; panels.tsx splitters
+  (sidebar/ladder widths, dock height) + collapse strips, localStorage-persisted
+  (deliberately NOT store/codec), stage floor 380 px; z-up label pass.
+- Track γ state/codec/scene: defaults ghosts OFF + trail 0.15 s; displayFrame.ts
+  (handedness pinned by cross-product test); camera-tracking triad bottom-right
+  (canvas sprites, no CDN fonts); line preset grows outward alternating ± and
+  setHandCount preserves existing hands (decrement drops most-recent; 1↔2 is the
+  documented non-preserving exception — reviewer finding on it REFUTED as the
+  deliberate trade-off); grey global gizmo node 0G (rigid C+T translate,
+  setHandAnchor future-only epoch); &t= bookmark (3 dp, arrives playing,
+  round-trip property extended). Presets now carry time (flagged, harmless).
+- Track δ state graph: click-a-node-on-the-current-cycle was a silent no-op
+  (kept running pattern, re-entered at that node's phase → identical future);
+  now every click bridges (lex-min reverse-BFS) and settles into the clicked
+  node's shortest cycle; idempotent splice proven past-bit-identical. Flag:
+  clicking a node whose shortest cycle is a rotation of the current pattern
+  rewrites the pattern box to that rotation (e.g. 441 → 144) — required for
+  phase alignment. Minimap arrow → "click to expand".
+- Orchestrator fixup: hand-position editor Y column negates on read+write
+  (display Y = −sim z), settled with γ's displayFrame; 20/20 Controls tests.
+- Review workflow (5 dimensions, findings skeptic-verified): 5 confirmed + lows
+  → fixup agent (wave 2a): stale Settings refs incl. user-facing Help Esc line,
+  circle-preset global-node hit-sphere overlap, translatedPair orphan/dup,
+  wheel Help wording, hover-unmount cleanup, STAGE_MIN literal, dock aria
+  clamp, displayFrame comment, dead windowSampleTime, missing Y-negation and
+  t-seek tests. DESIGN §4.5 amended (Net row note, owner-authorized).
+- Diagnosis workflow (skeptic-verified): (1) trail flicker = playhead-anchored
+  sample comb vs short carries (measured 5.2 cm frame-rate flicker) → absolute
+  grid + segment-boundary samples; (2) held-2 "hold" is a literal level line at
+  chord velocity → rest-at-dip; skeptic REFUTED the naive rest fix (1.5e-8 acc
+  breach at hd 0.02/g 30, conditioning can't help — velocity-boundary-driven)
+  → flank floor or smooth-V fallback in that corner; overlay mismatch = 20/beat
+  chord error (6 mm) → 80/beat (0.4 mm); (3) hand-follows-ball: buildReturn's
+  single quintic pinned to ball endpoint conditions DEGENERATES to the flight
+  parabola for self-throws (unique quintic through 6 matching conditions;
+  separation measured 0.000000) and lunges on zips (1155: 0.82 m excursion) →
+  returns routed through the dip-based carry construction (400-case
+  differential C² sweep in budget; excursion → 0.37 m). First diagnosis agent
+  died emitting structured output; salvage agent mined its 510 KB transcript
+  and re-verified rather than re-investigating.

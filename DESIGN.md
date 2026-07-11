@@ -178,9 +178,11 @@ Contact force during carry: `F(t) = m·(a(t) − g_vec)` with `m = 1 kg` normali
 - **Throw work** `W⁺ = ∫ max(P, 0) dt`
 - **Catch absorption** `W⁻ = ∫ min(P, 0) dt` (reported as magnitude)
 - **Net** `W = W⁺ + W⁻ = ΔKE + g·Δy` — the work–energy theorem is a built-in
-  cross-check and a property test.
+  cross-check and a property test. (Not displayed: per-hand net is nonzero only
+  in asymmetric multi-hand patterns and is readable as `W⁺ − |W⁻|`; the total
+  net over a period is ~0. Owner removed the Net column 2026-07-11, round 3.)
 
-Panel reports, per hand, aggregated over one spatial period: W⁺, |W⁻|, net, and
+Panel reports, per hand, aggregated over one spatial period: W⁺, |W⁻|, and
 average power (W⁺-based). Units J/kg and W/kg.
 
 ### 4.6 Runtime tempo change (slew-limited)
