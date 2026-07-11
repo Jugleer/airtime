@@ -900,51 +900,64 @@ export const quinticViaCarryPath: CarryPath = { name: 'quintic-via', build: buil
 export const cubicBezierCarryPath: CarryPath = { name: 'cubic-bezier', build: buildCubicCarry };
 
 /**
- * Empty-hand WAIT-HIGH return (throw → next catch), owner spec (2026-07-11,
- * round 4): the empty hand must NOT scoop down to line − holdDepth between a
- * throw and the next catch — it should WAIT near the top of its travel (y ≈ the
- * catch/throw line, the top of the hold band), pausing there until the ball
- * comes. Three C²-stitched segments mirror {@link buildHeldRestCarry} but at line
- * height and with the return's boundary velocities (the ball's release velocity —
- * UP — at the throw, its arrival velocity — DOWN — at the catch):
+ * Empty-hand APEX-REST return (throw → next catch), owner spec (round 5, the
+ * "oval return"): between a throw and the hand's next catch the empty hand draws
+ * the TOP lobe of the juggler's oval — a single monotone ASCENT that quashes the
+ * release velocity, an optional true REST at the crown, then a single monotone
+ * DESCENT into the catch. This SUPERSEDES the round-4 wait-high return, whose rest
+ * sat at line height (lineY) and forced the hand to hump up, fall back to the line,
+ * sit, hump up again, and fall into the catch — the owner's "bounce" (two humps
+ * straddling a line-height valley; v_y reversed three times). Three C²-stitched
+ * segments mirror {@link buildHeldRestCarry} but at the apex and with the return's
+ * boundary velocities (the ball's release velocity — UP — at the throw, its
+ * arrival velocity — DOWN — at the catch):
  *
- *   absorb  (throw → ready)  quintic flank, endpoint accel (0, −g, 0) → (0,0,0)
- *   rest    (at the ready)   static — v = a = jerk ≡ 0 (a true pause)
- *   wind-up (ready → catch)  quintic flank, endpoint accel (0,0,0) → (0, −g, 0)
+ *   absorb  (throw → apex)   quintic flank, endpoint accel (0, −g, 0) → (0,0,0)
+ *   rest    (at the apex)    static — v = a = jerk ≡ 0 (a true pause at the crown)
+ *   wind-up (apex → catch)   quintic flank, endpoint accel (0,0,0) → (0, −g, 0)
  *
- * The ready point sits at y = lineY = ½(fromY + toY) — the hand's natural level,
- * NOT lineY − holdDepth — so the empty hand waits high. The absorb decelerates
- * the upward release velocity to a stop there; because the release points UP the
- * hand drifts a little ABOVE the line first (the natural post-release rise), then
- * settles to the ready point — ~0.4·holdDepth when the descent term sets the
- * flank (~3.8 cm at the 0.1 default); at tiny holdDepth the flank hits its
- * conditioning floors instead and the rise decouples from holdDepth, staying a
- * small absolute bound (measured < ~6 cm across the property domain).
- * Horizontally the ready column is the drift-placed
- * wind-up runway (toPoint − toVelocity·flank/2, so the wind-up is a monotone
- * velocity ramp into the catch), CLAMPED to the throw–catch chord so a fast
- * mostly-horizontal catch cannot send it lunging past a column.
+ * The apex sits at y = lineY + apexRise, the exact mirror of the carry's dip
+ * (lineY − holdDepth): the absorb decelerates the upward release velocity to a stop
+ * at the crown, and the wind-up accelerates back down into the catch — one clean
+ * up-pause-down lobe, no valley in the middle. Horizontally the ready column is the
+ * drift-placed wind-up runway (toPoint − toVelocity·flank/2, so the wind-up is a
+ * monotone velocity ramp into the catch), CLAMPED to the throw–catch chord so a
+ * fast mostly-horizontal catch cannot send it lunging past a column — the crown
+ * travels from the throw column to the catch column while high (the oval
+ * circulates: the carry sweeps catch→throw along the bottom dip, the return sweeps
+ * throw→catch along the top apex).
  *
- * This SUPERSEDES the round-3 wait-low return (which routed through the carry's
- * dip via `held: false`, dipping the empty hand to lineY − holdDepth — the side
- * effect the owner now rejects). It KEEPS the round-3 fixes: the seams stay C²
- * (the same six ball-derived endpoint states — fromPoint/fromVelocity/(0,−g,0)
- * and toPoint/toVelocity/(0,−g,0) — so no carry↔return acceleration step and no
- * ball-tracing), and the empty hand no longer lunges (measured excursion ≤ the
- * round-3 return's in every swept corner).
+ * Two quantities set the height, and BOTH matter:
+ *  • targetRise = min(holdDepth, v_y²/(2g)) — the apex the flank AIMS for. Capping
+ *    at the ballistic quash height v_y²/(2g) sizes the flank at the time gravity
+ *    alone would take to stop the release velocity, so a slow throw over a long
+ *    window never gets a flank long enough to fight gravity and wiggle (that
+ *    fight-gravity wiggle IS the round-4 bounce at low v_y). For a normal cascade
+ *    the cap does not bind and targetRise = holdDepth.
+ *  • apexRise = ½·v_y·flankTime — the apex the flank ACTUALLY reaches, derived from
+ *    the FINAL flank AFTER the floors and half-window cap. Deriving the height from
+ *    the flank (rather than re-clamping to targetRise) keeps the ascent monotone:
+ *    when a conditioning floor lengthens the flank past 2·targetRise/v_y the apex
+ *    rises WITH it instead of the quintic overshooting a too-low ceiling. The
+ *    corollary is that apexRise can slightly EXCEED holdDepth in the shallow-hold +
+ *    high-g + fast-throw corner (e.g. 522 at g = 30 → ~0.036; a 915 → ~0.127) —
+ *    deliberate, bounded, still a single monotone lobe, and off the owner's set.
+ *    For a normal cascade apexRise = holdDepth exactly.
  *
- * Flank time: the carry's absorb time 2·holdDepth/v_y sizes the vertical
- * slow-to-rest (so the empty hand's rise mirrors the held hand's dip); floored so
- * the reposition-to-rest stays within the {@link HELD_REST_MAX_ACCEL} cap
- * (flank ≥ √(reposition/cap)), the steep flank stays numerically clean
- * ({@link RETURN_FLANK_FLOOR} / {@link ABSORB_TIME_PER_SPEED}), and capped at
- * half the return. When the return is too tight for a genuine rest
- * (total − 2·flank ≤ MIN_HOLD_TIME) the flanks meet at the midpoint — the hand
- * still slows to an instantaneous v = 0 there (the owner's "just a slowdown"),
- * with no static segment. Short flanks use {@link quinticHermiteConditioned} and
- * EXACT evaluation-visible durations (as {@link buildHeldRestCarry}) so the
- * joints stay inside the 1e-9 budget. Returns ALWAYS use this construction
- * regardless of the user's carry-path choice.
+ * This KEEPS the round-3/4 fixes: the seams stay C² (the same six ball-derived
+ * endpoint states — fromPoint/fromVelocity/(0,−g,0) and toPoint/toVelocity/(0,−g,0)
+ * — so no carry↔return acceleration step and no ball-tracing; the apex height is
+ * continuity-neutral because the absorb/rest/wind-up joints all sit at v = a = 0),
+ * and the empty hand no longer lunges (the drift-placed chord-clamped ready column
+ * is unchanged). Flank floors (reposition accel cap {@link HELD_REST_MAX_ACCEL},
+ * {@link RETURN_FLANK_FLOOR} / {@link ABSORB_TIME_PER_SPEED}) and the half-return
+ * cap are unchanged. When the return is too tight for a genuine rest
+ * (total − 2·flank ≤ MIN_HOLD_TIME) the flanks meet at the apex midpoint — the hand
+ * still slows to an instantaneous v = 0 at the crown (the owner's "just a
+ * slowdown"), with no static segment. Short flanks use
+ * {@link quinticHermiteConditioned} and EXACT evaluation-visible durations (as
+ * {@link buildHeldRestCarry}) so the joints stay inside the 1e-9 budget. Returns
+ * ALWAYS use this construction regardless of the user's carry-path choice.
  */
 function buildReturn(
   startTime: number,
@@ -961,17 +974,28 @@ function buildReturn(
     return [staticSegment(startTime, endTime, fromPoint)];
   }
   const g = gravityVector(gravity);
-  // The ready point waits at the TOP of the hold band (the catch/throw line),
-  // not at its bottom (lineY − holdDepth) — the owner's wait-high spec.
+  // lineY is the hand's natural level — the midpoint of the throw and catch
+  // heights, the CENTER of the oval. The apex/ready sits apexRise ABOVE it (the
+  // mirror of the carry's dip at lineY − holdDepth); see targetRise/apexRise below.
   const lineY = 0.5 * (fromPoint.y + toPoint.y);
   const verticalSpeed = Math.max(Math.abs(fromVelocity.y), Math.abs(toVelocity.y));
   // Half the horizontal chord — the reposition each flank makes; floors the flank
   // so the reposition-to-rest stays within the acceleration cap.
   const reposition =
     0.5 * Math.max(Math.abs(toPoint.x - fromPoint.x), Math.abs(toPoint.z - fromPoint.z));
-  // Flank time = the carry's absorb time (2·holdDepth/v_y), floored for the
+  // targetRise: how high above the line the apex AIMS to sit — the hold-band mirror
+  // of the carry's dip, but capped at the BALLISTIC quash height v_y²/(2g) so the
+  // flank is never long enough to fight gravity over a slow-throw / long window
+  // (that fight-gravity wiggle is the round-4 bounce). = holdDepth for a normal
+  // cascade; smaller only when the throw is too slow to rise a full holdDepth in
+  // the ballistic quash time.
+  const targetRise =
+    verticalSpeed > 0
+      ? Math.min(holdDepth, (verticalSpeed * verticalSpeed) / (2 * gravity))
+      : holdDepth;
+  // Flank time = the ballistic quash time (2·targetRise/v_y), floored for the
   // reposition accel cap and numerical conditioning, capped at half the return.
-  let flankTime = verticalSpeed > 0 ? (2 * holdDepth) / verticalSpeed : 0.25 * total;
+  let flankTime = verticalSpeed > 0 ? (2 * targetRise) / verticalSpeed : 0.25 * total;
   flankTime = Math.max(
     flankTime,
     verticalSpeed * ABSORB_TIME_PER_SPEED,
@@ -984,6 +1008,13 @@ function buildReturn(
   if (total - 2 * flankTime <= MIN_HOLD_TIME) {
     flankTime = 0.5 * total;
   }
+  // Apex height derived from the FINAL (post-floor, post-cap) flank, NOT re-clamped
+  // to targetRise: when a conditioning floor lengthens the flank past the ballistic
+  // quash time the apex rises WITH it, so the ascent stays monotone instead of the
+  // quintic overshooting a too-low ceiling. This is why apexRise can slightly exceed
+  // holdDepth in the shallow-hold + high-g + fast-throw corner (deliberate, bounded,
+  // still a single lobe).
+  const apexRise = 0.5 * verticalSpeed * flankTime;
   const entryTime = startTime + flankTime;
   const exitTime = endTime - flankTime;
   const hasRest = exitTime - entryTime > 0;
@@ -991,7 +1022,7 @@ function buildReturn(
   // chord so it never strays past a column (no lunge on a fast horizontal catch).
   const ready = vec3(
     clampToChord(fromPoint.x, toPoint.x, toPoint.x - 0.5 * toVelocity.x * flankTime),
-    lineY,
+    lineY + apexRise,
     clampToChord(fromPoint.z, toPoint.z, toPoint.z - 0.5 * toVelocity.z * flankTime),
   );
   const short = flankTime < SHORT_SEGMENT_TIME;

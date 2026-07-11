@@ -994,18 +994,20 @@ describe('held carries and multi-hand patterns', () => {
   });
 });
 
-// --- Empty-hand returns WAIT HIGH — they do NOT track the ball (§4.3) ---------
+// --- Empty-hand returns draw an APEX OVAL — they do NOT track the ball (§4.3) --
 //
-// OWNER-DIRECTED SPEC CHANGE (round 4, 2026-07-11): the empty hand must WAIT near
-// the TOP of its travel (y ≈ the catch/throw line, the top of the hold band) —
-// slowing to a pause there until the ball comes — NOT scoop down to line −
-// holdDepth between throws. This SUPERSEDES the round-3 wait-low return. These
-// tests are UPDATED accordingly: the wait-low `handDip ≈ line − holdDepth`
-// expectation is replaced with a wait-high `handDip ≈ line` one (an owner spec
-// change, not a test-weakening), while the LOAD-BEARING assertions are KEPT —
-// large hand↔ball separation during a self-throw flight, and the hand apex well
-// below the ball apex (no ball-tracking) — and the 1155 excursion bound HOLDS
-// (it improves: the hand no longer dips).
+// OWNER-DIRECTED SPEC CHANGE (round 5, the "oval return"): the empty hand rises to
+// an APEX = line + apexRise (the mirror of the carry's dip; = line + holdDepth for
+// a normal cascade), rests there when the window allows, then descends into the
+// catch — ONE monotone up-pause-down lobe. This SUPERSEDES the round-4 wait-high
+// return, whose line-height rest forced the hand to hump up, fall back to the line,
+// sit, hump again, and fall into the catch (the owner's "bounce", v_y reversed
+// three times). These tests are UPDATED accordingly: the round-4 `rise bounded
+// ~0.04` / `rest at the line` expectations are replaced with `apex ≈ holdDepth` /
+// `rest at line + holdDepth` (an owner spec change, not a test-weakening), while
+// the LOAD-BEARING assertions are KEPT — large hand↔ball separation during a
+// self-throw flight, and the hand apex well below the ball apex (no ball-tracking)
+// — and the 1155 excursion bound HOLDS (measured 0.2585 < 0.5).
 
 /**
  * Find a self-throw flight (ball thrown and caught by the SAME hand) and that
@@ -1033,16 +1035,211 @@ function selfThrowFlight(
   return undefined;
 }
 
-describe('empty-hand returns wait high — no ball-tracking (owner round-4, §4.3)', () => {
+/**
+ * Empty-hand RETURN windows for a hand: the time gaps between its consecutive
+ * carries. For async / non-multiplex patterns a hand holds one ball at a time, so
+ * its carries are sequential and each inter-carry gap is exactly one return — the
+ * same gaps buildHandSegments fills with buildReturn. Restricted to a stable
+ * interior [tMin, tMax] to skip the partial carries at the ends of the span.
+ */
+function returnWindows(
+  k: Kinematics,
+  hand: number,
+  tMin = 2,
+  tMax = 8,
+): { start: number; end: number }[] {
+  const carries = k.carriesForHand(hand).slice().sort((a, b) => a.startTime - b.startTime);
+  const windows: { start: number; end: number }[] = [];
+  for (let i = 0; i + 1 < carries.length; i++) {
+    const start = (carries[i] as CarryMotion).endTime;
+    const end = (carries[i + 1] as CarryMotion).startTime;
+    if (end - start > 1e-9 && start >= tMin && end <= tMax) {
+      windows.push({ start, end });
+    }
+  }
+  return windows;
+}
+
+/**
+ * Anti-bounce probe over one return window: the number of vertical-velocity sign
+ * changes of the hand (turns; 1 = a single up-pause-down oval lobe, ≥3 = the
+ * round-4 double-hump bounce), plus the min/max sampled height. Samples over the
+ * window and ignores the near-zero samples of the static apex rest (|v_y| < velEps)
+ * so the pause between the ascent and descent is not miscounted.
+ */
+function returnProfile(
+  k: Kinematics,
+  hand: number,
+  window: { start: number; end: number },
+  velEps = 1e-6,
+): { turns: number; minY: number; maxY: number } {
+  const samples = 240;
+  let lastSign = 0;
+  let turns = 0;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i <= samples; i++) {
+    const t = window.start + (i / samples) * (window.end - window.start);
+    const state = k.handState(hand, t);
+    minY = Math.min(minY, state.position.y);
+    maxY = Math.max(maxY, state.position.y);
+    const vy = state.velocity.y;
+    if (Math.abs(vy) < velEps) continue;
+    const sign = vy > 0 ? 1 : -1;
+    if (lastSign !== 0 && sign !== lastSign) turns++;
+    lastSign = sign;
+  }
+  return { turns, minY, maxY };
+}
+
+describe('empty-hand returns are a single oval lobe — anti-bounce regression (owner round-5, §4.3)', () => {
+  // THE anti-bounce guard (owner's last significant issue). Round-4 rested the empty
+  // hand at LINE height, so the absorb humped above the line, fell back, sat, humped
+  // again, then fell into the catch — v_y reversed THREE times (turns=3, the owner's
+  // "bounce"). Round-5 rests at the APEX (line + apexRise): one monotone ascent →
+  // optional true rest at the crown → one monotone descent, so v_y reverses EXACTLY
+  // ONCE (turns=1). Swept across the property domain (patterns × n_h × holdDepth × g);
+  // every empty-hand return must be a single lobe and never dip below the throw/catch
+  // line. This test FAILS against the round-4 construction (turns=3) — it is the
+  // regression that pins the fix. If any corner trips turns>1, SURFACE it (do not
+  // weaken the pin) — the custom message names the failing case.
+  const patterns: Array<[string, number[]]> = [
+    ['3', [1, 2, 3, 5, 8]],
+    ['531', [1, 2, 3, 5]],
+    ['441', [1, 2, 3]],
+    ['51', [2, 3, 5]],
+    ['522', [2]], // held-2 stays clean only at n_h = 2 (see the continuity property)
+  ];
+  for (const [pattern, handCounts] of patterns) {
+    it(`${pattern}: every empty-hand return is one lobe across n_h × holdDepth × g`, () => {
+      const values = parse(pattern);
+      let checked = 0;
+      for (const handCount of handCounts) {
+        for (const holdDepth of [0, 0.02, 0.1, 0.4]) {
+          for (const gravity of [0.5, 9.81, 30]) {
+            const timeline = buildTimeline(values, {
+              beatCount: 24,
+              params: { ...DEFAULT_PARAMS, handCount },
+            });
+            const kinematics = buildKinematics(timeline, { values, handCount, gravity, holdDepth });
+            const lineBottom = Math.min(
+              kinematics.geometry.throwPoint(0).y,
+              kinematics.geometry.catchPoint(0).y,
+            );
+            for (let hand = 0; hand < handCount; hand++) {
+              for (const window of returnWindows(kinematics, hand)) {
+                const { turns, minY } = returnProfile(kinematics, hand, window);
+                const where = `${pattern} n_h=${handCount} hd=${holdDepth} g=${gravity} hand${hand} @${window.start.toFixed(3)}`;
+                expect(turns, where).toBe(1); // single up-pause-down lobe, no bounce
+                expect(minY, where).toBeGreaterThan(lineBottom - 1e-6); // never below the line
+                checked++;
+              }
+            }
+          }
+        }
+      }
+      expect(checked).toBeGreaterThan(0); // not vacuous
+    });
+  }
+});
+
+describe('empty-hand return apex placement (owner round-5, §4.3)', () => {
+  it('default 3-cascade: the return rests at the apex = line + holdDepth', () => {
+    // (b) The DEFAULT cascade (n_h = 2): its short empty window (restFrac ~0.09)
+    // still yields a static rest, and it sits at the apex line + holdDepth (the
+    // ballistic cap does not bind for a value-3, so apexRise = holdDepth exactly).
+    const values = parse('3');
+    const timeline = buildTimeline(values, { beatCount: 24, params: DEFAULT_PARAMS });
+    const kinematics = buildKinematics(timeline, { values, handCount: 2 });
+    const lineY = kinematics.geometry.catchPoint(0).y;
+    const restSeg = kinematics
+      .handSegments(0)
+      .find(
+        (s) =>
+          s.x.degree === 0 &&
+          s.y.degree === 0 &&
+          s.z.degree === 0 &&
+          s.endTime - s.startTime > 1e-6 &&
+          s.startTime >= 2 &&
+          s.startTime <= 10,
+      );
+    expect(restSeg).toBeDefined();
+    if (!restSeg) return;
+    expect(evalSeg(restSeg, restSeg.startTime).position.y).toBeCloseTo(lineY + kinematics.holdDepth, 6);
+    // A genuine static rest: |v| ≡ 0 across a nonzero interval at the crown.
+    for (let f = 0; f <= 1; f += 0.1) {
+      const t = restSeg.startTime + f * (restSeg.endTime - restSeg.startTime);
+      expect(magnitude(kinematics.handState(0, t).velocity)).toBeLessThan(1e-9);
+    }
+  });
+
+  it('51 n_h=5 holdDepth=0.02 g=0.5: the slow-throw long-window corner stays one lobe (broke design B)', () => {
+    // (c) The decisive corner from the judge's adjudication: very low vertical speed
+    // over a long window at low gravity. WITHOUT the ballistic cap on the flank
+    // (targetRise = min(holdDepth, v_y²/2g)) the absorb quintic runs the full
+    // half-window against gravity and wiggles (design B: turns=5 on ~half the
+    // returns here). The cap keeps the flank short → a single lobe.
+    const values = parse('51');
+    const handCount = 5;
+    const timeline = buildTimeline(values, {
+      beatCount: 24,
+      params: { ...DEFAULT_PARAMS, handCount },
+    });
+    const kinematics = buildKinematics(timeline, { values, handCount, gravity: 0.5, holdDepth: 0.02 });
+    const lineBottom = Math.min(
+      kinematics.geometry.throwPoint(0).y,
+      kinematics.geometry.catchPoint(0).y,
+    );
+    let checked = 0;
+    for (let hand = 0; hand < handCount; hand++) {
+      for (const window of returnWindows(kinematics, hand)) {
+        const { turns, minY } = returnProfile(kinematics, hand, window);
+        expect(turns).toBe(1);
+        expect(minY).toBeGreaterThan(lineBottom - 1e-6);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it('522 n_h=2 holdDepth=0.02 g=30: a floor-lengthened flank lifts the apex ABOVE holdDepth (still one lobe)', () => {
+    // (d) Design A DELIBERATELY lets apexRise exceed holdDepth when a conditioning
+    // floor (here the reposition floor) lengthens the flank past the ballistic quash
+    // time — the shallow-hold + high-g + fast-throw corner (measured ~0.036 > 0.02).
+    // This is NOT a bug: re-clamping the apex to holdDepth (design B's REJECTED
+    // apex ≤ holdDepth pin) reintroduces the overshoot bounce. Pinned so no future
+    // change re-imposes an apex ceiling; the single-lobe guard, not a ceiling, is the
+    // correctness invariant. (Do NOT add an apex ≤ holdDepth assertion anywhere.)
+    const values = parse('522');
+    const timeline = buildTimeline(values, { beatCount: 24, params: DEFAULT_PARAMS });
+    const kinematics = buildKinematics(timeline, { values, handCount: 2, gravity: 30, holdDepth: 0.02 });
+    const lineY = kinematics.geometry.catchPoint(0).y;
+    let maxApexRise = 0;
+    let checked = 0;
+    for (let hand = 0; hand < 2; hand++) {
+      for (const window of returnWindows(kinematics, hand)) {
+        const { turns, maxY } = returnProfile(kinematics, hand, window);
+        expect(turns).toBe(1); // still a single lobe despite exceeding holdDepth
+        maxApexRise = Math.max(maxApexRise, maxY - lineY);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(maxApexRise).toBeGreaterThan(kinematics.holdDepth); // apex rises above holdDepth (deliberate)
+  });
+});
+
+describe('empty-hand returns draw an apex oval — no ball-tracking (owner round-5, §4.3)', () => {
   // Owner bug (round 3): "In 045 the hand throwing the 4 follows the ball along
   // the entire path; same for 3 with three hands." A single quintic pinned to the
   // throw's six ball-derived boundary states IS the flight parabola for a
   // self-throw, so the empty hand traced the arc exactly (separation 0, hand apex
-  // = ball apex). The wait-high return keeps the hand near the line instead —
-  // still NOT tracking the ball (the load-bearing property), but now waiting HIGH
-  // (round-4 owner spec) rather than dipping to line − holdDepth (round 3).
+  // = ball apex). The apex-oval return keeps the hand near the line instead —
+  // still NOT tracking the ball (the load-bearing property), but now rising to an
+  // apex ≈ line + holdDepth (round-5 owner spec) rather than dipping to line −
+  // holdDepth (round 3) or resting at the line (round 4).
   for (const [pattern, handCount] of [['045', 2], ['3', 3]] as const) {
-    it(`${pattern} n_h=${handCount}: the throwing hand waits high and does not follow its self-throw`, () => {
+    it(`${pattern} n_h=${handCount}: the throwing hand rests at the apex and does not follow its self-throw`, () => {
       const values = parse(pattern);
       const timeline = buildTimeline(values, { beatCount: 24, params: { ...DEFAULT_PARAMS, handCount } });
       const kinematics = buildKinematics(timeline, { values, handCount });
@@ -1073,23 +1270,27 @@ describe('empty-hand returns wait high — no ball-tracking (owner round-4, §4.
       // LOAD-BEARING (kept): the hand apex stays well BELOW the ball's apex — it
       // does not rise to follow the ball.
       expect(handApex).toBeLessThan(ballApex - 0.25 * ballApexHeight);
-      // WAIT-HIGH (round-4, replaces the round-3 wait-low `handDip ≈ line −
-      // holdDepth`): the empty hand's low point is the LINE itself (the top of the
-      // hold band), never near the old dip bottom. It drifts a little ABOVE the
-      // line after release (the natural post-throw rise), but that rise is bounded.
-      expect(handDip).toBeCloseTo(catchHeight, 2); // waits AT the line, not at line − holdDepth
+      // APEX OVAL (round-5, OWNER-DIRECTED spec update — supersedes the round-4
+      // line-height rest): the empty hand's LOW point is still the LINE itself
+      // (throw & catch sit on it; the ascent is monotone up from the line and the
+      // descent monotone back down to it), so handDip ≈ catchHeight is UNCHANGED —
+      // only the apex moved up.
+      expect(handDip).toBeCloseTo(catchHeight, 2); // still bottoms at the line, not at line − holdDepth
       expect(handDip).toBeGreaterThan(catchHeight - 0.5 * kinematics.holdDepth); // nowhere near line − holdDepth
-      expect(handApex).toBeGreaterThan(catchHeight); // it does rise a touch above the line
-      expect(handApex - catchHeight).toBeLessThan(0.1); // but the rise is bounded (measured ~0.04)
+      expect(handApex).toBeGreaterThan(catchHeight); // it rises above the line
+      // The rise is now the full hold-band mirror ≈ holdDepth (was the incidental
+      // ~0.4·holdDepth of the round-4 line-height rest); measured 0.10000 for 045 & 3@n_h3.
+      expect(handApex - catchHeight).toBeCloseTo(kinematics.holdDepth, 2);
     });
   }
 
-  it('long return comes to a genuine rest at the line (owner round-4 pin)', () => {
+  it('long return comes to a genuine rest at the apex, line + holdDepth (owner round-5 pin)', () => {
     // (b) When the return duration allows, the empty hand comes to a TRUE REST
-    // near the ready point: a static hand segment (v = a = jerk ≡ 0) at the line
-    // height, spanning a nonzero interval. 3-cascade at n_h = 3 has a long empty
-    // window (t_e ≈ 0.45 s), so its returns rest. (In a plain cascade the only
-    // static hand segments are return rests — the value-3 carries sweep.)
+    // at the ready/apex point: a static hand segment (v = a = jerk ≡ 0) at the
+    // apex height line + holdDepth, spanning a nonzero interval. 3-cascade at
+    // n_h = 3 has a long empty window (t_e ≈ 0.45 s), so its returns rest. (In a
+    // plain cascade the only static hand segments are return rests — the value-3
+    // carries sweep.)
     const values = parse('3');
     const handCount = 3;
     const timeline = buildTimeline(values, { beatCount: 24, params: { ...DEFAULT_PARAMS, handCount } });
@@ -1109,8 +1310,9 @@ describe('empty-hand returns wait high — no ball-tracking (owner round-4, §4.
       );
     expect(restSeg).toBeDefined();
     if (!restSeg) return;
-    // The rest sits at the LINE (top of the hold band), not at line − holdDepth.
-    expect(evalSeg(restSeg, restSeg.startTime).position.y).toBeCloseTo(lineY, 6);
+    // The rest sits at the APEX = line + holdDepth (the crown of the oval, mirror
+    // of the carry dip), not at the line (round 4) nor line − holdDepth (round 3).
+    expect(evalSeg(restSeg, restSeg.startTime).position.y).toBeCloseTo(lineY + kinematics.holdDepth, 6);
     // Velocity is exactly zero across the whole pause (a genuine rest).
     for (let f = 0; f <= 1; f += 0.1) {
       const t = restSeg.startTime + f * (restSeg.endTime - restSeg.startTime);

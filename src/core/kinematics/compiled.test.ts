@@ -9,6 +9,8 @@ import {
   magnitude,
   subtract,
   vec3,
+  type CarryMotion,
+  type Kinematics,
   type MotionState,
   type PolySegment,
 } from './index';
@@ -212,4 +214,63 @@ describe('multiplex held-2 carry keeps the hand moving (daisy-chain regression, 
       }
     }
   });
+});
+
+// --- Anti-bounce single-lobe guard for SYNC returns (round-5 oval) ------------
+//
+// Sync/multiplex returns route through the SAME buildReturn as vanilla, so the
+// round-5 apex oval applies to them too. Pinned here on the shared builder: every
+// empty-hand return in (4,4) and (6x,4)* is one monotone up-pause-down lobe
+// (turns=1), never the round-4 double-hump. (Each hand throws one ball per sync
+// beat — non-multiplex — so its carries are sequential and each inter-carry gap is
+// exactly one return.)
+function syncReturnWindows(k: Kinematics, hand: number): { start: number; end: number }[] {
+  const carries = k.carriesForHand(hand).slice().sort((a, b) => a.startTime - b.startTime);
+  const windows: { start: number; end: number }[] = [];
+  for (let i = 0; i + 1 < carries.length; i++) {
+    const start = (carries[i] as CarryMotion).endTime;
+    const end = (carries[i + 1] as CarryMotion).startTime;
+    if (end - start > 1e-9 && start >= 2 && end <= 8) windows.push({ start, end });
+  }
+  return windows;
+}
+
+describe('empty-hand returns are a single oval lobe for sync (round-5, §4.3)', () => {
+  for (const text of ['(4,4)', '(6x,4)*']) {
+    it(`${text}: every empty-hand return is one lobe across holdDepth × g`, () => {
+      let checked = 0;
+      for (const holdDepth of [0.02, 0.1, 0.4]) {
+        for (const gravity of [0.5, G, 30]) {
+          const { kinematics } = kinematicsFor(text, { handCount: 2, holdDepth, gravity });
+          const lineBottom = Math.min(
+            kinematics.geometry.throwPoint(0).y,
+            kinematics.geometry.catchPoint(0).y,
+          );
+          for (let hand = 0; hand < 2; hand++) {
+            for (const window of syncReturnWindows(kinematics, hand)) {
+              let lastSign = 0;
+              let turns = 0;
+              let minY = Infinity;
+              const samples = 240;
+              for (let i = 0; i <= samples; i++) {
+                const t = window.start + (i / samples) * (window.end - window.start);
+                const state = kinematics.handState(hand, t);
+                minY = Math.min(minY, state.position.y);
+                const vy = state.velocity.y;
+                if (Math.abs(vy) < 1e-6) continue;
+                const sign = vy > 0 ? 1 : -1;
+                if (lastSign !== 0 && sign !== lastSign) turns++;
+                lastSign = sign;
+              }
+              const where = `${text} hd=${holdDepth} g=${gravity} hand${hand} @${window.start.toFixed(3)}`;
+              expect(turns, where).toBe(1);
+              expect(minY, where).toBeGreaterThan(lineBottom - 1e-6);
+              checked++;
+            }
+          }
+        }
+      }
+      expect(checked).toBeGreaterThan(0);
+    });
+  }
 });

@@ -602,3 +602,35 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   graph background edges show direction; change patterns with hand paths on —
   no stale loops; drag markers then ↺ Restart — balls fly from the markers;
   "Reset positions" appears only after dragging and snaps C/T/G markers back.
+
+## Round 5 — the oval return (empty-hand bounce)            DONE
+- Commit: (this commit) — Gate: (2026-07-12, "npm run gate", green — 55 files / 711 tests; orchestrator-run)
+- Owner: hands "bounce" — empty hand should trace the juggler's oval (up to
+  quash the throw, slow, then down into the catch); observed: down-to-line,
+  sit, up, down. Diagnosis (two independent Opus designers + adversarial
+  judge; first judge died emitting output, salvaged via transcript): bounce
+  CONFIRMED structural — round-4 pinned the rest at line height, so BOTH
+  flanks must hump above the line (turns=3 per return; 3.8 cm terminal
+  up-down; ~19 ms sit). Designer A (physics-first) won: rest at the
+  deceleration APEX with targetRise = min(holdDepth, v²/2g) capping the flank
+  at the ballistic quash time, and apexRise = ½·v·flank derived from the
+  FINAL post-floor flank (floors raise the apex instead of overshooting).
+  Judge broke Designer B at 51/nh5/hd0.02/g0.5 (turns=5; 6,138 of 25,200
+  sweep returns bounced) and proved the naive synthesis also bounces — the
+  flank-time cap is the load-bearing element. A: ZERO bounces over the
+  25,200-return sweep; continuity identical-or-better (worst acc 7.7e-10,
+  at a pre-existing carry corner).
+- Implementation: exactly 4 line-level edits to buildReturn (diff==spec
+  verified byte-level by an independent reviewer; SHIP on all checks).
+  New pins: single-lobe grid (turns==1) over patterns×holdDepth×gravity×nh
+  incl. the break-B corner; 3-cascade apex == line + holdDepth with genuine
+  static rest at the crown; 522/g30 asserts apex deliberately EXCEEDS
+  holdDepth (do not re-clamp — reintroduces the bounce). Old-code
+  discrimination shown (old turns=3, new turns=1). Elevated sweep 600×5
+  reseeds green. DESIGN §4.3 re-amended (oval; supersedes round-4 rest).
+- Deferred/flagged: (1) crown amplitude = full holdDepth (symmetric oval);
+  a k·holdDepth fraction is the knob if the owner wants a flatter top lobe.
+  (2) Asymmetric throwY≠catchY geometry unexercised (no such UI path today);
+  per-endpoint apex would restore exactness if hand-height editing lands.
+  (3) Operator check: 3/441/5 — the crown should read as one smooth
+  up-pause-down arch; no valley between throw and catch.
