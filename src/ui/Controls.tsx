@@ -34,6 +34,7 @@ import {
   DEFAULT_DWELL_TIME,
   DEFAULT_GHOSTS_ENABLED,
   DEFAULT_GRAPH_MINIMAP,
+  DEFAULT_GRAPH_THROW_LABELS,
   DEFAULT_GRAVITY_VALUE,
   DEFAULT_HOLD_DEPTH_VALUE,
   DEFAULT_ORBIT_COLORING,
@@ -278,6 +279,7 @@ function ViewGroup(): ReactElement {
   const showHands = useAppStore((state) => state.showHands);
   const showHandPaths = useAppStore((state) => state.showHandPaths);
   const graphMinimap = useAppStore((state) => state.graphMinimap);
+  const graphThrowLabels = useAppStore((state) => state.graphThrowLabels);
   const timelineWindow = useAppStore((state) => state.timelineWindow);
   const trailLength = useAppStore((state) => state.trailLength);
   const ghostsEnabled = useAppStore((state) => state.ghostsEnabled);
@@ -294,6 +296,8 @@ function ViewGroup(): ReactElement {
   const setShowHandPaths = useAppStore((state) => state.setShowHandPaths);
   const toggleGraphMinimap = useAppStore((state) => state.toggleGraphMinimap);
   const setGraphMinimap = useAppStore((state) => state.setGraphMinimap);
+  const toggleGraphThrowLabels = useAppStore((state) => state.toggleGraphThrowLabels);
+  const setGraphThrowLabels = useAppStore((state) => state.setGraphThrowLabels);
   const setTimelineWindow = useAppStore((state) => state.setTimelineWindow);
   const setTrailLength = useAppStore((state) => state.setTrailLength);
   const toggleGhosts = useAppStore((state) => state.toggleGhosts);
@@ -309,6 +313,7 @@ function ViewGroup(): ReactElement {
     showHands !== DEFAULT_SHOW_HANDS ||
     showHandPaths !== DEFAULT_SHOW_HAND_PATHS ||
     graphMinimap !== DEFAULT_GRAPH_MINIMAP ||
+    graphThrowLabels !== DEFAULT_GRAPH_THROW_LABELS ||
     ballColor !== DEFAULT_BALL_COLOR;
   const resetView = (): void => {
     setPlaybackSpeed(DEFAULT_PLAYBACK_SPEED);
@@ -320,6 +325,7 @@ function ViewGroup(): ReactElement {
     setShowHands(DEFAULT_SHOW_HANDS);
     setShowHandPaths(DEFAULT_SHOW_HAND_PATHS);
     setGraphMinimap(DEFAULT_GRAPH_MINIMAP);
+    setGraphThrowLabels(DEFAULT_GRAPH_THROW_LABELS);
     setBallColor(DEFAULT_BALL_COLOR);
   };
 
@@ -421,6 +427,12 @@ function ViewGroup(): ReactElement {
           checked={graphMinimap}
           defaultChecked={DEFAULT_GRAPH_MINIMAP}
           onChange={toggleGraphMinimap}
+        />
+        <CheckToggle
+          label="Graph throw labels"
+          checked={graphThrowLabels}
+          defaultChecked={DEFAULT_GRAPH_THROW_LABELS}
+          onChange={toggleGraphThrowLabels}
         />
         <label
           style={{

@@ -53,6 +53,7 @@ function config(pattern: string): ShareConfig {
     graphMaxHeight: 7,
     graphVisible: true,
     graphMinimap: true,
+    graphThrowLabels: true,
     audioEnabled: false,
     catchTickEnabled: true,
     audioVolume: 0.5,

@@ -27,6 +27,7 @@ beforeEach(() => {
     epochs: [],
     theme: 'dark',
     orbitColoring: false,
+    graphThrowLabels: true,
     handCount: DEFAULT_HAND_COUNT,
     gravity: DEFAULT_GRAVITY_VALUE,
     holdDepth: DEFAULT_HOLD_DEPTH_VALUE,
@@ -268,6 +269,15 @@ describe('Controls view group (relocated from Settings)', () => {
     expect(useAppStore.getState().orbitColoring).toBe(false); // fixture baseline
     fireEvent.click(toggle);
     expect(useAppStore.getState().orbitColoring).toBe(true);
+  });
+
+  it('exposes the graph throw-labels toggle (default ON) and flips the store', () => {
+    render(<Controls />);
+    const toggle = screen.getByLabelText('Graph throw labels') as HTMLInputElement;
+    expect(useAppStore.getState().graphThrowLabels).toBe(true); // default ON
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    expect(useAppStore.getState().graphThrowLabels).toBe(false);
   });
 
   it('switches the theme (dark ↔ light) through the store', () => {

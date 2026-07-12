@@ -64,6 +64,7 @@ const shareConfigArb: fc.Arbitrary<ShareConfig> = fc
         graphMaxHeight: fc.integer({ min: 3, max: 11 }),
         graphVisible: fc.boolean(),
         graphMinimap: fc.boolean(),
+        graphThrowLabels: fc.boolean(),
         audioEnabled: fc.boolean(),
         catchTickEnabled: fc.boolean(),
         audioVolume: fc.double({ min: 0, max: 1, noNaN: true, noDefaultInfinity: true }),
@@ -103,6 +104,7 @@ describe('URL codec round-trip (encode → decode = identity to codec precision)
         expect(decoded.chartsVisible).toBe(config.chartsVisible);
         expect(decoded.graphVisible).toBe(config.graphVisible);
         expect(decoded.graphMinimap).toBe(config.graphMinimap);
+        expect(decoded.graphThrowLabels).toBe(config.graphThrowLabels);
         expect(decoded.audioEnabled).toBe(config.audioEnabled);
         expect(decoded.catchTickEnabled).toBe(config.catchTickEnabled);
 
@@ -259,6 +261,7 @@ function sampleConfig(): ShareConfig {
     graphMaxHeight: 7,
     graphVisible: true,
     graphMinimap: true,
+    graphThrowLabels: true,
     audioEnabled: false,
     catchTickEnabled: true,
     audioVolume: 0.5,

@@ -2,22 +2,26 @@
 // owner requirement 7). The graph is now a translucent overlay over the 3D scene,
 // default OFF, toggled by a labeled button in the scene's TOP-LEFT corner (the
 // camera presets sit top-right). When open, a semi-transparent dark backdrop
-// covers the scene with the concentric-ring SVG centered; the scene stays visible
+// covers the scene with the graph SVG centered; the scene stays visible
 // behind it. Node clicks navigate (BFS splice — past bit-identical); the marker,
 // the transition status line, the N stepper and the hard-reset button live with
 // the overlay.
 //
-// Layout is UNCHANGED from the prior panel (concentric excitation rings, ground at
-// center, deterministic — DESIGN.md §5): only the container (panel → overlay) and
-// the palette (light → theme-aware) changed. Performance is unchanged too — the
-// graph/layout/cycle are memoized per (b, N, pattern); only the marker + status
-// line subscribe to simTime.
+// Layout (round 6, owner-approved): core's layoutStateGraph dispatches by size —
+// symmetric stress majorization (exact mirror symmetry, ground at the top apex)
+// up to STRESS_MAX_NODES, the concentric excitation rings beyond. The draw layer
+// here is placement-independent (barbed rim arrowheads, offset bidirectional
+// arcs, teardrop self-loops, throw-number chips — default ON, codec key gt).
+// Performance: graph/layout/cycle are memoized per (b, N, pattern); only the
+// marker + status line subscribe to simTime.
 
 import { memo, useMemo, type CSSProperties, type ReactElement } from 'react';
+import { clamp } from '../core/math';
 import {
   buildStateGraph,
   GRAPH_WARN_N,
   layoutStateGraph,
+  STRESS_MAX_NODES,
   maxThrowOf,
   patternCycle,
   stateToBits,
@@ -30,9 +34,6 @@ import { currentBeatIndex, transitionStatusOf } from '../state/simulation';
 import { usePalette, type Palette } from './theme';
 import { Button } from './widgets';
 
-const CYCLE_COLOR = '#3b82f6';
-const MARKER_COLOR = '#f59e0b';
-
 // SVG geometry (viewBox units) — unchanged from the prior layout.
 const VIEW_SIZE = 480;
 const MARGIN_PLAIN = 30;
@@ -42,14 +43,243 @@ const MIN_NODE_RADIUS = 1.6;
 const TAU = Math.PI * 2;
 const LABEL_NODE_LIMIT = 42;
 /**
- * Clutter gate for the muted directional arrowheads on BASE (non-cycle) edges
- * (owner requirement 2026-07-11). `nodeRadius` shrinks as the graph densifies
- * (geometryOf packs it toward MIN_NODE_RADIUS), so it is a direct proxy for how
- * much room an arrowhead has: below this radius a dense graph has hundreds of tiny
- * edges and per-edge arrowheads read as noise (and cost SVG markers), so we drop
- * them and leave the base edges as plain lines. The blue cycle arrows always show.
+ * Density gate (graphics redesign 2026-07-12). The draw layer counts NODES, not the
+ * (shrinking) node radius, to decide clutter: at/under this many nodes the graph is
+ * sparse enough to carry per-edge arrowheads and (in the overlay) throw-number
+ * labels; above it, base arrowheads are dropped and throw labels auto-downgrade to
+ * cycle-only. This replaces the old BASE_ARROW_MIN_RADIUS gate, which fired BACKWARDS
+ * — small graphs got no arrows while a 400-node graph would have carried hundreds.
  */
-const BASE_ARROW_MIN_RADIUS = 3.5;
+const ARROW_NODE_LIMIT = 42;
+
+/**
+ * The state-graph draw-layer colors (graphics redesign 2026-07-12). The designer's
+ * hexes are the DARK-theme values; the light-theme counterparts here keep the same
+ * contrast roles over the light overlay backdrop. Kept LOCAL to the draw layer rather
+ * than extended onto the shared {@link Palette} (owned by ui/theme, out of this
+ * change's scope): the base greys, accent, amber and text still come from usePalette,
+ * and only the graph's own secondary blues/greys are chosen per theme here.
+ */
+interface GraphColors {
+  readonly baseEdge: string;
+  readonly baseArrow: string;
+  readonly cycleEdge: string;
+  readonly cycleArrow: string;
+  readonly cycleRim: string;
+  readonly glow: string;
+  readonly nodeFill: string;
+  readonly nodeStroke: string;
+  readonly homeRing: string;
+  readonly hoverRing: string;
+  readonly marker: string;
+  readonly chipBg: string;
+  readonly chipBorderBase: string;
+  readonly chipBorderCycle: string;
+  readonly throwCycle: string;
+  readonly throwBase: string;
+  readonly stateLabel: string;
+}
+
+function graphColors(palette: Palette): GraphColors {
+  const dark = palette.name === 'dark';
+  return {
+    // Base edges/arrowheads: lifted off the too-dim palette.edgeStroke so heads read.
+    baseEdge: dark ? '#42546f' : '#b4bdcb',
+    baseArrow: dark ? '#7488a6' : '#7d8898',
+    cycleEdge: palette.accent,
+    cycleArrow: dark ? '#60a5fa' : '#5b8def',
+    cycleRim: dark ? '#93c5fd' : '#bcd7fb',
+    glow: palette.accent,
+    nodeFill: palette.nodeFill,
+    nodeStroke: palette.nodeStroke,
+    homeRing: palette.textSecondary,
+    hoverRing: palette.accentHover,
+    marker: palette.amber,
+    chipBg: dark ? 'rgba(11,17,32,0.86)' : 'rgba(248,250,252,0.92)',
+    chipBorderBase: palette.border,
+    chipBorderCycle: palette.accent,
+    throwCycle: dark ? '#93c5fd' : palette.accent,
+    throwBase: palette.textSecondary,
+    stateLabel: palette.textSecondary,
+  };
+}
+
+// --- Draw-layer geometry primitives (ported from the designer's mockups) ------
+
+type Pt = { readonly x: number; readonly y: number };
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+const vsub = (a: Pt, b: Pt): Pt => ({ x: a.x - b.x, y: a.y - b.y });
+const vadd = (a: Pt, b: Pt): Pt => ({ x: a.x + b.x, y: a.y + b.y });
+const vmul = (a: Pt, s: number): Pt => ({ x: a.x * s, y: a.y * s });
+const vunit = (a: Pt): Pt => {
+  const l = Math.hypot(a.x, a.y) || 1;
+  return { x: a.x / l, y: a.y / l };
+};
+/** Left normal (90° CCW) of a vector. */
+const vperp = (a: Pt): Pt => ({ x: -a.y, y: a.x });
+
+/**
+ * A BARBED arrowhead polygon (concave back at 0.55·len), tip at `tip`, pointing along
+ * unit `dir`. Absolute size in view units (userSpaceOnUse semantics): it never
+ * couples to stroke-width, so a dense graph's hairline edges still land a legible
+ * head. The caller lands `tip` at the node rim so the node never occludes it.
+ */
+function arrowHead(tip: Pt, dir: Pt, len: number, width: number, fill: string, key: string): ReactElement {
+  const back = { x: tip.x - dir.x * len, y: tip.y - dir.y * len };
+  const n = vperp(dir);
+  const half = width / 2;
+  const left = { x: back.x + n.x * half, y: back.y + n.y * half };
+  const right = { x: back.x - n.x * half, y: back.y - n.y * half };
+  const notch = { x: tip.x - dir.x * len * 0.55, y: tip.y - dir.y * len * 0.55 };
+  const points = `${round2(tip.x)},${round2(tip.y)} ${round2(left.x)},${round2(left.y)} ${round2(notch.x)},${round2(notch.y)} ${round2(right.x)},${round2(right.y)}`;
+  return <polygon key={key} points={points} fill={fill} />;
+}
+
+/** A straight directed edge landing its head at b's rim; returns the throw-label point. */
+function straightEdge(
+  a: Pt, b: Pt, r: number, gap: number, stroke: string, width: number,
+  arrowLen: number, arrowW: number, arrowFill: string, throwFS: number, key: string,
+): { elements: ReactElement[]; labelPt: Pt } {
+  const d = vunit(vsub(b, a));
+  const start = vadd(a, vmul(d, r + gap));
+  const tip = vsub(b, vmul(d, r + gap));
+  const elements: ReactElement[] = [];
+  if (arrowLen > 0) {
+    const lineEnd = vsub(tip, vmul(d, arrowLen * 0.9));
+    elements.push(
+      <line key={`e-${key}`} x1={round2(start.x)} y1={round2(start.y)} x2={round2(lineEnd.x)} y2={round2(lineEnd.y)} stroke={stroke} strokeWidth={width} strokeLinecap="round" />,
+      arrowHead(tip, d, arrowLen, arrowW, arrowFill, `h-${key}`),
+    );
+  } else {
+    elements.push(
+      <line key={`e-${key}`} x1={round2(start.x)} y1={round2(start.y)} x2={round2(tip.x)} y2={round2(tip.y)} stroke={stroke} strokeWidth={width} strokeLinecap="round" />,
+    );
+  }
+  const nrm = vperp(d);
+  const mid = vmul(vadd(a, b), 0.5);
+  const labelPt = { x: mid.x + nrm.x * (throwFS * 0.85), y: mid.y + nrm.y * (throwFS * 0.85) };
+  return { elements, labelPt };
+}
+
+/** A quadratic-arc directed edge (signed `bow` perpendicular offset); returns its label point. */
+function arcEdge(
+  a: Pt, b: Pt, r: number, gap: number, bow: number, stroke: string, width: number,
+  arrowLen: number, arrowW: number, arrowFill: string, throwFS: number, key: string,
+): { elements: ReactElement[]; labelPt: Pt } {
+  const mid = vmul(vadd(a, b), 0.5);
+  const chord = vunit(vsub(b, a));
+  const nrm = vperp(chord);
+  const ctrl = vadd(mid, vmul(nrm, bow));
+  const dStart = vunit(vsub(ctrl, a));
+  const dTip = vunit(vsub(b, ctrl));
+  const start = vadd(a, vmul(dStart, r + gap));
+  const tip = vsub(b, vmul(dTip, r + gap));
+  const lineEnd = arrowLen > 0 ? vsub(tip, vmul(dTip, arrowLen * 0.9)) : tip;
+  const elements: ReactElement[] = [
+    <path key={`e-${key}`} d={`M ${round2(start.x)} ${round2(start.y)} Q ${round2(ctrl.x)} ${round2(ctrl.y)} ${round2(lineEnd.x)} ${round2(lineEnd.y)}`} fill="none" stroke={stroke} strokeWidth={width} strokeLinecap="round" />,
+  ];
+  if (arrowLen > 0) {
+    elements.push(arrowHead(tip, dTip, arrowLen, arrowW, arrowFill, `h-${key}`));
+  }
+  // Quadratic-Bézier apex at t = 0.5, nudged further off the arc so the chip clears it.
+  const apex = { x: 0.25 * a.x + 0.5 * ctrl.x + 0.25 * b.x, y: 0.25 * a.y + 0.5 * ctrl.y + 0.25 * b.y };
+  const sign = Math.sign(bow) || 1;
+  const labelPt = { x: apex.x + sign * nrm.x * (throwFS * 0.4), y: apex.y + sign * nrm.y * (throwFS * 0.4) };
+  return { elements, labelPt };
+}
+
+/** A teardrop self-loop (cubic) with a barbed head, pointing outward along `angleOut`. */
+function selfLoop(
+  c: Pt, r: number, angleOut: number, reach: number, stroke: string, width: number,
+  arrowLen: number, arrowW: number, arrowFill: string, key: string,
+): { elements: ReactElement[]; apex: Pt } {
+  const spread = 0.62;
+  const p1 = { x: c.x + r * Math.cos(angleOut - spread), y: c.y + r * Math.sin(angleOut - spread) };
+  const p2 = { x: c.x + r * Math.cos(angleOut + spread), y: c.y + r * Math.sin(angleOut + spread) };
+  const o = { x: Math.cos(angleOut), y: Math.sin(angleOut) };
+  const c1 = { x: p1.x + o.x * reach, y: p1.y + o.y * reach };
+  const c2 = { x: p2.x + o.x * reach, y: p2.y + o.y * reach };
+  const dTip = vunit(vsub(p2, c2));
+  const tip = p2;
+  const end = { x: tip.x - dTip.x * arrowLen * 0.9, y: tip.y - dTip.y * arrowLen * 0.9 };
+  const elements: ReactElement[] = [
+    <path key={`e-${key}`} d={`M ${round2(p1.x)} ${round2(p1.y)} C ${round2(c1.x)} ${round2(c1.y)} ${round2(c2.x)} ${round2(c2.y)} ${round2(end.x)} ${round2(end.y)}`} fill="none" stroke={stroke} strokeWidth={width} strokeLinecap="round" />,
+    arrowHead(tip, dTip, arrowLen, arrowW, arrowFill, `h-${key}`),
+  ];
+  const apex = { x: c.x + (r + reach) * Math.cos(angleOut), y: c.y + (r + reach) * Math.sin(angleOut) };
+  return { elements, apex };
+}
+
+/** Direction (radians) pointing from the graph centroid out through `p` (fallback for the centre). */
+function awayAngle(p: Pt, centroid: Pt, fallback: number): number {
+  const dx = p.x - centroid.x;
+  const dy = p.y - centroid.y;
+  return Math.hypot(dx, dy) > 1e-6 ? Math.atan2(dy, dx) : fallback;
+}
+
+/**
+ * Belt-and-braces linear-chain detector (spec: "in case a degenerate layout ever
+ * reaches the draw layer"). Returns a fan `bow` function only when every node is
+ * ~collinear (max perpendicular spread below ~a node radius) — so it NEVER fires on
+ * the 2D concentric/stress layouts, whose nodes fill a disc. When it does fire, edges
+ * fan to one side with magnitude scaling by level distance (mockup 06).
+ */
+function collinearFan(
+  nodes: GraphLayout['nodes'],
+  posOf: Map<number, Pt>,
+  centroid: Pt,
+  nodeRadius: number,
+): ((fromLevel: number, toBits: number) => number) | null {
+  const pts = nodes.map((n) => posOf.get(n.bits)).filter((p): p is Pt => p !== undefined);
+  if (pts.length < 3) {
+    return null;
+  }
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  for (const p of pts) {
+    const dx = p.x - centroid.x;
+    const dy = p.y - centroid.y;
+    sxx += dx * dx;
+    syy += dy * dy;
+    sxy += dx * dy;
+  }
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  const perp = { x: -Math.sin(theta), y: Math.cos(theta) };
+  let maxPerp = 0;
+  for (const p of pts) {
+    const d = Math.abs((p.x - centroid.x) * perp.x + (p.y - centroid.y) * perp.y);
+    if (d > maxPerp) {
+      maxPerp = d;
+    }
+  }
+  if (maxPerp > Math.max(nodeRadius * 1.2, 2)) {
+    return null;
+  }
+  const levelOf = new Map(nodes.map((n) => [n.bits, n.level] as const));
+  return (fromLevel, toBits) => {
+    const d = Math.abs((levelOf.get(toBits) ?? 0) - fromLevel);
+    return -(nodeRadius * 2.5 + Math.max(0, d - 1) * nodeRadius * 2.2);
+  };
+}
+
+/** A throw-number label: a backdrop pill (chip) with the throw value, kept legible over crossings. */
+function throwChip(
+  x: number, y: number, value: number, fontSize: number,
+  textFill: string, border: string, bg: string, key: string,
+): ReactElement {
+  const s = String(value);
+  const w = s.length * fontSize * 0.62 + fontSize * 0.7;
+  const h = fontSize + fontSize * 0.5;
+  return (
+    <g key={key} style={{ pointerEvents: 'none' }}>
+      <rect x={round2(x - w / 2)} y={round2(y - h / 2)} width={round2(w)} height={round2(h)} rx={round2(h / 2)} fill={bg} stroke={border} strokeWidth={0.6} />
+      <text x={round2(x)} y={round2(y + fontSize * 0.34)} textAnchor="middle" fontSize={fontSize} fill={textFill} style={{ fontFamily: 'ui-monospace, monospace' }}>
+        {s}
+      </text>
+    </g>
+  );
+}
 
 interface GraphGeometry {
   readonly width: number;
@@ -90,13 +320,24 @@ function geometryOf(
     width: VIEW_SIZE,
     height: VIEW_SIZE,
     nodeRadius,
-    markerRadius: Math.max(1.2, nodeRadius * 0.56),
+    // A readable size FLOOR so the amber marker stays findable on dense graphs where
+    // nodeRadius bottoms out at MIN_NODE_RADIUS (graphics redesign 2026-07-12).
+    markerRadius: Math.max(2.4, nodeRadius * 0.62),
     toX: (x) => margin + x * span,
     toY: (y) => margin + y * span,
   };
 }
 
-/** The static graph picture: all edges, cycle highlight, clickable nodes. */
+/**
+ * The static graph picture (graphics redesign 2026-07-12 — placement-independent, so
+ * it renders whatever layout it is handed, concentric or the symmetric-stress one).
+ * Edges are barbed-arrow polygons landing at the node rim (never occluded); base edges
+ * hairline, cycle edges accent-blue; bidirectional pairs split into opposite arcs;
+ * self-loops are teardrops (drawn for ALL, not only on-cycle); throw-number labels are
+ * halo chips (overlay only); cycle nodes get a soft glow + light rim; the ground gets
+ * a dashed home ring; interactive nodes carry a hover ring. All decoration is gated by
+ * NODE COUNT (not the shrinking radius) so dense graphs stay legible.
+ */
 const GraphPicture = memo(function GraphPicture({
   graph,
   layout,
@@ -106,6 +347,9 @@ const GraphPicture = memo(function GraphPicture({
   onNodeClick,
   labels,
   interactive = true,
+  decorated = true,
+  showThrowLabels = false,
+  idPrefix,
 }: {
   readonly graph: CoreStateGraph;
   readonly layout: GraphLayout;
@@ -115,109 +359,201 @@ const GraphPicture = memo(function GraphPicture({
   onNodeClick(bits: number): void;
   /** Force node labels on/off; defaults to the node-count rule (overlay behavior). */
   readonly labels?: boolean;
-  /** When false (the minimap), nodes are plain, unclickable circles (no role/aria). */
+  /** When false (the minimap), nodes are plain, unclickable circles (no role/aria/hover). */
   readonly interactive?: boolean;
+  /** When false (the minimap), skip the glow filter + home ring to stay cheap/clean. */
+  readonly decorated?: boolean;
+  /** Overlay throw-number labels (auto-downgrades to cycle-only above the density limit). */
+  readonly showThrowLabels?: boolean;
+  /** Unique id namespace for this instance's filter defs (overlay vs minimap). */
+  readonly idPrefix: string;
 }): ReactElement {
-  const { toX, toY, nodeRadius } = geometry;
+  const c = graphColors(palette);
+  const { toX, toY, nodeRadius: nr } = geometry;
+  const nodeCount = layout.nodes.length;
+  const baseArrows = nodeCount <= ARROW_NODE_LIMIT;
+  const throwMode: 'off' | 'all' | 'cycleOnly' = !showThrowLabels
+    ? 'off'
+    : nodeCount > ARROW_NODE_LIMIT
+      ? 'cycleOnly'
+      : 'all';
+
+  const gap = 1.3;
+  const baseLen = clamp(nr * 1.5, 6.5, 11);
+  const baseW = baseLen * 0.78;
+  const cycleLen = clamp(nr * 1.75, 8, 13);
+  const cycleW = cycleLen * 0.82;
+  const throwFS = clamp(nr * 1.18, 6.5, 10);
+
   const cycleEdgeKeys = new Set(cycle.edges.map((edge) => `${edge.from}:${edge.to}`));
-  const centerX = toX(0.5);
-  const centerY = toY(0.5);
-  // Base (background) edges get muted directional arrowheads only in the interactive
-  // overlay and only when nodes are big enough to carry them (clutter gate). The
-  // minimap (interactive=false) and dense graphs keep plain lines — see
-  // BASE_ARROW_MIN_RADIUS. The arrows share palette.edgeStroke with the base lines
-  // so they read as secondary to the blue cycle arrows.
-  const showBaseArrows = interactive && nodeRadius >= BASE_ARROW_MIN_RADIUS;
+
+  // Screen-space node positions + centroid + the full edge set (for the bidirectional
+  // pair test — a `to→from` twin means we split both directions into opposite arcs).
+  const posOf = new Map<number, Pt>();
+  for (const node of layout.nodes) {
+    posOf.set(node.bits, { x: toX(node.x), y: toY(node.y) });
+  }
+  let cx = 0;
+  let cy = 0;
+  for (const p of posOf.values()) {
+    cx += p.x;
+    cy += p.y;
+  }
+  const centroid: Pt = { x: cx / (posOf.size || 1), y: cy / (posOf.size || 1) };
+  const edgeSet = new Set<string>();
+  for (const node of layout.nodes) {
+    for (const edge of graph.edgesFrom(node.bits)) {
+      edgeSet.add(`${node.bits}:${edge.to}`);
+    }
+  }
+  const fan = collinearFan(layout.nodes, posOf, centroid, nr);
 
   const baseEdges: ReactElement[] = [];
   const cycleEdges: ReactElement[] = [];
+  const loopEdges: ReactElement[] = [];
+  const candidates: { readonly x: number; readonly y: number; readonly val: number; readonly onCyc: boolean; readonly key: string }[] = [];
+
   for (const node of layout.nodes) {
-    const from = layout.coordOf.get(node.bits);
-    if (!from) {
+    const a = posOf.get(node.bits);
+    if (!a) {
       continue;
     }
     for (const edge of graph.edgesFrom(node.bits)) {
       const key = `${node.bits}:${edge.to}`;
+      const rkey = `${edge.to}:${node.bits}`;
       const onCycle = cycleEdgeKeys.has(key);
+
       if (edge.to === node.bits) {
-        if (onCycle) {
-          const loopRadius = Math.max(3, nodeRadius * 0.7);
-          const loopDistance = nodeRadius + loopRadius - 1;
-          cycleEdges.push(
-            <circle
-              key={`loop-${key}`}
-              cx={toX(from.x) + Math.cos(node.angle) * loopDistance}
-              cy={toY(from.y) + Math.sin(node.angle) * loopDistance}
-              r={loopRadius}
-              fill="none"
-              stroke={CYCLE_COLOR}
-              strokeWidth={1.8}
-            />,
-          );
-        }
+        // Self-loop teardrop — drawn for ALL self-loops (base included), with a head.
+        const outAngle = awayAngle(a, centroid, node.angle);
+        const loop = selfLoop(
+          a,
+          nr,
+          outAngle,
+          nr * 2.2,
+          onCycle ? c.cycleEdge : c.baseEdge,
+          onCycle ? 2 : 1,
+          onCycle ? cycleLen * 0.8 : baseLen * 0.75,
+          onCycle ? cycleW * 0.8 : baseW * 0.75,
+          onCycle ? c.cycleArrow : c.baseArrow,
+          key,
+        );
+        (onCycle ? cycleEdges : loopEdges).push(...loop.elements);
+        candidates.push({ x: loop.apex.x, y: loop.apex.y, val: edge.throwValue, onCyc: onCycle, key });
         continue;
       }
-      const to = layout.coordOf.get(edge.to);
-      if (!to) {
+      const b = posOf.get(edge.to);
+      if (!b) {
         continue;
       }
-      const x1 = toX(from.x);
-      const y1 = toY(from.y);
-      const x2 = toX(to.x);
-      const y2 = toY(to.y);
-      if (onCycle) {
-        const midX = (x1 + x2) / 2;
-        const midY = (y1 + y2) / 2;
-        const chordLength = Math.hypot(x2 - x1, y2 - y1);
-        let dirX = midX - centerX;
-        let dirY = midY - centerY;
-        const dirLength = Math.hypot(dirX, dirY);
-        if (dirLength > 1e-6) {
-          dirX /= dirLength;
-          dirY /= dirLength;
-        } else {
-          dirX = -(y2 - y1) / (chordLength || 1);
-          dirY = (x2 - x1) / (chordLength || 1);
-        }
-        const bow = Math.min(26, chordLength * 0.22);
-        cycleEdges.push(
-          <path
-            key={`edge-${key}`}
-            d={`M ${x1} ${y1} Q ${midX + dirX * bow} ${midY + dirY * bow} ${x2} ${y2}`}
-            fill="none"
-            stroke={CYCLE_COLOR}
-            strokeWidth={1.8}
-            markerEnd="url(#stategraph-arrow)"
-          />,
-        );
-      } else {
-        baseEdges.push(
-          <line
-            key={`edge-${key}`}
-            x1={x1}
-            y1={y1}
-            x2={x2}
-            y2={y2}
-            stroke={palette.edgeStroke}
-            strokeWidth={1}
-            markerEnd={showBaseArrows ? 'url(#stategraph-arrow-base)' : undefined}
-          />,
-        );
-      }
+      const stroke = onCycle ? c.cycleEdge : c.baseEdge;
+      const width = onCycle ? 2.2 : 1;
+      const arrowFill = onCycle ? c.cycleArrow : c.baseArrow;
+      // Base arrowheads honour the density gate; cycle arrows always show.
+      const arrowLen = onCycle ? cycleLen : baseArrows ? baseLen : 0;
+      const arrowW = onCycle ? cycleW : baseArrows ? baseW : 0;
+      const bow = fan
+        ? fan(node.level, edge.to)
+        : edgeSet.has(rkey)
+          ? (node.bits < edge.to ? 1 : -1) * clamp(Math.hypot(b.x - a.x, b.y - a.y) * 0.16, 5, 18)
+          : 0;
+      const built =
+        bow === 0
+          ? straightEdge(a, b, nr, gap, stroke, width, arrowLen, arrowW, arrowFill, throwFS, key)
+          : arcEdge(a, b, nr, gap, bow, stroke, width, arrowLen, arrowW, arrowFill, throwFS, key);
+      (onCycle ? cycleEdges : baseEdges).push(...built.elements);
+      candidates.push({ x: built.labelPt.x, y: built.labelPt.y, val: edge.throwValue, onCyc: onCycle, key });
     }
   }
 
-  const showLabels = labels ?? layout.nodes.length <= LABEL_NODE_LIMIT;
-  const nodes: ReactElement[] = layout.nodes.map((node) => {
+  // Throw labels: place cycle labels first (always), then base labels only where a
+  // grid cell is still free — a graceful auto-hide where edges crowd (the "collision
+  // behaviour"). Dense graphs (throwMode 'cycleOnly') drop base labels entirely.
+  const throwLabels: ReactElement[] = [];
+  if (throwMode !== 'off') {
+    const cells = new Set<string>();
+    const cellW = throwFS * 1.35;
+    const cellH = throwFS * 1.15;
+    const ordered = [...candidates.filter((k) => k.onCyc), ...candidates.filter((k) => !k.onCyc)];
+    for (const cand of ordered) {
+      if (throwMode === 'cycleOnly' && !cand.onCyc) {
+        continue;
+      }
+      const cellKey = `${Math.round(cand.x / cellW)}:${Math.round(cand.y / cellH)}`;
+      if (!cand.onCyc && cells.has(cellKey)) {
+        continue;
+      }
+      cells.add(cellKey);
+      throwLabels.push(
+        throwChip(
+          cand.x,
+          cand.y,
+          cand.val,
+          throwFS,
+          cand.onCyc ? c.throwCycle : c.throwBase,
+          cand.onCyc ? c.chipBorderCycle : c.chipBorderBase,
+          c.chipBg,
+          `t-${cand.key}`,
+        ),
+      );
+    }
+  }
+
+  const showLabels = labels ?? nodeCount <= LABEL_NODE_LIMIT;
+  const ground = graph.ground;
+  const glowLayer: ReactElement[] = [];
+  const nodeEls: ReactElement[] = [];
+  for (const node of layout.nodes) {
+    const p = posOf.get(node.bits);
+    if (!p) {
+      continue;
+    }
     const onCycle = cycle.nodeSet.has(node.bits);
-    const labelAngle = cycleEdgeKeys.has(`${node.bits}:${node.bits}`)
-      ? node.angle + Math.PI
-      : node.angle;
-    const labelCos = Math.cos(labelAngle);
-    const labelDistance = nodeRadius + 7;
-    const labelAnchor = labelCos > 0.35 ? 'start' : labelCos < -0.35 ? 'end' : 'middle';
-    // Non-interactive (minimap) nodes drop role/aria/onClick and the pointer
-    // cursor — the whole minimap is a single "expand" affordance instead.
+    if (onCycle && decorated) {
+      glowLayer.push(
+        <circle
+          key={`glow-${node.bits}`}
+          cx={round2(p.x)}
+          cy={round2(p.y)}
+          r={round2(nr * 1.7)}
+          fill={c.glow}
+          opacity={0.28}
+          filter={`url(#${idPrefix}-softglow)`}
+        />,
+      );
+    }
+    const decoRings: ReactElement[] = [];
+    if (decorated && node.bits === ground) {
+      decoRings.push(
+        <circle
+          key="home"
+          cx={round2(p.x)}
+          cy={round2(p.y)}
+          r={round2(nr + 3.5)}
+          fill="none"
+          stroke={c.homeRing}
+          strokeWidth={1}
+          strokeDasharray="2.4 2.4"
+          style={{ pointerEvents: 'none' }}
+        />,
+      );
+    }
+    if (interactive) {
+      // Pointer hover / keyboard focus surfaces an accent ring (see the <style> below).
+      decoRings.push(
+        <circle
+          key="hover"
+          className="sg-hover-ring"
+          cx={round2(p.x)}
+          cy={round2(p.y)}
+          r={round2(nr + 3.5)}
+          fill="none"
+          stroke={c.hoverRing}
+          strokeWidth={1.6}
+          style={{ pointerEvents: 'none', opacity: 0 }}
+        />,
+      );
+    }
     const interactiveProps = interactive
       ? {
           role: 'button',
@@ -226,72 +562,62 @@ const GraphPicture = memo(function GraphPicture({
           onClick: () => onNodeClick(node.bits),
         }
       : {};
-    return (
-      <g key={`node-${node.bits}`}>
+    const labelAngle = cycleEdgeKeys.has(`${node.bits}:${node.bits}`) ? node.angle + Math.PI : node.angle;
+    const labelCos = Math.cos(labelAngle);
+    const labelDistance = nr + 8;
+    const labelAnchor = labelCos > 0.35 ? 'start' : labelCos < -0.35 ? 'end' : 'middle';
+    const labelFS = clamp(nr * 1.05, 7, 9);
+    nodeEls.push(
+      <g key={`node-${node.bits}`} className={interactive ? 'sg-node' : undefined}>
+        {decoRings}
         <circle
           {...interactiveProps}
-          cx={toX(node.x)}
-          cy={toY(node.y)}
-          r={nodeRadius}
-          fill={onCycle ? CYCLE_COLOR : palette.nodeFill}
-          stroke={onCycle ? CYCLE_COLOR : palette.nodeStroke}
-          strokeWidth={1.2}
+          cx={round2(p.x)}
+          cy={round2(p.y)}
+          r={round2(nr)}
+          fill={onCycle ? c.cycleEdge : c.nodeFill}
+          stroke={onCycle ? c.cycleRim : c.nodeStroke}
+          strokeWidth={onCycle ? 1.4 : 1.2}
         >
           <title>{`state ${node.label} (level ${node.level})`}</title>
         </circle>
         {showLabels ? (
           <text
-            x={toX(node.x) + labelCos * labelDistance}
-            y={toY(node.y) + Math.sin(labelAngle) * labelDistance + 3}
+            x={round2(p.x + labelCos * labelDistance)}
+            y={round2(p.y + Math.sin(labelAngle) * labelDistance + labelFS * 0.35)}
             textAnchor={labelAnchor}
-            fontSize={8}
-            fill={palette.textSecondary}
+            fontSize={labelFS}
+            fill={c.stateLabel}
             style={{ pointerEvents: 'none', fontFamily: 'ui-monospace, monospace' }}
           >
             {node.label}
           </text>
         ) : null}
-      </g>
+      </g>,
     );
-  });
+  }
 
   return (
     <>
       <defs>
-        <marker
-          id="stategraph-arrow"
-          viewBox="0 0 8 8"
-          refX={8 + nodeRadius / 1.8}
-          refY={4}
-          markerWidth={7}
-          markerHeight={7}
-          orient="auto-start-reverse"
-        >
-          <path d="M 0 0 L 8 4 L 0 8 z" fill={CYCLE_COLOR} />
-        </marker>
-        {/* Muted base-edge arrowhead: smaller than the cycle marker and drawn in the
-            edge-stroke color so it reads as a secondary, background direction cue.
-            Only emitted when base arrows are shown (never in the minimap), so a dense
-            graph carries no unused marker. Its id differs from #stategraph-arrow, and
-            the overlay + minimap are never mounted at once (verified: StateGraph
-            renders one xor the other), so no duplicate marker id can exist in the DOM. */}
-        {showBaseArrows ? (
-          <marker
-            id="stategraph-arrow-base"
-            viewBox="0 0 8 8"
-            refX={8 + nodeRadius / 1.3}
-            refY={4}
-            markerWidth={5.5}
-            markerHeight={5.5}
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 0 L 8 4 L 0 8 z" fill={palette.edgeStroke} />
-          </marker>
+        {decorated ? (
+          // One shared soft-glow filter (cycle-node haloes + the marker). Cycle nodes
+          // are few (the pattern's period), so per-cycle-node glow stays cheap even on
+          // a 126-node graph; the minimap skips it entirely (decorated=false).
+          <filter id={`${idPrefix}-softglow`} x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation={3.2} />
+          </filter>
         ) : null}
       </defs>
+      {interactive ? (
+        <style>{`.sg-node:hover .sg-hover-ring,.sg-node:focus-within .sg-hover-ring{opacity:1 !important;}`}</style>
+      ) : null}
+      <g>{glowLayer}</g>
       <g>{baseEdges}</g>
+      <g>{loopEdges}</g>
       <g>{cycleEdges}</g>
-      <g>{nodes}</g>
+      <g>{nodeEls}</g>
+      <g>{throwLabels}</g>
     </>
   );
 });
@@ -307,12 +633,18 @@ function CurrentStateMarker({
   layout,
   geometry,
   maxHeight,
+  color,
   markerLabel = 'Current state marker',
+  glowFilterId,
 }: {
   readonly layout: GraphLayout;
   readonly geometry: GraphGeometry;
   readonly maxHeight: number;
+  /** The (theme-aware) amber marker color. */
+  readonly color: string;
   readonly markerLabel?: string;
+  /** When set (the overlay), a faint glow keeps the marker findable each beat. */
+  readonly glowFilterId?: string;
 }): ReactElement | null {
   const bits = useAppStore((state) =>
     stateToBits(
@@ -323,17 +655,24 @@ function CurrentStateMarker({
   if (!coord) {
     return null;
   }
+  const mx = round2(geometry.toX(coord.x));
+  const my = round2(geometry.toY(coord.y));
+  const r = geometry.markerRadius;
   return (
-    <circle
-      aria-label={markerLabel}
-      cx={geometry.toX(coord.x)}
-      cy={geometry.toY(coord.y)}
-      r={geometry.markerRadius}
-      fill={MARKER_COLOR}
-      stroke="#ffffff"
-      strokeWidth={1.2}
-      style={{ pointerEvents: 'none' }}
-    />
+    <g style={{ pointerEvents: 'none' }}>
+      {glowFilterId ? (
+        <circle cx={mx} cy={my} r={round2(r * 1.7)} fill={color} opacity={0.35} filter={`url(#${glowFilterId})`} />
+      ) : null}
+      <circle
+        aria-label={markerLabel}
+        cx={mx}
+        cy={my}
+        r={round2(r)}
+        fill={color}
+        stroke="#ffffff"
+        strokeWidth={1.3}
+      />
+    </g>
   );
 }
 
@@ -347,7 +686,7 @@ function StatusLine(): ReactElement {
   if (status) {
     const beats = status.beatsRemaining === 1 ? 'beat' : 'beats';
     return (
-      <p role="status" style={{ ...statusStyle(palette), color: MARKER_COLOR, fontWeight: 700 }}>
+      <p role="status" style={{ ...statusStyle(palette), color: palette.amber, fontWeight: 700 }}>
         transitioning to {status.targetText} ({status.beatsRemaining} {beats})
       </p>
     );
@@ -418,6 +757,7 @@ function useGraphModel(): GraphModel {
 function StateGraphBody(): ReactElement {
   const palette = usePalette();
   const navigateToState = useAppStore((state) => state.navigateToState);
+  const graphThrowLabels = useAppStore((state) => state.graphThrowLabels);
   const model = useGraphModel();
 
   if (model.status === 'unavailable') {
@@ -462,12 +802,23 @@ function StateGraphBody(): ReactElement {
           geometry={geometry}
           palette={palette}
           onNodeClick={navigateToState}
+          showThrowLabels={graphThrowLabels}
+          idPrefix="sg-overlay"
         />
-        <CurrentStateMarker layout={layout} geometry={geometry} maxHeight={graphMaxHeight} />
+        <CurrentStateMarker
+          layout={layout}
+          geometry={geometry}
+          maxHeight={graphMaxHeight}
+          color={palette.amber}
+          glowFilterId="sg-overlay-softglow"
+        />
       </svg>
       <p style={{ ...statusStyle(palette), fontSize: '0.72rem', textAlign: 'center' }}>
-        {graph.nodes.length} states (b = {ballCount}, N = {graphMaxHeight}) in excitation rings
-        (ground at centre). Click a state to transition to it.
+        {graph.nodes.length} states (b = {ballCount}, N = {graphMaxHeight}
+        {graph.nodes.length <= STRESS_MAX_NODES
+          ? '), symmetric layout (ground at the top'
+          : ') in excitation rings (ground at centre'}
+        ). Click a state to transition to it.
       </p>
     </div>
   );
@@ -542,11 +893,14 @@ function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
               onNodeClick={NOOP}
               labels={false}
               interactive={false}
+              decorated={false}
+              idPrefix="sg-minimap"
             />
             <CurrentStateMarker
               layout={layout}
               geometry={geometry}
               maxHeight={graphMaxHeight}
+              color={palette.amber}
               markerLabel="State minimap marker"
             />
           </svg>

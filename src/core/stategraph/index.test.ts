@@ -17,6 +17,8 @@ import {
   shortestCycle,
   stateAtBits,
   stateToBits,
+  STRESS_MAX_NODES,
+  type GraphLayout,
   type StateBits,
   type StateGraph,
 } from './index';
@@ -522,9 +524,57 @@ describe('degenerate inputs', () => {
   });
 });
 
-// --- Layout -----------------------------------------------------------------
+// --- Layout ------------------------------------------------------------------
 
-describe('layoutStateGraph (concentric excitation rings)', () => {
+/** Mean mirror-symmetry error about the vertical axis through the centroid:
+ *  reflect each node, take the distance to the nearest actual node, average, and
+ *  normalize by the cloud's RMS radius (scale-invariant). 0 ⇔ exactly symmetric. */
+function mirrorError(layout: GraphLayout): number {
+  const pts = layout.nodes.map((n) => ({ x: n.x, y: n.y }));
+  const n = pts.length;
+  let cx = 0;
+  let cy = 0;
+  for (const p of pts) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= n;
+  cy /= n;
+  let rms = 0;
+  for (const p of pts) {
+    rms += (p.x - cx) ** 2 + (p.y - cy) ** 2;
+  }
+  rms = Math.sqrt(rms / n) || 1;
+  let sum = 0;
+  for (const p of pts) {
+    const rx = 2 * cx - p.x;
+    let best = Infinity;
+    for (const q of pts) {
+      const d = (q.x - rx) ** 2 + (q.y - p.y) ** 2;
+      if (d < best) {
+        best = d;
+      }
+    }
+    sum += Math.sqrt(best);
+  }
+  return sum / n / rms;
+}
+
+/** Smallest pairwise node distance in the layout. */
+function minNodeSeparation(layout: GraphLayout): number {
+  const pts = layout.nodes.map((n) => ({ x: n.x, y: n.y }));
+  let min = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const a = pts[i] as { x: number; y: number };
+      const b = pts[j] as { x: number; y: number };
+      min = Math.min(min, Math.hypot(a.x - b.x, a.y - b.y));
+    }
+  }
+  return min;
+}
+
+describe('layoutStateGraph (symmetric stress majorization)', () => {
   it('lays out every node exactly once with finite, in-box coordinates', () => {
     for (const [ballCount, maxHeight] of [
       [3, 5],
@@ -540,17 +590,166 @@ describe('layoutStateGraph (concentric excitation rings)', () => {
         expect(Number.isFinite(node.y)).toBe(true);
         expect(Number.isFinite(node.angle)).toBe(true);
         expect(Number.isFinite(node.radius)).toBe(true);
-        expect(node.x).toBeGreaterThanOrEqual(0);
-        expect(node.x).toBeLessThanOrEqual(1);
-        expect(node.y).toBeGreaterThanOrEqual(0);
-        expect(node.y).toBeLessThanOrEqual(1);
+        // Stress layouts normalize into [MARGIN, 1 − MARGIN] with MARGIN = 0.06.
+        expect(node.x).toBeGreaterThanOrEqual(0.06 - 1e-9);
+        expect(node.x).toBeLessThanOrEqual(0.94 + 1e-9);
+        expect(node.y).toBeGreaterThanOrEqual(0.06 - 1e-9);
+        expect(node.y).toBeLessThanOrEqual(0.94 + 1e-9);
         expect(layout.coordOf.get(node.bits)).toEqual({ x: node.x, y: node.y });
       }
     }
   });
 
-  it('pins the ground state at the disc center', () => {
+  it('(3,5) is at least as mirror-symmetric as the hand-made reference (≈0)', () => {
+    // The (3,5) graph has a trivial automorphism group, so free SMACOF relaxes
+    // away from symmetry (measured mirror error ~0.26, and the current concentric
+    // layout ~0.43). Constraining the majorization to the mirror subspace holds
+    // it exactly symmetric — matching the hand-made excitation-level triangle,
+    // whose mirror error is ~0. Threshold 0.02 pins that with headroom.
+    const layout = layoutStateGraph(buildStateGraph(3, 5));
+    expect(mirrorError(layout)).toBeLessThan(0.02);
+  });
+
+  it('is exactly mirror-symmetric across the stress-regime (b, N) range', () => {
+    for (const [ballCount, maxHeight] of [
+      [3, 5],
+      [2, 6],
+      [3, 7],
+      [4, 7],
+      [3, 9],
+      [4, 9],
+      [5, 9],
+    ] as const) {
+      const layout = layoutStateGraph(buildStateGraph(ballCount, maxHeight));
+      expect(layout.nodes.length).toBeLessThanOrEqual(STRESS_MAX_NODES);
+      expect(mirrorError(layout)).toBeLessThan(0.02);
+    }
+  });
+
+  it('holds a minimum node separation across the stress range', () => {
+    for (const [ballCount, maxHeight] of [
+      [3, 5],
+      [3, 7],
+      [3, 9],
+      [4, 9],
+      [5, 9],
+    ] as const) {
+      const layout = layoutStateGraph(buildStateGraph(ballCount, maxHeight));
+      // Global measured minimum across all in-range graphs was ~0.032 (the densest
+      // 126-node cases); 0.015 pins the floor with headroom.
+      expect(minNodeSeparation(layout)).toBeGreaterThan(0.015);
+    }
+  });
+
+  it('(7,8) is the clean wheel: no three nodes collinear, wide separation', () => {
+    // (7,8) is degenerate for the level-row layout (one node per level → a line),
+    // so it falls back to free SMACOF, whose natural optimum is a symmetric wheel
+    // (a hub + a fanned rim). Assert no three nodes are near-collinear.
+    const layout = layoutStateGraph(buildStateGraph(7, 8));
+    const pts = layout.nodes.map((n) => ({ x: n.x, y: n.y }));
+    expect(pts).toHaveLength(8);
+    let worstColinearity = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        for (let k = j + 1; k < pts.length; k++) {
+          const a = pts[i] as { x: number; y: number };
+          const b = pts[j] as { x: number; y: number };
+          const c = pts[k] as { x: number; y: number };
+          const area = Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
+          const s1 = Math.hypot(b.x - a.x, b.y - a.y);
+          const s2 = Math.hypot(c.x - a.x, c.y - a.y);
+          // 2·area / (s1·s2) = |sin θ| at vertex a — small ⇒ nearly collinear.
+          worstColinearity = Math.min(worstColinearity, area / (s1 * s2 || 1));
+        }
+      }
+    }
+    // Measured ~0.12; 0.03 guards against any three nodes lining up.
+    expect(worstColinearity).toBeGreaterThan(0.03);
+    expect(minNodeSeparation(layout)).toBeGreaterThan(0.2);
+    expect(mirrorError(layout)).toBeLessThan(0.02);
+  });
+
+  it('is bit-identical across two invocations (determinism)', () => {
+    for (const [ballCount, maxHeight] of [
+      [3, 5],
+      [7, 8],
+      [4, 9],
+    ] as const) {
+      const a = layoutStateGraph(buildStateGraph(ballCount, maxHeight));
+      const b = layoutStateGraph(buildStateGraph(ballCount, maxHeight));
+      expect(a.nodes.map((n) => [n.bits, n.x, n.y, n.angle, n.radius, n.indexInLevel])).toEqual(
+        b.nodes.map((n) => [n.bits, n.x, n.y, n.angle, n.radius, n.indexInLevel]),
+      );
+    }
+  });
+
+  it('level populations equal the excitation-level histogram', () => {
     const graph = buildStateGraph(3, 7);
+    const layout = layoutStateGraph(graph);
+    const histogram = new Map<number, number>();
+    for (const node of graph.nodes) {
+      histogram.set(graph.level(node), (histogram.get(graph.level(node)) ?? 0) + 1);
+    }
+    const counts = new Map<number, number>();
+    for (const node of layout.nodes) {
+      counts.set(node.level, (counts.get(node.level) ?? 0) + 1);
+    }
+    expect(counts).toEqual(histogram);
+    expect(layout.levelCount).toBe(histogram.size);
+    expect(layout.maxNodesPerLevel).toBe(Math.max(...histogram.values()));
+  });
+
+  it('keeps the 531 cycle reasonably local', () => {
+    // Stress majorization optimizes global distance fidelity + symmetry rather
+    // than cycle locality, so cycle chords are longer than under the barycenter
+    // rings (measured ~0.32). 0.5 guards against a cross-disc scattering.
+    const graph = buildStateGraph(3, 7);
+    const layout = layoutStateGraph(graph);
+    const cycle = patternCycle([5, 3, 1], 7);
+    const chords = cycle.edges
+      .filter((edge) => edge.from !== edge.to)
+      .map((edge) => {
+        const from = layout.coordOf.get(edge.from);
+        const to = layout.coordOf.get(edge.to);
+        expect(from).toBeDefined();
+        expect(to).toBeDefined();
+        return Math.hypot((from?.x ?? 0) - (to?.x ?? 0), (from?.y ?? 0) - (to?.y ?? 0));
+      });
+    expect(chords.length).toBeGreaterThan(0);
+    const meanChord = chords.reduce((sum, value) => sum + value, 0) / chords.length;
+    expect(meanChord).toBeLessThan(0.5);
+  });
+
+  it('centers a degenerate single-node graph', () => {
+    const layout = layoutStateGraph(buildStateGraph(4, 4));
+    expect(layout.nodes).toHaveLength(1);
+    expect(layout.nodes[0]?.x).toBe(0.5);
+    expect(layout.nodes[0]?.y).toBe(0.5);
+    expect(layout.nodes[0]?.radius).toBe(0);
+  });
+});
+
+describe('layoutStateGraph (concentric rings beyond the stress threshold)', () => {
+  it('hands off to concentric rings above STRESS_MAX_NODES', () => {
+    // Just below the threshold: stress (ground is not pinned to the exact center).
+    const below = buildStateGraph(5, 9); // C(9,5) = 126 ≤ 150
+    expect(below.nodes).toHaveLength(126);
+    const belowLayout = layoutStateGraph(below);
+    const belowGround = belowLayout.nodes.find((node) => node.bits === below.ground);
+    expect(belowGround?.radius).toBeGreaterThan(0);
+
+    // Just above the threshold: concentric rings (ground pinned to the center).
+    const above = buildStateGraph(3, 11); // C(11,3) = 165 > 150
+    expect(above.nodes).toHaveLength(165);
+    const aboveLayout = layoutStateGraph(above);
+    const aboveGround = aboveLayout.nodes.find((node) => node.bits === above.ground);
+    expect(aboveGround?.radius).toBe(0);
+    expect(aboveGround?.x).toBe(0.5);
+    expect(aboveGround?.y).toBe(0.5);
+  });
+
+  it('pins the ground state at the disc center (concentric regime)', () => {
+    const graph = buildStateGraph(3, 11); // 165 nodes → concentric
     const layout = layoutStateGraph(graph);
     const groundNode = layout.nodes.find((node) => node.bits === graph.ground);
     expect(groundNode?.level).toBe(0);
@@ -561,8 +760,8 @@ describe('layoutStateGraph (concentric excitation rings)', () => {
 
   it('gives each level one shared radius, strictly increasing with level', () => {
     for (const [ballCount, maxHeight] of [
-      [3, 7],
-      [4, 7],
+      [3, 11], // 165 nodes
+      [5, 11], // 462 nodes
     ] as const) {
       const layout = layoutStateGraph(buildStateGraph(ballCount, maxHeight));
       const radiusOfLevel = new Map<number, number>();
@@ -585,52 +784,6 @@ describe('layoutStateGraph (concentric excitation rings)', () => {
     }
   });
 
-  it('ring populations equal the excitation-level histogram', () => {
-    const graph = buildStateGraph(3, 7);
-    const layout = layoutStateGraph(graph);
-    const histogram = new Map<number, number>();
-    for (const node of graph.nodes) {
-      histogram.set(graph.level(node), (histogram.get(graph.level(node)) ?? 0) + 1);
-    }
-    const ringCounts = new Map<number, number>();
-    for (const node of layout.nodes) {
-      ringCounts.set(node.level, (ringCounts.get(node.level) ?? 0) + 1);
-    }
-    expect(ringCounts).toEqual(histogram);
-    expect(layout.levelCount).toBe(histogram.size);
-    expect(layout.maxNodesPerLevel).toBe(Math.max(...histogram.values()));
-  });
-
-  it('is deterministic across builds (coordinates, angles, radii, ring order)', () => {
-    const a = layoutStateGraph(buildStateGraph(3, 6));
-    const b = layoutStateGraph(buildStateGraph(3, 6));
-    expect(a.nodes.map((n) => [n.bits, n.x, n.y, n.angle, n.radius, n.indexInLevel])).toEqual(
-      b.nodes.map((n) => [n.bits, n.x, n.y, n.angle, n.radius, n.indexInLevel]),
-    );
-  });
-
-  it('keeps the 531 cycle local: mean cycle-edge chord stays short', () => {
-    // The barycenter ordering must keep a pattern's cycle reading as a compact
-    // loop (short hops between angularly-near nodes), not cross-disc chords.
-    // Measured 0.108 at implementation time; 0.25 guards ordering regressions
-    // (the single-circle strawman layout measured ~0.27 mean on this cycle).
-    const graph = buildStateGraph(3, 7);
-    const layout = layoutStateGraph(graph);
-    const cycle = patternCycle([5, 3, 1], 7);
-    const chords = cycle.edges
-      .filter((edge) => edge.from !== edge.to)
-      .map((edge) => {
-        const from = layout.coordOf.get(edge.from);
-        const to = layout.coordOf.get(edge.to);
-        expect(from).toBeDefined();
-        expect(to).toBeDefined();
-        return Math.hypot((from?.x ?? 0) - (to?.x ?? 0), (from?.y ?? 0) - (to?.y ?? 0));
-      });
-    expect(chords.length).toBeGreaterThan(0);
-    const meanChord = chords.reduce((sum, value) => sum + value, 0) / chords.length;
-    expect(meanChord).toBeLessThan(0.25);
-  });
-
   it('handles the C(11,5) worst case: 462 finite nodes, well under budget', () => {
     const graph = buildStateGraph(5, 11);
     expect(graph.nodes).toHaveLength(462);
@@ -642,15 +795,7 @@ describe('layoutStateGraph (concentric excitation rings)', () => {
       expect(Number.isFinite(node.x)).toBe(true);
       expect(Number.isFinite(node.y)).toBe(true);
     }
-    // Measured ~30 ms on the reference machine; 200 ms is the generous ceiling.
+    // Concentric rings: measured ~30 ms on the reference machine; 200 ms ceiling.
     expect(elapsedMs).toBeLessThan(200);
-  });
-
-  it('centers a degenerate single-node graph', () => {
-    const layout = layoutStateGraph(buildStateGraph(4, 4));
-    expect(layout.nodes).toHaveLength(1);
-    expect(layout.nodes[0]?.x).toBe(0.5);
-    expect(layout.nodes[0]?.y).toBe(0.5);
-    expect(layout.nodes[0]?.radius).toBe(0);
   });
 });

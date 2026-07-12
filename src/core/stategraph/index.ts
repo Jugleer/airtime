@@ -511,34 +511,65 @@ export function stateAtBits(values: readonly number[], beat: number, maxHeight: 
   return bits >>> 0;
 }
 
-// --- Layout (concentric excitation rings, deterministic ordering) ------------
+// --- Layout ------------------------------------------------------------------
+//
+// Two deterministic regimes, dispatched by node count (DESIGN.md §5, owner
+// ruling round 6):
+//
+//  • ≤ STRESS_MAX_NODES nodes → SYMMETRIC STRESS MAJORIZATION (SMACOF). A pure,
+//    deterministic Kamada–Kawai embedding on graph-theoretic (BFS) distances,
+//    weights 1/d², seeded from a mirror-symmetric excitation-level arrangement and
+//    kept exactly mirror-symmetric throughout (per-iteration symmetry snapping —
+//    the owner's overriding priority). The siteswap state graphs have a trivial
+//    automorphism group (e.g. (3,5) has none), so free SMACOF relaxes AWAY from
+//    symmetry; constraining the majorization to the mirror subspace is what
+//    delivers the hand-made triangle's symmetry for (3,5). A degenerate,
+//    path/wheel-like graph whose level rows collapse to a line (e.g. (7,8), one
+//    node per level) is detected and re-laid by FREE SMACOF, whose natural
+//    low-stress optimum for those graphs is a symmetric wheel that snaps clean.
+//
+//  • > STRESS_MAX_NODES nodes → CONCENTRIC EXCITATION RINGS (the original layout;
+//    ground centred, one ring per BFS level). Stress majorization turns O(n²·iters)
+//    expensive and the picture turns to a hairball beyond ~150 nodes, so the cheap
+//    ring layout takes over (the 462-node C(11,5) worst case lays out in ~30 ms).
+//
+// Both regimes are pure (no Date.now/Math.random/performance) and a stable pure
+// function of (graph, options) — identical inputs give bit-identical coordinates.
 
 const TAU = Math.PI * 2;
 
-/** One laid-out node: its excitation ring and normalized coordinates. */
+/** Node count at or below which {@link layoutStateGraph} uses stress majorization;
+ *  above it, concentric rings (DESIGN.md §5, owner ruling round 6). */
+export const STRESS_MAX_NODES = 150;
+
+/** One laid-out node with its excitation level and normalized coordinates. */
 export interface GraphLayoutNode {
   readonly bits: StateBits;
   readonly level: number;
-  /** 0-based angular slot within the node's ring (barycenter order). */
+  /** 0-based deterministic index within the node's level (angular order). */
   readonly indexInLevel: number;
-  /** Normalized x in [0, 1]; 0.5 is the disc center, where the ground state sits. */
+  /** Normalized x in [0, 1]; 0.5 is the layout center. */
   readonly x: number;
-  /** Normalized y in [0, 1]; 0.5 is the disc center. */
+  /** Normalized y in [0, 1]; 0.5 is the layout center. */
   readonly y: number;
-  /** Ring angle in radians (outward direction for label anchoring; −π/2 = up). */
+  /**
+   * Outward direction in radians for label anchoring / self-loop placement:
+   * the ring angle (concentric) or the direction from the layout center to the
+   * node (stress). −π/2 points up.
+   */
   readonly angle: number;
-  /** Normalized ring radius in [0, 0.5]; 0 = the ground state at the center. */
+  /** Normalized distance from the layout center in [0, ~0.5] (0 = at the center). */
   readonly radius: number;
   /** Compact label (bit 0 leftmost). */
   readonly label: string;
 }
 
-/** The deterministic concentric-ring layout of a graph (DESIGN.md §5). */
+/** The deterministic layout of a graph (DESIGN.md §5). */
 export interface GraphLayout {
   readonly nodes: readonly GraphLayoutNode[];
-  /** Number of excitation levels (rings, counting the center). */
+  /** Number of excitation levels present. */
   readonly levelCount: number;
-  /** The most nodes in any single ring. */
+  /** The most nodes in any single level. */
   readonly maxNodesPerLevel: number;
   /** Normalized coordinates keyed by state, for marker / edge placement. */
   readonly coordOf: Map<StateBits, { readonly x: number; readonly y: number }>;
@@ -546,12 +577,16 @@ export interface GraphLayout {
 
 /** Tunables for {@link layoutStateGraph}; the defaults suit the (b, N) range. */
 export interface GraphLayoutOptions {
-  /** Arc length reserved per node on a ring, in pre-normalization radius units. */
+  /** Arc length reserved per node on a ring, in pre-normalization radius units (concentric). */
   readonly gapMin?: number;
-  /** Minimum radial step between consecutive rings, pre-normalization. */
+  /** Minimum radial step between consecutive rings, pre-normalization (concentric). */
   readonly radialStep?: number;
-  /** Barycenter sweep count (fixed, so the layout is deterministic). */
+  /** Barycenter sweep count (fixed, so the layout is deterministic) (concentric). */
   readonly sweeps?: number;
+  /** Max SMACOF iterations per solve (stress); fixed for determinism. */
+  readonly iterations?: number;
+  /** Relative stress tolerance for early convergence (stress). */
+  readonly tol?: number;
 }
 
 /** Wrap an angle into [−π, π) — a canonical sort key for ring ordering. */
@@ -600,6 +635,45 @@ function undirectedAdjacency(graph: StateGraph): Map<StateBits, Set<StateBits>> 
 }
 
 /**
+ * Lay out the state graph (DESIGN.md §5). Dispatches by node count: ≤
+ * {@link STRESS_MAX_NODES} nodes use symmetric stress majorization
+ * ({@link layoutStress}); more use concentric excitation rings
+ * ({@link layoutConcentricRings}); a single-node (degenerate) graph is centered.
+ * Pure and deterministic — identical inputs give bit-identical coordinates.
+ */
+export function layoutStateGraph(graph: StateGraph, options?: GraphLayoutOptions): GraphLayout {
+  const count = graph.nodes.length;
+  if (count <= 1) {
+    return singleNodeLayout(graph);
+  }
+  if (count <= STRESS_MAX_NODES) {
+    return layoutStress(graph, options);
+  }
+  return layoutConcentricRings(graph, options);
+}
+
+/** The centered layout of a one-node (degenerate b = 0 / b = N) graph. */
+function singleNodeLayout(graph: StateGraph): GraphLayout {
+  const bits = graph.nodes[0] ?? 0;
+  const node: GraphLayoutNode = {
+    bits,
+    level: graph.level(bits),
+    indexInLevel: 0,
+    x: 0.5,
+    y: 0.5,
+    angle: -Math.PI / 2,
+    radius: 0,
+    label: formatState(bits, graph.maxHeight),
+  };
+  return {
+    nodes: [node],
+    levelCount: 1,
+    maxNodesPerLevel: 1,
+    coordOf: new Map([[bits, { x: 0.5, y: 0.5 }]]),
+  };
+}
+
+/**
  * Lay the graph out as concentric rings by excitation level (DESIGN.md §5): the
  * ground state at the disc center (0.5, 0.5), one ring per BFS level, radius
  * growing with excitation. Ring radii are circumference-aware — each ring is
@@ -613,7 +687,7 @@ function undirectedAdjacency(graph: StateGraph): Map<StateBits, Set<StateBits>> 
  * dependence), a pure function of `(graph, options)` — a stable layout across
  * renders. Not force-directed.
  */
-export function layoutStateGraph(graph: StateGraph, options?: GraphLayoutOptions): GraphLayout {
+function layoutConcentricRings(graph: StateGraph, options?: GraphLayoutOptions): GraphLayout {
   const gapMin = options?.gapMin ?? 0.06;
   const radialStep = options?.radialStep ?? 0.16;
   const sweeps = options?.sweeps ?? 8;
@@ -740,6 +814,590 @@ export function layoutStateGraph(graph: StateGraph, options?: GraphLayoutOptions
     }
   }
   return { nodes, levelCount: levels.length, maxNodesPerLevel, coordOf };
+}
+
+// --- Stress majorization (symmetric SMACOF) ----------------------------------
+
+/** A mutable 2D point in the pre-normalization working space. */
+interface Point {
+  x: number;
+  y: number;
+}
+
+/** Node count at/below which the constrained layout collapses to a line (each
+ *  level a single node) — the signal to fall back to free SMACOF. Measured: the
+ *  spread ratio (minor/major variance sqrt) of a genuine 2D layout is ≥ 0.8; a
+ *  collinear one is ~0. This threshold separates them with wide headroom. */
+const COLLINEAR_SPREAD = 0.05;
+
+/** Neighbor index lists over the undirected graph, ascending (deterministic). */
+function indexedAdjacency(
+  graph: StateGraph,
+  nodes: readonly StateBits[],
+  indexOf: Map<StateBits, number>,
+): number[][] {
+  const adjacency = undirectedAdjacency(graph);
+  const nbr: number[][] = nodes.map(() => []);
+  for (let i = 0; i < nodes.length; i++) {
+    for (const target of adjacency.get(nodes[i] as StateBits) ?? []) {
+      const j = indexOf.get(target);
+      if (j !== undefined) {
+        (nbr[i] as number[]).push(j);
+      }
+    }
+    (nbr[i] as number[]).sort((a, b) => a - b);
+  }
+  return nbr;
+}
+
+/** All-pairs shortest-path distances (unweighted BFS) over the undirected graph. */
+function allPairsDistances(nbr: number[][]): number[][] {
+  const n = nbr.length;
+  const dist: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(Infinity));
+  for (let s = 0; s < n; s++) {
+    const row = dist[s] as number[];
+    row[s] = 0;
+    const queue = [s];
+    let head = 0;
+    while (head < queue.length) {
+      const u = queue[head++] as number;
+      const du = row[u] as number;
+      for (const v of nbr[u] as number[]) {
+        if (row[v] === Infinity) {
+          row[v] = du + 1;
+          queue.push(v);
+        }
+      }
+    }
+  }
+  return dist;
+}
+
+/**
+ * A mirror pairing over the vertical axis x = 0: `partner[i]` is the index the
+ * node at `i` reflects to (itself when it sits on the axis). Derived from the
+ * within-level ascending-bitmask order (the s-th node of a level pairs with the
+ * (k−1−s)-th), together with the mirror-symmetric row seed `initRow` (level → y,
+ * canonical order → x) — the same excitation-level triangle as the hand-made
+ * (3,5) reference. The pairing need NOT be a graph automorphism (these graphs
+ * generally have none); it is the geometric mirror we hold the layout to.
+ */
+function withinLevelPairing(
+  graph: StateGraph,
+  nodes: readonly StateBits[],
+): { partner: number[]; initRow: Point[] } {
+  const n = nodes.length;
+  const byLevel = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const lvl = graph.level(nodes[i] as StateBits);
+    const bucket = byLevel.get(lvl);
+    if (bucket === undefined) {
+      byLevel.set(lvl, [i]);
+    } else {
+      bucket.push(i);
+    }
+  }
+  const levels = [...byLevel.keys()].sort((a, b) => a - b);
+  const partner = new Array<number>(n).fill(-1);
+  const initRow: Point[] = new Array<Point>(n);
+  for (let li = 0; li < levels.length; li++) {
+    const members = (byLevel.get(levels[li] as number) as number[])
+      .slice()
+      .sort((a, b) => (nodes[a] as number) - (nodes[b] as number));
+    const k = members.length;
+    for (let s = 0; s < k; s++) {
+      const i = members[s] as number;
+      partner[i] = members[k - 1 - s] as number;
+      initRow[i] = { x: s - (k - 1) / 2, y: -li };
+    }
+  }
+  return { partner, initRow };
+}
+
+/** Fold a coordinate array onto exact mirror symmetry about the axis x = 0. */
+function symmetrize(points: Point[], partner: number[]): void {
+  const done = new Uint8Array(points.length);
+  for (let i = 0; i < points.length; i++) {
+    if (done[i]) {
+      continue;
+    }
+    const j = partner[i] as number;
+    const pi = points[i] as Point;
+    if (j === i) {
+      pi.x = 0;
+      done[i] = 1;
+      continue;
+    }
+    const pj = points[j] as Point;
+    const nx = (pi.x - pj.x) / 2;
+    const ny = (pi.y + pj.y) / 2;
+    pi.x = nx;
+    pi.y = ny;
+    pj.x = -nx;
+    pj.y = ny;
+    done[i] = 1;
+    done[j] = 1;
+  }
+}
+
+/** Kamada–Kawai stress of a configuration (Σ w_ij (‖x_i − x_j‖ − d_ij)²). */
+function stressOf(points: Point[], dist: number[][], weight: number[][], n: number): number {
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dij = (dist[i] as number[])[j] as number;
+      if (!Number.isFinite(dij)) {
+        continue;
+      }
+      const pi = points[i] as Point;
+      const pj = points[j] as Point;
+      const geom = Math.hypot(pi.x - pj.x, pi.y - pj.y);
+      const diff = geom - dij;
+      sum += ((weight[i] as number[])[j] as number) * diff * diff;
+    }
+  }
+  return sum;
+}
+
+/**
+ * One SMACOF (Guttman-transform) minimization from `init`. When `partner` is
+ * given, the configuration is folded onto exact mirror symmetry after every
+ * iteration (constrained majorization in the symmetric subspace) — for the
+ * automorphism-free graphs this is what makes the optimum mirror-symmetric rather
+ * than merely near it. When `yTarget`/`alpha` are given, each node's y is blended
+ * toward its excitation-level row (`alpha` of the way), so the levels read as a
+ * clean top-down cascade (ground apex) like the hand-made reference while x stays
+ * stress-optimized. Deterministic: fixed init, fixed iteration/tolerance caps.
+ */
+function runSmacof(
+  n: number,
+  dist: number[][],
+  weight: number[][],
+  weightSum: number[],
+  init: Point[],
+  iterations: number,
+  tol: number,
+  partner: number[] | null,
+  yTarget: number[] | null = null,
+  alpha = 0,
+): { points: Point[]; stress: number } {
+  let points = init.map((p) => ({ x: p.x, y: p.y }));
+  if (partner) {
+    symmetrize(points, partner);
+  }
+  let prev = stressOf(points, dist, weight, n);
+  for (let it = 0; it < iterations; it++) {
+    const next: Point[] = points.map(() => ({ x: 0, y: 0 }));
+    for (let i = 0; i < n; i++) {
+      const pi = points[i] as Point;
+      const di = dist[i] as number[];
+      const wi = weight[i] as number[];
+      let sx = 0;
+      let sy = 0;
+      for (let j = 0; j < n; j++) {
+        const dij = di[j] as number;
+        if (i === j || !Number.isFinite(dij)) {
+          continue;
+        }
+        const pj = points[j] as Point;
+        const dx = pi.x - pj.x;
+        const dy = pi.y - pj.y;
+        const geom = Math.hypot(dx, dy) || 1e-9;
+        const w = wi[j] as number;
+        sx += w * (pj.x + (dij * dx) / geom);
+        sy += w * (pj.y + (dij * dy) / geom);
+      }
+      const ni = next[i] as Point;
+      const ws = weightSum[i] as number;
+      ni.x = ws ? sx / ws : pi.x;
+      ni.y = ws ? sy / ws : pi.y;
+      if (yTarget) {
+        ni.y = (1 - alpha) * ni.y + alpha * (yTarget[i] as number);
+      }
+    }
+    if (partner) {
+      symmetrize(next, partner);
+    }
+    points = next;
+    const cur = stressOf(points, dist, weight, n);
+    if (Math.abs(prev - cur) / (prev || 1) < tol) {
+      prev = cur;
+      break;
+    }
+    prev = cur;
+  }
+  return { points, stress: prev };
+}
+
+/** Rotate a point cloud so its principal (largest-variance) axis is vertical. */
+function rotatePrincipalVertical(points: Point[]): Point[] {
+  const n = points.length;
+  let mx = 0;
+  let my = 0;
+  for (const p of points) {
+    mx += p.x;
+    my += p.y;
+  }
+  mx /= n;
+  my /= n;
+  let cxx = 0;
+  let cxy = 0;
+  let cyy = 0;
+  for (const p of points) {
+    const dx = p.x - mx;
+    const dy = p.y - my;
+    cxx += dx * dx;
+    cxy += dx * dy;
+    cyy += dy * dy;
+  }
+  const theta = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+  const rot = Math.PI / 2 - theta;
+  const c = Math.cos(rot);
+  const s = Math.sin(rot);
+  return points.map((p) => {
+    const dx = p.x - mx;
+    const dy = p.y - my;
+    return { x: c * dx - s * dy, y: s * dx + c * dy };
+  });
+}
+
+/** Mirror error about the vertical axis through the centroid (nearest-counterpart
+ *  mean distance, normalized by the cloud's RMS radius) — 0 ⇔ exactly symmetric. */
+function verticalMirrorError(points: Point[]): number {
+  const n = points.length;
+  let cx = 0;
+  let cy = 0;
+  for (const p of points) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= n;
+  cy /= n;
+  let rms = 0;
+  for (const p of points) {
+    rms += (p.x - cx) ** 2 + (p.y - cy) ** 2;
+  }
+  rms = Math.sqrt(rms / n) || 1;
+  let sum = 0;
+  for (const p of points) {
+    const rx = 2 * cx - p.x;
+    let best = Infinity;
+    for (const q of points) {
+      const d = (q.x - rx) ** 2 + (q.y - p.y) ** 2;
+      if (d < best) {
+        best = d;
+      }
+    }
+    sum += Math.sqrt(best);
+  }
+  return sum / n / rms;
+}
+
+/**
+ * A greedy bijective mirror pairing about the vertical axis: pair the two nodes
+ * whose reflection residual is smallest first, and so on (self-pairs on the axis
+ * last). For a near-symmetric cloud this recovers the true mirror pairing, so
+ * folding to it snaps the layout exactly symmetric. Used only for the small
+ * fallback graphs, so the O(n²) pass is negligible.
+ */
+function greedyMirrorPairing(points: Point[]): number[] {
+  const n = points.length;
+  let cx = 0;
+  for (const p of points) {
+    cx += p.x;
+  }
+  cx /= n;
+  const centered = points.map((p) => ({ x: p.x - cx, y: p.y }));
+  const candidates: { d: number; i: number; j: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = i; j < n; j++) {
+      const pi = centered[i] as Point;
+      const pj = centered[j] as Point;
+      // Reflect j across x = 0 → (−pj.x, pj.y); residual to pi.
+      candidates.push({ d: (pi.x + pj.x) ** 2 + (pi.y - pj.y) ** 2, i, j });
+    }
+  }
+  candidates.sort((a, b) => a.d - b.d || a.i - b.i || a.j - b.j);
+  const partner = new Array<number>(n).fill(-1);
+  for (const { i, j } of candidates) {
+    if (partner[i] === -1 && partner[j] === -1) {
+      partner[i] = j;
+      partner[j] = i;
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    if (partner[i] === -1) {
+      partner[i] = i;
+    }
+  }
+  return partner;
+}
+
+/**
+ * Symmetric stress-majorization layout (see the regime banner above). Returns
+ * normalized coordinates keyed by state, centered on (0.5, 0.5) with a margin.
+ */
+function layoutStress(graph: StateGraph, options?: GraphLayoutOptions): GraphLayout {
+  const iterations = options?.iterations ?? 300;
+  const tol = options?.tol ?? 1e-5;
+  const nodes = graph.nodes;
+  const n = nodes.length;
+  const indexOf = new Map<StateBits, number>();
+  nodes.forEach((bits, i) => indexOf.set(bits, i));
+
+  const nbr = indexedAdjacency(graph, nodes, indexOf);
+  const dist = allPairsDistances(nbr);
+  const weight: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(0));
+  const weightSum = new Array<number>(n).fill(0);
+  let meanDist = 0;
+  let pairCount = 0;
+  for (let i = 0; i < n; i++) {
+    const di = dist[i] as number[];
+    const wi = weight[i] as number[];
+    for (let j = 0; j < n; j++) {
+      const dij = di[j] as number;
+      if (i !== j && Number.isFinite(dij)) {
+        const w = 1 / (dij * dij);
+        wi[j] = w;
+        weightSum[i] = (weightSum[i] as number) + w;
+        if (j > i) {
+          meanDist += dij;
+          pairCount++;
+        }
+      }
+    }
+  }
+  meanDist = pairCount ? meanDist / pairCount : 1;
+
+  // Scale a raw seed so its extent matches the mean graph distance (good SMACOF
+  // conditioning), preserving shape.
+  const scaleSeed = (seed: Point[]): Point[] => {
+    let spread = 0;
+    for (const p of seed) {
+      spread = Math.max(spread, Math.hypot(p.x, p.y));
+    }
+    const s = spread > 1e-9 ? meanDist / spread : 1;
+    return seed.map((p) => ({ x: p.x * s, y: p.y * s }));
+  };
+
+  // Primary: constrained SMACOF from the symmetric excitation-level rows, with a
+  // level bias so the excitation levels read as a clean top-down cascade.
+  const LEVEL_BIAS = 0.2;
+  const yTarget = nodes.map((bits) => graph.level(bits) * meanDist);
+  const { partner, initRow } = withinLevelPairing(graph, nodes);
+  const constrained = runSmacof(
+    n,
+    dist,
+    weight,
+    weightSum,
+    scaleSeed(initRow),
+    iterations,
+    tol,
+    partner,
+    yTarget,
+    LEVEL_BIAS,
+  );
+
+  // Collinearity of the constrained result: minor/major spread ratio.
+  let cx = 0;
+  let cy = 0;
+  for (const p of constrained.points) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= n;
+  cy /= n;
+  let sxx = 0;
+  let syy = 0;
+  for (const p of constrained.points) {
+    sxx += (p.x - cx) ** 2;
+    syy += (p.y - cy) ** 2;
+  }
+  const spread = Math.sqrt(Math.min(sxx, syy) / (Math.max(sxx, syy) || 1));
+
+  let points: Point[];
+  let activePartner: number[];
+  if (spread >= COLLINEAR_SPREAD) {
+    points = constrained.points;
+    activePartner = partner;
+  } else {
+    // Degenerate (path/wheel-like) graph: level rows collapse to a line. Free
+    // SMACOF from a circle finds the natural low-stress optimum — a symmetric
+    // wheel for these graphs — which we orient and snap exactly symmetric.
+    const circle: Point[] = nodes.map((_, i) => ({
+      x: Math.cos((TAU * i) / n),
+      y: Math.sin((TAU * i) / n),
+    }));
+    const free = runSmacof(n, dist, weight, weightSum, scaleSeed(circle), iterations, tol, null);
+    let oriented = rotatePrincipalVertical(free.points);
+    // Pick whichever of the two axes (major or its perpendicular) is the better mirror.
+    const swapped = oriented.map((p) => ({ x: p.y, y: p.x }));
+    if (verticalMirrorError(swapped) < verticalMirrorError(oriented)) {
+      oriented = swapped;
+    }
+    activePartner = greedyMirrorPairing(oriented);
+    symmetrize(oriented, activePartner);
+    points = oriented;
+  }
+
+  // Symmetry-preserving minimum-separation post-pass: push apart pairs closer
+  // than `sepFloor`, re-folding to the mirror axis so symmetry stays exact.
+  const sepFloor = Math.min(0.4, 2.4 / Math.sqrt(n));
+  for (let pass = 0; pass < 80; pass++) {
+    let moved = false;
+    for (let i = 0; i < n; i++) {
+      const pi = points[i] as Point;
+      for (let j = i + 1; j < n; j++) {
+        const pj = points[j] as Point;
+        let dx = pj.x - pi.x;
+        let dy = pj.y - pi.y;
+        let d = Math.hypot(dx, dy);
+        if (d >= sepFloor) {
+          continue;
+        }
+        if (d < 1e-9) {
+          dx = i - j || 1;
+          dy = 1;
+          d = Math.hypot(dx, dy);
+        }
+        const push = (sepFloor - d) / 2;
+        const ux = dx / d;
+        const uy = dy / d;
+        pi.x -= ux * push;
+        pi.y -= uy * push;
+        pj.x += ux * push;
+        pj.y += uy * push;
+        moved = true;
+      }
+    }
+    symmetrize(points, activePartner);
+    if (!moved) {
+      break;
+    }
+  }
+
+  // Canonical orientation. Ground at the TOP of the screen (min y; the [0, 1] box
+  // is y-down) so the excitation levels cascade downward, as in the hand-made
+  // reference. A centrally-placed ground (e.g. a wheel hub) falls back to a
+  // deterministic mass-based flip.
+  let gcx = 0;
+  let gcy = 0;
+  for (const p of points) {
+    gcx += p.x;
+    gcy += p.y;
+  }
+  gcx /= n;
+  gcy /= n;
+  const groundIdx = indexOf.get(graph.ground) ?? 0;
+  const gp = points[groundIdx] as Point;
+  if (gp.y > gcy + 1e-9) {
+    points = points.map((p) => ({ x: p.x, y: 2 * gcy - p.y }));
+  } else if (Math.abs(gp.y - gcy) < 1e-6) {
+    let mass = 0;
+    for (const p of points) {
+      mass += Math.sign(p.y - gcy) * (p.y - gcy) ** 2;
+    }
+    if (mass < 0) {
+      points = points.map((p) => ({ x: p.x, y: 2 * gcy - p.y }));
+    }
+  }
+  // Deterministic reflection (the mirror halves are interchangeable): send the
+  // bit-mass to +x.
+  let sideMass = 0;
+  for (let i = 0; i < n; i++) {
+    sideMass += ((points[i] as Point).x - gcx) * ((nodes[i] as number) + 1);
+  }
+  if (sideMass < 0) {
+    points = points.map((p) => ({ x: 2 * gcx - p.x, y: p.y }));
+  }
+
+  // Normalize uniformly into [MARGIN, 1 − MARGIN], centered on 0.5 (symmetry kept).
+  const MARGIN = 0.06;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const width = maxX - minX || 1;
+  const height = maxY - minY || 1;
+  const span = 1 - 2 * MARGIN;
+  const scale = Math.min(span / width, span / height);
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+  const coordOf = new Map<StateBits, { x: number; y: number }>();
+  for (let i = 0; i < n; i++) {
+    const p = points[i] as Point;
+    coordOf.set(nodes[i] as StateBits, {
+      x: 0.5 + (p.x - midX) * scale,
+      y: 0.5 + (p.y - midY) * scale,
+    });
+  }
+  return assembleStressLayout(graph, coordOf);
+}
+
+/**
+ * Build the {@link GraphLayout} node list from normalized stress coordinates.
+ * `angle` / `radius` are derived from the layout center (0.5, 0.5) so the UI's
+ * label-anchor and self-loop placement (which read them) stay sensible on a
+ * non-radial layout; `indexInLevel` is a deterministic within-level order (by
+ * angle, then bitmask) for stable identification.
+ */
+function assembleStressLayout(
+  graph: StateGraph,
+  coordOf: Map<StateBits, { x: number; y: number }>,
+): GraphLayout {
+  const byLevel = new Map<number, StateBits[]>();
+  for (const bits of graph.nodes) {
+    const lvl = graph.level(bits);
+    const bucket = byLevel.get(lvl);
+    if (bucket === undefined) {
+      byLevel.set(lvl, [bits]);
+    } else {
+      bucket.push(bits);
+    }
+  }
+  const indexInLevel = new Map<StateBits, number>();
+  for (const bucket of byLevel.values()) {
+    bucket
+      .slice()
+      .sort((a, b) => {
+        const pa = coordOf.get(a) as { x: number; y: number };
+        const pb = coordOf.get(b) as { x: number; y: number };
+        const angA = Math.atan2(pa.y - 0.5, pa.x - 0.5);
+        const angB = Math.atan2(pb.y - 0.5, pb.x - 0.5);
+        return angA - angB || a - b;
+      })
+      .forEach((bits, i) => indexInLevel.set(bits, i));
+  }
+
+  let maxNodesPerLevel = 0;
+  for (const bucket of byLevel.values()) {
+    maxNodesPerLevel = Math.max(maxNodesPerLevel, bucket.length);
+  }
+
+  const nodes: GraphLayoutNode[] = [];
+  for (const bits of graph.nodes) {
+    const p = coordOf.get(bits) as { x: number; y: number };
+    const dx = p.x - 0.5;
+    const dy = p.y - 0.5;
+    const radius = Math.hypot(dx, dy);
+    nodes.push({
+      bits,
+      level: graph.level(bits),
+      indexInLevel: indexInLevel.get(bits) ?? 0,
+      x: p.x,
+      y: p.y,
+      angle: radius < 1e-9 ? -Math.PI / 2 : Math.atan2(dy, dx),
+      radius,
+      label: formatState(bits, graph.maxHeight),
+    });
+  }
+  return { nodes, levelCount: byLevel.size, maxNodesPerLevel, coordOf };
 }
 
 // ============================================================================

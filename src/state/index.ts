@@ -292,6 +292,16 @@ export const DEFAULT_GRAPH_VISIBLE = false;
  * Codec key `gm`; toggled in the View group of the left sidebar.
  */
 export const DEFAULT_GRAPH_MINIMAP = true;
+/**
+ * State-graph throw-number labels ON by default (redesign 2026-07-12, owner
+ * requirement — the owner revised this to ON): each edge in the full overlay carries
+ * a small halo-chip label with its throw value (cycle throws always; base throws where
+ * a collision cell is free; dense graphs > 42 nodes auto-downgrade to cycle-only). The
+ * minimap never draws them (too small). Codec key `gt`; toggled in the View group of
+ * the left sidebar (with a reset affordance). An old shared link without `gt` decodes
+ * to this default (ON) — only present keys override it.
+ */
+export const DEFAULT_GRAPH_THROW_LABELS = true;
 
 // --- Theme (redesign 2026-07-10) — a pure VIEW preference, dark by default. It is
 // deliberately NOT part of ShareConfig, so the URL codec is unchanged (a shared
@@ -407,6 +417,8 @@ export interface AppStore {
   readonly graphVisible: boolean;
   /** Whether the always-visible corner minimap of the state graph is shown. */
   readonly graphMinimap: boolean;
+  /** Whether the full overlay draws per-edge throw-number labels (default ON). */
+  readonly graphThrowLabels: boolean;
   /** The in-progress transition's splice metadata (null = on the pattern). */
   readonly transition: TransitionInfo | null;
   /** The last navigation notice (hard reset / graph unavailable), or null. */
@@ -495,6 +507,9 @@ export interface AppStore {
   /** Show/hide the always-visible corner minimap of the state graph. */
   setGraphMinimap(graphMinimap: boolean): void;
   toggleGraphMinimap(): void;
+  /** Show/hide the full overlay's per-edge throw-number labels. */
+  setGraphThrowLabels(graphThrowLabels: boolean): void;
+  toggleGraphThrowLabels(): void;
   setBeatPeriod(beatPeriod: number): void;
   setDwellTime(dwellTime: number): void;
   setPlaybackSpeed(playbackSpeed: number): void;
@@ -1025,6 +1040,7 @@ export const useAppStore = create<AppStore>((set, get) => {
     graphMaxHeight: DEFAULT_GRAPH_MAX_HEIGHT,
     graphVisible: DEFAULT_GRAPH_VISIBLE,
     graphMinimap: DEFAULT_GRAPH_MINIMAP,
+    graphThrowLabels: DEFAULT_GRAPH_THROW_LABELS,
     transition: null,
     graphNotice: null,
 
@@ -1239,6 +1255,9 @@ export const useAppStore = create<AppStore>((set, get) => {
     toggleGraph: () => set((state) => ({ graphVisible: !state.graphVisible })),
     setGraphMinimap: (graphMinimap) => set({ graphMinimap }),
     toggleGraphMinimap: () => set((state) => ({ graphMinimap: !state.graphMinimap })),
+    setGraphThrowLabels: (graphThrowLabels) => set({ graphThrowLabels }),
+    toggleGraphThrowLabels: () =>
+      set((state) => ({ graphThrowLabels: !state.graphThrowLabels })),
 
     setBeatPeriod: (raw) => {
       const state = get();
@@ -1622,6 +1641,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         graphMaxHeight: s.graphMaxHeight,
         graphVisible: s.graphVisible,
         graphMinimap: s.graphMinimap,
+        graphThrowLabels: s.graphThrowLabels,
         audioEnabled: s.audioEnabled,
         catchTickEnabled: s.catchTickEnabled,
         audioVolume: s.audioVolume,
@@ -1780,6 +1800,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         graphMaxHeight,
         graphVisible: config.graphVisible,
         graphMinimap: config.graphMinimap,
+        graphThrowLabels: config.graphThrowLabels,
         audioEnabled: config.audioEnabled,
         catchTickEnabled: config.catchTickEnabled,
         audioVolume: clamp(config.audioVolume, AUDIO_VOLUME_MIN, AUDIO_VOLUME_MAX),

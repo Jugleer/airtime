@@ -93,6 +93,7 @@ export interface ShareConfig {
   readonly graphMaxHeight: number;
   readonly graphVisible: boolean;
   readonly graphMinimap: boolean;
+  readonly graphThrowLabels: boolean;
   readonly audioEnabled: boolean;
   readonly catchTickEnabled: boolean;
   readonly audioVolume: number;
@@ -268,6 +269,9 @@ export function encodeConfig(config: ShareConfig): string {
   params.set('gn', String(config.graphMaxHeight));
   params.set('gv', config.graphVisible ? '1' : '0');
   params.set('gm', config.graphMinimap ? '1' : '0');
+  // `gt` (throw-number labels) is ALWAYS emitted; an old link without it decodes to
+  // the store default (ON) via the boot merge, so absence reads as ON.
+  params.set('gt', config.graphThrowLabels ? '1' : '0');
   params.set('au', config.audioEnabled ? '1' : '0');
   params.set('ac', config.catchTickEnabled ? '1' : '0');
   params.set('av', fixed(config.audioVolume));
@@ -353,6 +357,7 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
     ['cv', 'chartsVisible'],
     ['gv', 'graphVisible'],
     ['gm', 'graphMinimap'],
+    ['gt', 'graphThrowLabels'],
     ['au', 'audioEnabled'],
     ['ac', 'catchTickEnabled'],
   ];
@@ -535,6 +540,7 @@ export function isShareConfigLike(raw: unknown): raw is ShareConfig {
     'chartsVisible',
     'graphVisible',
     'graphMinimap',
+    'graphThrowLabels',
     'audioEnabled',
     'catchTickEnabled',
   ];

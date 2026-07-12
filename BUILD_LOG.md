@@ -634,3 +634,42 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   per-endpoint apex would restore exactness if hand-height editing lands.
   (3) Operator check: 3/441/5 — the crown should read as one smooth
   up-pause-down arch; no valley between throw and catch.
+
+## Round 6 — state-graph layout + draw layer            DONE
+- Commit: (this commit) — Gate: (2026-07-12, "npm run gate", green — 55 files / 723 tests; orchestrator-run)
+- Owner: background arrowheads too small; layouts unreliable ((7,8) renders as
+  a line); wants the symmetric look of classic hand-drawn diagrams; throw-value
+  labels on arrows (revised: DEFAULT ON); precompute optional. Design phase:
+  layout prototyper (4 algorithms × 6 graphs, real SVGs + metrics) + dedicated
+  UI/graphics designer (13 mockups + a 10-point audit of the current renderer:
+  base arrows fail on size AND dimness AND rim occlusion AND a backwards
+  visibility gate; base self-loops never drawn at all). Candidates published to
+  the owner as a visual artifact page; owner picked: everything, labels ON,
+  minimap arrows, symmetry above all, no precompute needed.
+- CORE: layoutStateGraph is a two-regime dispatcher — SYMMETRIC STRESS
+  MAJORIZATION (SMACOF, live + memoized, pure/deterministic) for ≤150 nodes,
+  concentric rings beyond. Key finding: these graphs have TRIVIAL automorphism
+  groups ((3,5) brute-forced — no symmetry to converge to), so symmetry is
+  HELD, not seeded: exact per-iteration mirror-folding onto a level pairing +
+  LEVEL_BIAS=0.2 (levels read as a cascade, ground at the apex; also 3.6×
+  faster convergence) + degenerate-line fallback (free SMACOF wheel + best-axis
+  snap — (7,8) becomes a zero-crossing wheel). Mirror error 0.0000 across the
+  entire stress range — identical to the owner's hand-made reference; raw
+  SMACOF measures 0.35. Byte-identical determinism over all 60 (b,N) pairs;
+  126-node worst ~215 ms on the Jetson, once per graph.
+- UI: draw layer rewritten to the designer's spec — absolute-size barbed
+  arrowheads landing at node rims (count-gated ≤42, replacing the backwards
+  nodeRadius gate), lifted edge contrast, bidirectional pairs as opposite arcs,
+  teardrop self-loops WITH heads for all loops, throw-number halo chips
+  (default ON, codec key gt, cycle-priority cell collision, >42 nodes
+  cycle-only), cycle glow + rim, ground home-ring, marker size floor + glow,
+  hover ring, scaled labels; minimap = rim arrows / no labels / no glow;
+  theme-aware with flagged light-theme hexes.
+- Combined review (4 checks): SHIP — codec default-ON boot path verified
+  correct (the cv-bug lesson applied), live end-to-end clean in both themes,
+  navigation works, perf memoized. Two stale-text lows fixed pre-commit
+  (overlay caption now regime-aware; file header).
+- Trade-off (documented): the running cycle is less spatially compact under
+  stress than under rings (symmetry-over-locality, owner's priority); cycle
+  stays findable via glow/highlight. 531 cycle-locality test re-baselined
+  0.25→0.5 with measurement (~0.32) — documented, not a green-hack.

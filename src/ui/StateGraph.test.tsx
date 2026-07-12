@@ -46,6 +46,7 @@ beforeEach(() => {
     kinematicsEpochs: [],
     graphMaxHeight: DEFAULT_GRAPH_MAX_HEIGHT,
     graphVisible: true,
+    graphThrowLabels: true,
     transition: null,
     graphNotice: null,
   });
@@ -137,13 +138,70 @@ describe('StateGraph panel (ui layer)', () => {
     expect(screen.queryByLabelText('Current state marker')).toBeNull();
   });
 
-  it('draws muted directional arrows on base (background) edges (owner req. 2026-07-11)', () => {
-    // The '3' cascade graph is sparse (node radius at max), so the clutter gate lets
-    // base edges carry the secondary arrowhead: the muted marker def exists and at
-    // least one base <line> references it. Cycle arrows live on <path>, not <line>.
+  // --- Draw-layer redesign (graphics designer's spec, 2026-07-12) ---------------
+  // Arrowheads are now absolute-size barbed POLYGONS (not stroke-coupled <marker>s),
+  // gated on NODE COUNT (≤ 42), not the old backwards node-radius gate.
+  const cubicPaths = (container: HTMLElement): Element[] =>
+    [...container.querySelectorAll('path')].filter((p) => (p.getAttribute('d') ?? '').includes(' C '));
+  const arcPaths = (container: HTMLElement): Element[] =>
+    [...container.querySelectorAll('path')].filter((p) => (p.getAttribute('d') ?? '').includes(' Q '));
+  const BASE_ARROW_FILL = '#7488a6'; // graphColors.baseArrow (dark theme)
+
+  it('gates base arrowheads on node count ≤ 42 (barbed polygons, not stroke markers)', () => {
+    // The old <marker> defs are gone entirely; arrowheads are polygons.
+    const { container } = render(<StateGraph />); // '3' → 35 nodes (≤ 42)
+    expect(container.querySelector('marker')).toBeNull();
+    // 35-node graph is under the density limit → base edges carry a barbed head.
+    const baseHeads = [...container.querySelectorAll('polygon')].filter(
+      (p) => p.getAttribute('fill') === BASE_ARROW_FILL,
+    );
+    expect(baseHeads.length).toBeGreaterThan(0);
+  });
+
+  it('drops base arrowheads above the density limit (84-node graph), keeping cycle arrows', () => {
     const { container } = render(<StateGraph />);
-    expect(container.querySelector('#stategraph-arrow-base')).toBeTruthy();
-    expect(container.querySelectorAll('line[marker-end]').length).toBeGreaterThan(0);
+    act(() => useAppStore.getState().setGraphMaxHeight(9)); // '3' at N=9 → 84 nodes (> 42)
+    // No base arrowheads at all; base edges are bare lines.
+    const baseHeads = [...container.querySelectorAll('polygon')].filter(
+      (p) => p.getAttribute('fill') === BASE_ARROW_FILL,
+    );
+    expect(baseHeads.length).toBe(0);
+    // Cycle arrows (the ground 3-loop) still render (some polygon remains).
+    expect(container.querySelectorAll('polygon').length).toBeGreaterThan(0);
+  });
+
+  it('draws base self-loops as teardrops (were never drawn before) — pattern 531', () => {
+    const { container } = render(<StateGraph />);
+    act(() => useAppStore.getState().navigateToPattern('531'));
+    // 531 leaves the ground 3-cascade self-loop OFF the cycle → a BASE self-loop, now
+    // drawn as a cubic teardrop in the base-edge colour (previously: not drawn at all).
+    const loops = cubicPaths(container);
+    expect(loops.length).toBe(1);
+    expect(loops[0]?.getAttribute('stroke')).toBe('#42546f'); // baseEdge, not cycle blue
+  });
+
+  it('splits bidirectional pairs into two opposite arcs (not one overlapping line)', () => {
+    // The '3' graph has 6 directed edges with a reverse twin (3 pairs) — each drawn as
+    // its own quadratic arc, so both directions read (topological, layout-independent).
+    const { container } = render(<StateGraph />);
+    expect(arcPaths(container).length).toBe(6);
+  });
+
+  it('auto-downgrades throw labels to cycle-only above the density limit', () => {
+    // Throw labels default ON. Chips are the only <rect>s in the SVG, so count them.
+    const { container } = render(<StateGraph />);
+    const sparseChips = container.querySelectorAll('rect').length; // '3' 35 nodes → all throws
+    expect(sparseChips).toBeGreaterThan(1);
+    act(() => useAppStore.getState().setGraphMaxHeight(9)); // 84 nodes → cycle-only
+    const denseChips = container.querySelectorAll('rect').length;
+    expect(denseChips).toBeLessThan(sparseChips);
+    expect(denseChips).toBe(1); // just the ground 3-loop's cycle label
+  });
+
+  it('drops all throw labels when the overlay toggle is off', () => {
+    useAppStore.setState({ graphThrowLabels: false });
+    const { container } = render(<StateGraph />);
+    expect(container.querySelectorAll('rect').length).toBe(0);
   });
 });
 
@@ -172,14 +230,16 @@ describe('StateGraph minimap (always-visible corner preview)', () => {
     expect(screen.queryByText('⤢')).toBeNull();
   });
 
-  it('omits base-edge arrows in the tiny minimap (non-interactive, owner req. 2026-07-11)', () => {
+  it('draws light rim arrows in the minimap but no throw labels or glow (owner req. 2026-07-12)', () => {
     useAppStore.setState({ graphVisible: false, graphMinimap: true });
     const { container } = render(<StateGraph />);
-    // Minimap shares GraphPicture but passes interactive=false, so no base arrowhead
-    // marker is emitted and no base <line> references one — keeps the 200px box clean
-    // and avoids a duplicate #stategraph-arrow-base id (the overlay is not mounted).
-    expect(container.querySelector('#stategraph-arrow-base')).toBeNull();
-    expect(container.querySelectorAll('line[marker-end]').length).toBe(0);
+    // Owner said yes to rim arrows for small graphs: barbed polygons show in the box...
+    expect(container.querySelectorAll('polygon').length).toBeGreaterThan(0);
+    // ...but the minimap stays clean/cheap: no throw-label chips, no soft-glow filter,
+    // and (like the overlay) no legacy <marker> defs at all.
+    expect(container.querySelectorAll('rect').length).toBe(0);
+    expect(container.querySelector('filter')).toBeNull();
+    expect(container.querySelector('marker')).toBeNull();
   });
 
   it('hides the minimap entirely when graphMinimap is off (toggle still opens the overlay)', () => {
