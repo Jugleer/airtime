@@ -5,6 +5,7 @@ import {
   DEFAULT_AUDIO_ENABLED,
   DEFAULT_CAMERA_POSE,
   GRAVITY_MAX,
+  HOLD_DEPTH_MIN,
   useAppStore,
 } from './index';
 import { decodeConfig, encodeConfig, type ShareConfig } from './codec';
@@ -93,6 +94,18 @@ describe('applyConfig (URL boot / preset load / JSON import)', () => {
     expect(state.gravity).toBeCloseTo(GRAVITY_MAX, 9);
     expect(state.audioVolume).toBeCloseTo(AUDIO_VOLUME_MAX, 9);
     expect(state.handCount).toBe(8);
+  });
+
+  it('clamps a legacy share link whose hold depth is below the new 0.05 m minimum UP to it', () => {
+    // Before owner ruling round 7 the hold-depth minimum was 0 m, so an old link
+    // can encode hd=0.02. Applying it (decode → merge over currentConfig → apply)
+    // must clamp UP to HOLD_DEPTH_MIN rather than load a sub-minimum dip — the
+    // apply-side mirror of the trail-length decode drift-guard.
+    const store = useAppStore.getState();
+    store.applyConfig({ ...store.currentConfig(), ...decodeConfig('v=1&hd=0.02') });
+    expect(useAppStore.getState().holdDepth).toBe(HOLD_DEPTH_MIN);
+    // The rebuilt sim uses the clamped value, not the payload's 0.02.
+    expect(useAppStore.getState().sim.kinematics.holdDepth).toBeCloseTo(HOLD_DEPTH_MIN, 9);
   });
 
   it('falls back to the default pattern on an invalid one (never crashes)', () => {

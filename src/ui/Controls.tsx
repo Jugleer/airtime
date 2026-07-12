@@ -33,8 +33,6 @@ import {
   DEFAULT_CARRY_PATH_KIND,
   DEFAULT_DWELL_TIME,
   DEFAULT_GHOSTS_ENABLED,
-  DEFAULT_GRAPH_MINIMAP,
-  DEFAULT_GRAPH_THROW_LABELS,
   DEFAULT_GRAVITY_VALUE,
   DEFAULT_HOLD_DEPTH_VALUE,
   DEFAULT_ORBIT_COLORING,
@@ -87,21 +85,23 @@ function errorText(messages: readonly string[]): string {
 }
 
 /**
- * Whether t_d_eff clamping is active for any airborne throw in the pattern
- * (NOTATION identity 4, DESIGN.md §4.1): the tightest bound is the smallest
- * airborne throw value h. Clamp is active iff t_d > β·h_min·τ_b.
+ * The tightest per-throw dwell clamp bound for the pattern, or null if no throw
+ * is airborne (NOTATION identity 4, DESIGN.md §4.1): t_d_eff(h) = min(t_d, β·h·τ_b),
+ * so the smallest airborne throw value h_min gives the tightest bound β·h_min·τ_b.
+ * This is the value the sim actually uses for that beat once t_d exceeds it — the
+ * amber readout shows it verbatim so the clamp is honest, not just flagged.
  */
-function dwellClampActive(values: readonly number[], dwellTime: number, beatPeriod: number): boolean {
+function dwellClampBound(airborneValues: readonly number[], beatPeriod: number): number | null {
   let hMin = Infinity;
-  for (const value of values) {
-    if (value !== 0 && value !== 2 && value < hMin) {
+  for (const value of airborneValues) {
+    if (value < hMin) {
       hMin = value;
     }
   }
   if (!Number.isFinite(hMin)) {
-    return false;
+    return null;
   }
-  return dwellTime > DWELL_CLAMP_BETA * hMin * beatPeriod;
+  return DWELL_CLAMP_BETA * hMin * beatPeriod;
 }
 
 /**
@@ -120,6 +120,28 @@ function patternThrowValues(sim: Simulation): number[] {
     return values;
   }
   return [...sim.values];
+}
+
+/**
+ * The airborne throw values of the running pattern — the h that reach the per-throw
+ * dwell clamp. Excludes 0s and HELD 2s per core's hold rule (timeline isHoldToss):
+ * async/vanilla holds every 2, but a sync crossing 2x is a real flight the sim clamps.
+ */
+function airborneThrowValues(sim: Simulation): number[] {
+  if (sim.compiled) {
+    const { sync, beats } = sim.compiled;
+    const values: number[] = [];
+    for (const beat of beats) {
+      for (const toss of beat) {
+        const hold = toss.value === 2 && !(sync && toss.cross);
+        if (toss.value !== 0 && !hold) {
+          values.push(toss.value);
+        }
+      }
+    }
+    return values;
+  }
+  return sim.values.filter((value) => value !== 0 && value !== 2);
 }
 
 /**
@@ -278,8 +300,6 @@ function ViewGroup(): ReactElement {
   const ballColor = useAppStore((state) => state.ballColor);
   const showHands = useAppStore((state) => state.showHands);
   const showHandPaths = useAppStore((state) => state.showHandPaths);
-  const graphMinimap = useAppStore((state) => state.graphMinimap);
-  const graphThrowLabels = useAppStore((state) => state.graphThrowLabels);
   const timelineWindow = useAppStore((state) => state.timelineWindow);
   const trailLength = useAppStore((state) => state.trailLength);
   const ghostsEnabled = useAppStore((state) => state.ghostsEnabled);
@@ -294,10 +314,6 @@ function ViewGroup(): ReactElement {
   const setShowHands = useAppStore((state) => state.setShowHands);
   const toggleShowHandPaths = useAppStore((state) => state.toggleShowHandPaths);
   const setShowHandPaths = useAppStore((state) => state.setShowHandPaths);
-  const toggleGraphMinimap = useAppStore((state) => state.toggleGraphMinimap);
-  const setGraphMinimap = useAppStore((state) => state.setGraphMinimap);
-  const toggleGraphThrowLabels = useAppStore((state) => state.toggleGraphThrowLabels);
-  const setGraphThrowLabels = useAppStore((state) => state.setGraphThrowLabels);
   const setTimelineWindow = useAppStore((state) => state.setTimelineWindow);
   const setTrailLength = useAppStore((state) => state.setTrailLength);
   const toggleGhosts = useAppStore((state) => state.toggleGhosts);
@@ -312,8 +328,6 @@ function ViewGroup(): ReactElement {
     ghostsEnabled !== DEFAULT_GHOSTS_ENABLED ||
     showHands !== DEFAULT_SHOW_HANDS ||
     showHandPaths !== DEFAULT_SHOW_HAND_PATHS ||
-    graphMinimap !== DEFAULT_GRAPH_MINIMAP ||
-    graphThrowLabels !== DEFAULT_GRAPH_THROW_LABELS ||
     ballColor !== DEFAULT_BALL_COLOR;
   const resetView = (): void => {
     setPlaybackSpeed(DEFAULT_PLAYBACK_SPEED);
@@ -324,8 +338,6 @@ function ViewGroup(): ReactElement {
     setGhostsEnabled(DEFAULT_GHOSTS_ENABLED);
     setShowHands(DEFAULT_SHOW_HANDS);
     setShowHandPaths(DEFAULT_SHOW_HAND_PATHS);
-    setGraphMinimap(DEFAULT_GRAPH_MINIMAP);
-    setGraphThrowLabels(DEFAULT_GRAPH_THROW_LABELS);
     setBallColor(DEFAULT_BALL_COLOR);
   };
 
@@ -422,18 +434,9 @@ function ViewGroup(): ReactElement {
           defaultChecked={DEFAULT_SHOW_HAND_PATHS}
           onChange={toggleShowHandPaths}
         />
-        <CheckToggle
-          label="State-graph minimap"
-          checked={graphMinimap}
-          defaultChecked={DEFAULT_GRAPH_MINIMAP}
-          onChange={toggleGraphMinimap}
-        />
-        <CheckToggle
-          label="Graph throw labels"
-          checked={graphThrowLabels}
-          defaultChecked={DEFAULT_GRAPH_THROW_LABELS}
-          onChange={toggleGraphThrowLabels}
-        />
+        {/* The state-graph minimap is always shown (no toggle), and the "Graph throw
+            labels" toggle now lives in the expanded state-graph overlay's top-left
+            control cluster (owner 2026-07-12) — neither belongs in the View group. */}
         <label
           style={{
             display: 'flex',
@@ -519,7 +522,8 @@ export function Controls(): ReactElement {
   };
 
   const patternValues = patternThrowValues(sim);
-  const clampActive = dwellClampActive(patternValues, dwellTime, beatPeriod);
+  const dwellClampBoundValue = dwellClampBound(airborneThrowValues(sim), beatPeriod);
+  const clampActive = dwellClampBoundValue !== null && dwellTime > dwellClampBoundValue;
   const heldTwoWarning = handCount !== 2 && patternValues.includes(2);
 
   // Tempo & physics reset (owner requirement): each control has a ↺ (via the
@@ -695,7 +699,11 @@ export function Controls(): ReactElement {
           min={DWELL_MIN}
           max={dwellCap(handCount, beatPeriod)}
           scale="linear"
-          readout={clampActive ? `${dwellTime.toFixed(3)} s · clamped` : `${dwellTime.toFixed(3)} s`}
+          readout={
+            clampActive && dwellClampBoundValue !== null
+              ? `${dwellTime.toFixed(3)} s · clamped at ${dwellClampBoundValue.toFixed(2)} s`
+              : `${dwellTime.toFixed(3)} s`
+          }
           readoutColor={clampActive ? palette.amber : undefined}
           defaultValue={DEFAULT_DWELL_TIME}
           onChange={setDwellTime}

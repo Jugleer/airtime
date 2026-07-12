@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_GRAPH_MINIMAP,
   DEFAULT_GRAPH_THROW_LABELS,
   DEFAULT_SHOW_HANDS,
   DEFAULT_SHOW_HAND_PATHS,
@@ -14,21 +13,18 @@ beforeEach(() => {
   useAppStore.setState({
     showHands: DEFAULT_SHOW_HANDS,
     showHandPaths: DEFAULT_SHOW_HAND_PATHS,
-    graphMinimap: DEFAULT_GRAPH_MINIMAP,
     graphThrowLabels: DEFAULT_GRAPH_THROW_LABELS,
   });
 });
 
-describe('hand + minimap view toggles (defaults, setters, codec)', () => {
-  it('pins the fresh-boot defaults (hands ON, hand paths OFF, minimap ON, throw labels ON)', () => {
+describe('hand + graph view toggles (defaults, setters, codec)', () => {
+  it('pins the fresh-boot defaults (hands ON, hand paths OFF, throw labels ON)', () => {
     expect(DEFAULT_SHOW_HANDS).toBe(true);
     expect(DEFAULT_SHOW_HAND_PATHS).toBe(false);
-    expect(DEFAULT_GRAPH_MINIMAP).toBe(true);
     expect(DEFAULT_GRAPH_THROW_LABELS).toBe(true);
     const state = useAppStore.getState();
     expect(state.showHands).toBe(true);
     expect(state.showHandPaths).toBe(false);
-    expect(state.graphMinimap).toBe(true);
     expect(state.graphThrowLabels).toBe(true);
   });
 
@@ -45,11 +41,6 @@ describe('hand + minimap view toggles (defaults, setters, codec)', () => {
     store.setShowHandPaths(false);
     expect(useAppStore.getState().showHandPaths).toBe(false);
 
-    store.toggleGraphMinimap();
-    expect(useAppStore.getState().graphMinimap).toBe(false);
-    store.setGraphMinimap(true);
-    expect(useAppStore.getState().graphMinimap).toBe(true);
-
     store.toggleGraphThrowLabels();
     expect(useAppStore.getState().graphThrowLabels).toBe(false);
     store.setGraphThrowLabels(true);
@@ -60,27 +51,23 @@ describe('hand + minimap view toggles (defaults, setters, codec)', () => {
     useAppStore.setState({
       showHands: false,
       showHandPaths: true,
-      graphMinimap: false,
       graphThrowLabels: false,
     });
     const config = useAppStore.getState().currentConfig();
     expect(config.showHands).toBe(false);
     expect(config.showHandPaths).toBe(true);
-    expect(config.graphMinimap).toBe(false);
     expect(config.graphThrowLabels).toBe(false);
 
     // Flip live state, then re-apply the snapshot: the flags come back.
     useAppStore.setState({
       showHands: true,
       showHandPaths: false,
-      graphMinimap: true,
       graphThrowLabels: true,
     });
     useAppStore.getState().applyConfig(config);
     const state = useAppStore.getState();
     expect(state.showHands).toBe(false);
     expect(state.showHandPaths).toBe(true);
-    expect(state.graphMinimap).toBe(false);
     expect(state.graphThrowLabels).toBe(false);
   });
 

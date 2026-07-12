@@ -10,9 +10,12 @@
 // paused for the duration of a gesture and resumes (if it was playing) on release,
 // continuing from the scrubbed time.
 //
-// SVG with preserveAspectRatio="none" so the horizontal pixel↔time map is linear
-// (the geometry math lives in ./timelineBar). Re-renders per frame like the ladder
-// (it subscribes to simTime); the 3D hot path stays allocation-free in <Tracers>.
+// The SVG's coordinate space is REAL CSS PIXELS, 1:1 — a ResizeObserver on the
+// wrapper div measures the rendered width and the viewBox/width attribute track it,
+// so the horizontal pixel↔time map stays linear (the geometry math lives in
+// ./timelineBar) without ever scaling text or grips non-uniformly. Re-renders per
+// frame like the ladder (it subscribes to simTime); the 3D hot path stays
+// allocation-free in <Tracers>.
 //
 // Owner view fixes (2026-07-11):
 //   • Handles — the playhead (scrub) carries an ORANGE square grip at the TOP edge
@@ -27,8 +30,17 @@
 //     so nothing renders before the track start or lingers past its end.
 //   • Annotations — compact per-hand lane labels (H0, H1 … — 0-indexed to match the
 //     ladder's "Hand 0/1" and the charts legend) plus a subtle one-line legend.
+//   • Text-stretch fix (2026-07-12) — the bar used to render a fixed 1000×96
+//     viewBox with width="100%" and preserveAspectRatio="none": whenever a panel's
+//     rendered width wasn't exactly 1000 px, x and y scaled non-uniformly and the
+//     "H<N>" lane tags / time labels stretched or squashed horizontally. Now a
+//     ResizeObserver on a wrapper div measures the real container width (fires on
+//     panel-splitter drags too, since those resize the element without a window
+//     resize event) and the SVG lays out 1:1 in that many real CSS pixels, so text
+//     always renders undistorted and re-lays-out live as panels resize.
 
 import {
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -48,12 +60,17 @@ import {
   type BarGeometry,
 } from './timelineBar';
 
-// Logical SVG coordinate space (stretched to the container via a "none" viewBox).
-const W = 1000;
+// Vertical layout is a fixed constant (the bar's height doesn't respond to panel
+// width, so it never needs the measured-width treatment below). Horizontal layout
+// (plot bounds) is derived per-render from the measured container width instead of
+// a fixed logical span — see TimelineBar's containerWidth state.
 const H = 96;
-const PLOT_L = 10;
-const PLOT_R = 990;
-const PLOT_W = PLOT_R - PLOT_L;
+// Fixed CSS-pixel gutter on each side of the plot band (a real pixel width now that
+// the coordinate space is 1:1, not a fraction of a stretched logical span).
+const PLOT_MARGIN = 10;
+// Pre-measurement fallback width (first paint, or jsdom without ResizeObserver);
+// corrected on mount by the layout effect as soon as the wrapper can be measured.
+const DEFAULT_CONTAINER_WIDTH = 600;
 const BAND_TOP = 20;
 const BAND_BOTTOM = 66;
 const BAND_H = BAND_BOTTOM - BAND_TOP;
@@ -71,8 +88,14 @@ interface DragSession {
   readonly originStart: number;
 }
 
-function makeGeometry(windowStart: number, timelineWindow: number): BarGeometry {
-  return { svgWidth: W, plotLeft: PLOT_L, plotWidth: PLOT_W, windowStart, timelineWindow };
+function makeGeometry(
+  windowStart: number,
+  timelineWindow: number,
+  svgWidth: number,
+  plotLeft: number,
+  plotWidth: number,
+): BarGeometry {
+  return { svgWidth, plotLeft, plotWidth, windowStart, timelineWindow };
 }
 
 export function TimelineBar(): ReactElement {
@@ -91,15 +114,45 @@ export function TimelineBar(): ReactElement {
   const PLAYHEAD_COLOR = palette.amber;
 
   const svgRef = useRef<SVGSVGElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<SVGGElement>(null);
   const dragRef = useRef<DragSession | null>(null);
   // Re-render trigger + frozen window while scrubbing (window static during drag).
   const [scrubStart, setScrubStart] = useState<number | null>(null);
+  // Measured wrapper width in real CSS px, kept live so the plot lays out 1:1 and
+  // never scales text non-uniformly (the historical bug). A ResizeObserver — not a
+  // window resize listener — because panel-splitter drags resize this element
+  // without ever firing `window.resize` (same pattern as BottomDock/ChartsBody).
+  const [containerWidth, setContainerWidth] = useState(DEFAULT_CONTAINER_WIDTH);
+
+  useLayoutEffect(() => {
+    const element = wrapperRef.current;
+    if (!element) {
+      return undefined;
+    }
+    const read = (): void => {
+      const width = element.clientWidth;
+      if (width > 0) {
+        setContainerWidth((previous) => (width === previous ? previous : width));
+      }
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') {
+      return undefined; // jsdom / unsupported: stay at the last measured/default width
+    }
+    const observer = new ResizeObserver(read);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const plotLeft = PLOT_MARGIN;
+  const plotWidth = Math.max(0, containerWidth - PLOT_MARGIN * 2);
+  const plotRight = plotLeft + plotWidth;
 
   const { pastSpan } = windowSpans(timelineWindow);
   const windowStart = scrubStart ?? simTime - pastSpan;
   const windowEnd = windowStart + timelineWindow;
-  const geometry = makeGeometry(windowStart, timelineWindow);
+  const geometry = makeGeometry(windowStart, timelineWindow, containerWidth, plotLeft, plotWidth);
 
   const playheadX = xOfTime(simTime, geometry);
   const handle = trailHandlePlacement(simTime, trailLength, geometry);
@@ -113,7 +166,7 @@ export function TimelineBar(): ReactElement {
     if (!drag || !svg) {
       return;
     }
-    const geo = makeGeometry(drag.originStart, timelineWindow);
+    const geo = makeGeometry(drag.originStart, timelineWindow, containerWidth, plotLeft, plotWidth);
     const time = timeFromPointer(clientX, svg.getBoundingClientRect(), geo);
     const store = useAppStore.getState();
     if (drag.mode === 'playhead') {
@@ -181,7 +234,8 @@ export function TimelineBar(): ReactElement {
 
   // --- Mini-ladder background (per-hand throw/catch ticks + beat grid) --------
 
-  const laneY = (hand: number): number => BAND_TOP + ((hand + 0.5) * BAND_H) / Math.max(1, handCount);
+  const laneY = (hand: number): number =>
+    BAND_TOP + ((hand + 0.5) * BAND_H) / Math.max(1, handCount);
 
   const beatMarks: ReactElement[] = [];
   const startBeat = firstBeatAtOrAfter(sim.timeline, Math.max(windowStart, 0));
@@ -192,7 +246,15 @@ export function TimelineBar(): ReactElement {
     }
     const x = xOfTime(time, geometry);
     beatMarks.push(
-      <line key={`beat-${beat}`} x1={x} y1={BAND_TOP} x2={x} y2={BAND_BOTTOM} stroke={palette.gridLine} strokeWidth={1} />,
+      <line
+        key={`beat-${beat}`}
+        x1={x}
+        y1={BAND_TOP}
+        x2={x}
+        y2={BAND_BOTTOM}
+        stroke={palette.gridLine}
+        strokeWidth={1}
+      />,
     );
   }
 
@@ -262,14 +324,22 @@ export function TimelineBar(): ReactElement {
   for (let hand = 0; hand < handCount; hand += 1) {
     const y = laneY(hand);
     laneLines.push(
-      <line key={`lane-${hand}`} x1={PLOT_L} y1={y} x2={PLOT_R} y2={y} stroke={LANE_COLOR} strokeWidth={1} />,
+      <line
+        key={`lane-${hand}`}
+        x1={plotLeft}
+        y1={y}
+        x2={plotRight}
+        y2={y}
+        stroke={LANE_COLOR}
+        strokeWidth={1}
+      />,
     );
     // Compact lane tag at the bar's left edge (H0, H1 … — 0-indexed to match the
     // ladder's "Hand 0/1" and the charts legend; note the choice in the header).
     laneLabels.push(
       <text
         key={`lanelabel-${hand}`}
-        x={PLOT_L + 5}
+        x={plotLeft + 5}
         y={y - 6}
         fontSize={10}
         fontWeight={700}
@@ -280,10 +350,17 @@ export function TimelineBar(): ReactElement {
     );
   }
 
-  const readoutStyle: CSSProperties = { color: palette.textMuted, fontVariantNumeric: 'tabular-nums' };
+  const readoutStyle: CSSProperties = {
+    color: palette.textMuted,
+    fontVariantNumeric: 'tabular-nums',
+  };
 
   // Unobtrusive legend for the mini-ladder marks (glyph shape mirrors the mark).
-  const legendItems: readonly { readonly glyph: string; readonly color: string; readonly label: string }[] = [
+  const legendItems: readonly {
+    readonly glyph: string;
+    readonly color: string;
+    readonly label: string;
+  }[] = [
     { glyph: '│', color: TICK_COLOR, label: 'throw' },
     { glyph: '○', color: TICK_COLOR, label: 'catch' },
     { glyph: '▪', color: PLAYHEAD_COLOR, label: 'playhead' },
@@ -325,107 +402,128 @@ export function TimelineBar(): ReactElement {
         </span>
       </div>
 
-      <svg
-        ref={svgRef}
-        role="img"
-        aria-label="Timeline bar: scrub playhead and detachable trail handle over a mini-ladder"
-        viewBox={`0 0 ${W} ${H}`}
-        width="100%"
-        height={H}
-        preserveAspectRatio="none"
-        onPointerDown={beginDrag}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        style={{ display: 'block', width: '100%', touchAction: 'none', cursor: 'ew-resize' }}
-      >
-        <defs>
-          {/* Clip the scrolling content to the plot band so no tick/ring/band ever
-              paints before the track start or past its end (DESIGN.md §6 bug fix). */}
-          <clipPath id="timeline-plot-clip">
-            <rect x={PLOT_L} y={0} width={PLOT_W} height={H} />
-          </clipPath>
-        </defs>
+      {/* Measured wrapper: a ResizeObserver on THIS element (not the SVG itself, whose
+          width attribute we are about to drive FROM the measurement) reads the real
+          available width, live, from window resizes and panel-splitter drags alike.
+          overflow: hidden guards the single-frame gap between a resize and the next
+          render picking up the new width. */}
+      <div ref={wrapperRef} style={{ width: '100%', overflow: 'hidden' }}>
+        <svg
+          ref={svgRef}
+          role="img"
+          aria-label="Timeline bar: scrub playhead and detachable trail handle over a mini-ladder"
+          viewBox={`0 0 ${containerWidth} ${H}`}
+          width={containerWidth}
+          height={H}
+          preserveAspectRatio="none"
+          onPointerDown={beginDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          style={{ display: 'block', touchAction: 'none', cursor: 'ew-resize' }}
+        >
+          <defs>
+            {/* Clip the scrolling content to the plot band so no tick/ring/band ever
+                paints before the track start or past its end (DESIGN.md §6 bug fix). */}
+            <clipPath id="timeline-plot-clip">
+              <rect x={plotLeft} y={0} width={plotWidth} height={H} />
+            </clipPath>
+          </defs>
 
-        {/* Plot background (opaque, so clicks anywhere begin a playhead scrub). */}
-        <rect
-          x={PLOT_L}
-          y={BAND_TOP - 6}
-          width={PLOT_W}
-          height={BAND_BOTTOM - BAND_TOP + 12}
-          fill={palette.inset}
-          stroke={palette.border}
-          strokeWidth={1}
-        />
-
-        {/* Scrolling content (clipped to the plot band). */}
-        <g clipPath="url(#timeline-plot-clip)">
-          {beatMarks}
-          {laneLines}
-          {eventTicks}
-
-          {/* Trailing-window band: from the trail handle (or left edge) to the playhead. */}
+          {/* Plot background (opaque, so clicks anywhere begin a playhead scrub). */}
           <rect
-            x={handle.x}
-            y={BAND_TOP}
-            width={Math.max(0, playheadX - handle.x)}
-            height={BAND_H}
-            fill={palette.accent}
-            opacity={0.18}
+            x={plotLeft}
+            y={BAND_TOP - 6}
+            width={plotWidth}
+            height={BAND_BOTTOM - BAND_TOP + 12}
+            fill={palette.inset}
+            stroke={palette.border}
+            strokeWidth={1}
           />
-        </g>
 
-        {/* Lane tags (unclipped, always readable at the left edge). */}
-        {laneLabels}
+          {/* Scrolling content (clipped to the plot band). */}
+          <g clipPath="url(#timeline-plot-clip)">
+            {beatMarks}
+            {laneLines}
+            {eventTicks}
 
-        {/* Trail handle (blue): edge bar + a ROUND grip at the BOTTOM; the hit area
+            {/* Trailing-window band: from the trail handle (or left edge) to the playhead. */}
+            <rect
+              x={handle.x}
+              y={BAND_TOP}
+              width={Math.max(0, playheadX - handle.x)}
+              height={BAND_H}
+              fill={palette.accent}
+              opacity={0.18}
+            />
+          </g>
+
+          {/* Lane tags (unclipped, always readable at the left edge). */}
+          {laneLabels}
+
+          {/* Trail handle (blue): edge bar + a ROUND grip at the BOTTOM; the hit area
             sits below the playhead's top grip so both stay grabbable when coincident. */}
-        <g ref={handleRef} style={{ cursor: 'ew-resize' }}>
-          {/* Invisible hit area over the lower band (leaves the top strip for the
+          <g ref={handleRef} style={{ cursor: 'ew-resize' }}>
+            {/* Invisible hit area over the lower band (leaves the top strip for the
               playhead grip, so a press up top scrubs and a press here drags trail). */}
-          <rect
-            x={handle.x - 9}
-            y={TRAIL_HIT_TOP}
-            width={18}
-            height={PLAYHEAD_BOTTOM + 4 - TRAIL_HIT_TOP}
-            fill="transparent"
-          />
-          <rect x={handle.x - 2} y={BAND_TOP - 2} width={4} height={BAND_H + 6} rx={2} fill={palette.accent} opacity={0.9} />
-          <circle data-role="trail-grip" cx={handle.x} cy={PLAYHEAD_BOTTOM} r={4.5} fill={palette.accent} />
-        </g>
+            <rect
+              x={handle.x - 9}
+              y={TRAIL_HIT_TOP}
+              width={18}
+              height={PLAYHEAD_BOTTOM + 4 - TRAIL_HIT_TOP}
+              fill="transparent"
+            />
+            <rect
+              x={handle.x - 2}
+              y={BAND_TOP - 2}
+              width={4}
+              height={BAND_H + 6}
+              rx={2}
+              fill={palette.accent}
+              opacity={0.9}
+            />
+            <circle
+              data-role="trail-grip"
+              cx={handle.x}
+              cy={PLAYHEAD_BOTTOM}
+              r={4.5}
+              fill={palette.accent}
+            />
+          </g>
 
-        {/* Playhead (scrub, orange) + SQUARE grip at the TOP. Purely visual and
+          {/* Playhead (scrub, orange) + SQUARE grip at the TOP. Purely visual and
             pointer-transparent: a press anywhere on the bar already begins a playhead
             scrub, and letting pointer events pass through means the trail handle's
             lower hit area still wins at the bottom when the two handles coincide. */}
-        <line
-          x1={playheadX}
-          y1={PLAYHEAD_TOP}
-          x2={playheadX}
-          y2={PLAYHEAD_BOTTOM}
-          stroke={PLAYHEAD_COLOR}
-          strokeWidth={2}
-          style={{ pointerEvents: 'none' }}
-        />
-        <rect
-          data-role="playhead-grip"
-          x={playheadX - 4}
-          y={PLAYHEAD_TOP - 2}
-          width={8}
-          height={10}
-          rx={2}
-          fill={PLAYHEAD_COLOR}
-          style={{ pointerEvents: 'none' }}
-        />
+          <line
+            x1={playheadX}
+            y1={PLAYHEAD_TOP}
+            x2={playheadX}
+            y2={PLAYHEAD_BOTTOM}
+            stroke={PLAYHEAD_COLOR}
+            strokeWidth={2}
+            style={{ pointerEvents: 'none' }}
+          />
+          <rect
+            data-role="playhead-grip"
+            x={playheadX - 4}
+            y={PLAYHEAD_TOP - 2}
+            width={8}
+            height={10}
+            rx={2}
+            fill={PLAYHEAD_COLOR}
+            style={{ pointerEvents: 'none' }}
+          />
 
-        {/* Window-edge time labels. */}
-        <text x={PLOT_L + 2} y={H - 6} fontSize={12} fill={palette.textMuted}>
-          {Math.max(0, windowStart).toFixed(2)} s
-        </text>
-        <text x={PLOT_R - 2} y={H - 6} fontSize={12} fill={palette.textMuted} textAnchor="end">
-          {windowEnd.toFixed(2)} s
-        </text>
-      </svg>
+          {/* Window-edge time labels. */}
+          <text x={plotLeft + 2} y={H - 6} fontSize={12} fill={palette.textMuted}>
+            {Math.max(0, windowStart).toFixed(2)} s
+          </text>
+          <text x={plotRight - 2} y={H - 6} fontSize={12} fill={palette.textMuted} textAnchor="end">
+            {windowEnd.toFixed(2)} s
+          </text>
+        </svg>
+      </div>
 
       {/* Subtle one-line legend for the mini-ladder marks (kept muted; the bar is small). */}
       <div
@@ -441,7 +539,10 @@ export function TimelineBar(): ReactElement {
         }}
       >
         {legendItems.map((item) => (
-          <span key={item.label} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.28rem' }}>
+          <span
+            key={item.label}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.28rem' }}
+          >
             <span aria-hidden style={{ color: item.color, fontWeight: 700, lineHeight: 1 }}>
               {item.glyph}
             </span>

@@ -1143,15 +1143,22 @@ describe('empty-hand returns are a single oval lobe — anti-bounce regression (
   }
 });
 
-describe('empty-hand return apex placement (owner round-5, §4.3)', () => {
-  it('default 3-cascade: the return rests at the apex = line + holdDepth', () => {
-    // (b) The DEFAULT cascade (n_h = 2): its short empty window (restFrac ~0.09)
-    // still yields a static rest, and it sits at the apex line + holdDepth (the
-    // ballistic cap does not bind for a value-3, so apexRise = holdDepth exactly).
+describe('empty-hand return apex placement (owner round-7, §4.3)', () => {
+  it('default 3-cascade FILLS its short empty phase — single lobe, no static rest, crest > holdDepth', () => {
+    // SUPERSEDES the round-5 "default 3-cascade rests at line + holdDepth" pin. Under
+    // the round-7 phase-fill the empty hand uses the whole ~0.2 s window to slow then
+    // speed up (owner: "don't come to a full stop unless a ball isn't coming for 1+
+    // beats — stopping only ever increases jerk"), so the DEFAULT cascade return is
+    // CONTINUOUS (no static/degree-0 segment) — one monotone up-pause-down lobe whose
+    // crest is the fill value, above the round-5 hold-band mirror (crown never shrinks).
+    // Measured crest 0.1104 (matches the round-7 diagnosis' real-pipeline number),
+    // identical at holdDepth 0.1 and 0.2 (the half-window cap binds here). holdDepth is
+    // pinned to 0.1 to keep the assertion's numbers stable.
     const values = parse('3');
     const timeline = buildTimeline(values, { beatCount: 24, params: DEFAULT_PARAMS });
-    const kinematics = buildKinematics(timeline, { values, handCount: 2 });
+    const kinematics = buildKinematics(timeline, { values, handCount: 2, holdDepth: 0.1 });
     const lineY = kinematics.geometry.catchPoint(0).y;
+    // No static return-rest segment in the cascade window (the fill is continuous).
     const restSeg = kinematics
       .handSegments(0)
       .find(
@@ -1163,14 +1170,19 @@ describe('empty-hand return apex placement (owner round-5, §4.3)', () => {
           s.startTime >= 2 &&
           s.startTime <= 10,
       );
-    expect(restSeg).toBeDefined();
-    if (!restSeg) return;
-    expect(evalSeg(restSeg, restSeg.startTime).position.y).toBeCloseTo(lineY + kinematics.holdDepth, 6);
-    // A genuine static rest: |v| ≡ 0 across a nonzero interval at the crown.
-    for (let f = 0; f <= 1; f += 0.1) {
-      const t = restSeg.startTime + f * (restSeg.endTime - restSeg.startTime);
-      expect(magnitude(kinematics.handState(0, t).velocity)).toBeLessThan(1e-9);
+    expect(restSeg).toBeUndefined();
+    // Every return is a single up-pause-down lobe cresting above holdDepth (the fill
+    // raised the crown), still bounded well under the crown ceiling.
+    let checked = 0;
+    for (const window of returnWindows(kinematics, 0)) {
+      const { turns, maxY } = returnProfile(kinematics, 0, window);
+      expect(turns).toBe(1);
+      const crest = maxY - lineY;
+      expect(crest).toBeGreaterThan(kinematics.holdDepth); // fill raised the crown above the round-5 mirror
+      expect(crest).toBeCloseTo(0.1104, 3); // the round-7 diagnosis' default-cascade crest
+      checked++;
     }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it('51 n_h=5 holdDepth=0.02 g=0.5: the slow-throw long-window corner stays one lobe (broke design B)', () => {
@@ -1242,7 +1254,11 @@ describe('empty-hand returns draw an apex oval — no ball-tracking (owner round
     it(`${pattern} n_h=${handCount}: the throwing hand rests at the apex and does not follow its self-throw`, () => {
       const values = parse(pattern);
       const timeline = buildTimeline(values, { beatCount: 24, params: { ...DEFAULT_PARAMS, handCount } });
-      const kinematics = buildKinematics(timeline, { values, handCount });
+      // holdDepth pinned to 0.1 (the pre-round-7 app default) so the LOAD-BEARING
+      // separation thresholds below stay calibrated to their measured 0.10000 m apex
+      // rise; the app default moved to 0.20 m (owner ruling round 7, 2026-07-12), which
+      // legitimately lifts the empty-hand apex and shrinks the hand↔ball separation.
+      const kinematics = buildKinematics(timeline, { values, handCount, holdDepth: 0.1 });
       const flight = selfThrowFlight(kinematics, handCount);
       expect(flight).toBeDefined();
       if (!flight) return;
@@ -1264,37 +1280,48 @@ describe('empty-hand returns draw an apex oval — no ball-tracking (owner round
       }
       const ballApexHeight = ballApex - catchHeight; // apex above the hand line
       expect(ballApexHeight).toBeGreaterThan(0.1); // a real airborne self-throw
-      // LOAD-BEARING (kept): separation is LARGE — the empty hand is nowhere near
-      // the ball (was ~0 when it traced the arc).
-      expect(maxSep).toBeGreaterThan(0.5 * ballApexHeight);
-      // LOAD-BEARING (kept): the hand apex stays well BELOW the ball's apex — it
-      // does not rise to follow the ball.
+      // LOAD-BEARING (kept): separation stays SUBSTANTIAL — the empty hand is nowhere
+      // near the ball (was ~0 when it traced the arc). ROUND-7 supersession of the
+      // coefficient: the round-7 fill legitimately raises the crown to 1.25·holdDepth
+      // (owner "use the whole empty phase"), which for the low 3@n_h3 self-throw
+      // (ballApexHeight ~0.25 m) shrinks the apex-gap to 0.497·ballApexHeight — just
+      // under the old 0.5 bar. The gap is exactly ballApex − handApex, which the KEPT
+      // handApex bound below pins ABOVE 0.25·ballApexHeight, so 0.25 is the coefficient
+      // this property provably guarantees; it still cleanly excludes the tracing bug
+      // (separation ≈ 0, hand apex = ball apex).
+      expect(maxSep).toBeGreaterThan(0.25 * ballApexHeight);
+      // LOAD-BEARING (kept verbatim): the hand apex stays well BELOW the ball's apex —
+      // it does not rise to follow the ball.
       expect(handApex).toBeLessThan(ballApex - 0.25 * ballApexHeight);
-      // APEX OVAL (round-5, OWNER-DIRECTED spec update — supersedes the round-4
-      // line-height rest): the empty hand's LOW point is still the LINE itself
-      // (throw & catch sit on it; the ascent is monotone up from the line and the
-      // descent monotone back down to it), so handDip ≈ catchHeight is UNCHANGED —
-      // only the apex moved up.
+      // OVAL CROWN: the empty hand's LOW point is still the LINE itself (throw & catch
+      // sit on it; the ascent is monotone up from the line, the descent monotone back
+      // down to it), so handDip ≈ catchHeight is UNCHANGED — only the crown moved up.
       expect(handDip).toBeCloseTo(catchHeight, 2); // still bottoms at the line, not at line − holdDepth
       expect(handDip).toBeGreaterThan(catchHeight - 0.5 * kinematics.holdDepth); // nowhere near line − holdDepth
       expect(handApex).toBeGreaterThan(catchHeight); // it rises above the line
-      // The rise is now the full hold-band mirror ≈ holdDepth (was the incidental
-      // ~0.4·holdDepth of the round-4 line-height rest); measured 0.10000 for 045 & 3@n_h3.
-      expect(handApex - catchHeight).toBeCloseTo(kinematics.holdDepth, 2);
+      // ROUND-7 supersession of the crown-height pin: was `≈ holdDepth (2 dp)` (the
+      // round-5 hold-band mirror). The fill now crests these idle self-throw returns
+      // at the crown ceiling hCeil = max(holdDepth, min(1.25·holdDepth, RETURN_RISE_CAP))
+      // = 1.25·holdDepth here (measured 0.12500 for 045 & 3@n_h3 at holdDepth 0.1). The
+      // crown never shrinks below holdDepth and never balloons past the ceiling.
+      expect(handApex - catchHeight).toBeGreaterThanOrEqual(kinematics.holdDepth - 1e-6);
+      expect(handApex - catchHeight).toBeLessThanOrEqual(1.25 * kinematics.holdDepth + 1e-6);
+      expect(handApex - catchHeight).toBeCloseTo(1.25 * kinematics.holdDepth, 3);
     });
   }
 
-  it('long return comes to a genuine rest at the apex, line + holdDepth (owner round-5 pin)', () => {
-    // (b) When the return duration allows, the empty hand comes to a TRUE REST
-    // at the ready/apex point: a static hand segment (v = a = jerk ≡ 0) at the
-    // apex height line + holdDepth, spanning a nonzero interval. 3-cascade at
-    // n_h = 3 has a long empty window (t_e ≈ 0.45 s), so its returns rest. (In a
-    // plain cascade the only static hand segments are return rests — the value-3
-    // carries sweep.)
+  it('genuinely idle return (3 n_h=5) comes to a true rest at the crown (owner round-7 pin)', () => {
+    // SUPERSEDES the round-5 "3@n_h3 rests at line + holdDepth" pin: 3@n_h3 now FILLS
+    // its ~0.45 s window (continuous, no rest — see the fill tests). The static crown
+    // rest only appears for a GENUINELY idle hand — the owner's "a ball isn't coming
+    // for 1+ beats". 3 at n_h = 5 has a ~0.95 s empty window (≳ 2·RETURN_FILL_BEATS),
+    // so the beat-based rest threshold inserts a true static rest at the crown. The
+    // `= line + holdDepth` HEIGHT pin is dropped (the crown now sits at line + apexRise
+    // ≥ line + holdDepth under the fill); the REST-EXISTS property is what stands.
     const values = parse('3');
-    const handCount = 3;
-    const timeline = buildTimeline(values, { beatCount: 24, params: { ...DEFAULT_PARAMS, handCount } });
-    const kinematics = buildKinematics(timeline, { values, handCount });
+    const handCount = 5;
+    const timeline = buildTimeline(values, { beatCount: 28, params: { ...DEFAULT_PARAMS, handCount } });
+    const kinematics = buildKinematics(timeline, { values, handCount, holdDepth: 0.2 });
     const lineY = kinematics.geometry.catchPoint(0).y;
     // A static return-rest segment: constant polynomials on all three axes.
     const restSeg = kinematics
@@ -1310,9 +1337,12 @@ describe('empty-hand returns draw an apex oval — no ball-tracking (owner round
       );
     expect(restSeg).toBeDefined();
     if (!restSeg) return;
-    // The rest sits at the APEX = line + holdDepth (the crown of the oval, mirror
-    // of the carry dip), not at the line (round 4) nor line − holdDepth (round 3).
-    expect(evalSeg(restSeg, restSeg.startTime).position.y).toBeCloseTo(lineY + kinematics.holdDepth, 6);
+    // The rest sits at the CROWN = line + apexRise, above the line and within the
+    // bounded crown ceiling (never balloons to the ball's apex).
+    const restRise = evalSeg(restSeg, restSeg.startTime).position.y - lineY;
+    expect(restRise).toBeGreaterThan(0); // above the line (the top oval lobe)
+    expect(restRise).toBeGreaterThanOrEqual(kinematics.holdDepth - 1e-6); // crown never shrinks below the round-5 mirror
+    expect(restRise).toBeLessThanOrEqual(0.25 + 1e-6); // bounded by RETURN_RISE_CAP
     // Velocity is exactly zero across the whole pause (a genuine rest).
     for (let f = 0; f <= 1; f += 0.1) {
       const t = restSeg.startTime + f * (restSeg.endTime - restSeg.startTime);
@@ -1380,6 +1410,185 @@ describe('empty-hand returns draw an apex oval — no ball-tracking (owner round
     }
     // Hand 0 (the zip thrower) no longer lunges toward the far hand.
     expect(hand0MaxAbsZ).toBeLessThan(farHandZ);
+  });
+});
+
+// --- Round-7 empty-hand return: guarded phase-fill + balanced column (§4.3) ------
+//
+// OWNER RULING (round 7): "The hand's highest jerk is often AFTER throwing a ball,
+// as it moves to its waiting position. Default behaviour of an empty hand should be
+// to use the entirety of its empty phase to slow, then speed up for the catch. There
+// isn't much need for the hand to come to a complete stop (except when a ball isn't
+// coming for 1+ beats), and doing so will only ever increase its jerk." These tests
+// pin the round-7 guarantees: the empty phase is FILLED (no default plateau), a true
+// rest appears only for a genuinely idle hand, the crown balloon is BOUNDED, the
+// crest varies CONTINUOUSLY across the fill→rest threshold, and the BALANCED column
+// splits the horizontal reposition across both flanks (mild catch) while collapsing
+// to the velocity-matched throw-column park for a fast horizontal catch (the zip).
+
+// The crown x-fraction along the throw→catch chord at the return's temporal midpoint
+// (where the hand sits at the ready/crown column). 0 = throw column, 1 = catch column.
+function crownChordFraction(
+  k: Kinematics,
+  hand: number,
+  window: { start: number; end: number },
+): number | undefined {
+  const carries = k.carriesForHand(hand).slice().sort((a, b) => a.startTime - b.startTime);
+  let throwX = NaN;
+  let catchX = NaN;
+  for (let i = 0; i + 1 < carries.length; i++) {
+    if (Math.abs((carries[i] as CarryMotion).endTime - window.start) < 1e-9) {
+      throwX = (carries[i] as CarryMotion).throwPoint.x;
+      catchX = (carries[i + 1] as CarryMotion).catchPoint.x;
+      break;
+    }
+  }
+  if (Number.isNaN(throwX) || Math.abs(catchX - throwX) < 1e-9) return undefined;
+  const crownX = k.handState(hand, 0.5 * (window.start + window.end)).position.x;
+  return (crownX - throwX) / (catchX - throwX);
+}
+
+describe('empty-hand return fills its phase + rests only when idle (owner round-7, §4.3)', () => {
+  it('crown balloon is BOUNDED across the single-lobe grid: crest ≤ max(holdDepth, RETURN_RISE_CAP)', () => {
+    // The fill raises the crown but never balloons it to the ball's apex: every empty
+    // return crests within max(holdDepth, RETURN_RISE_CAP = 0.25 m) — the bounded
+    // amplitude the owner signed off on. Measured grid max 0.4000 m (at 3 n_h=3
+    // holdDepth 0.4, g 30 — governed by holdDepth), well inside the 0.5 m return-
+    // locality envelope. Swept over the single-lobe property grid.
+    const RETURN_RISE_CAP = 0.25;
+    let checked = 0;
+    let maxCrest = 0;
+    for (const [pattern, handCounts] of [
+      ['3', [1, 2, 3, 5]],
+      ['531', [2, 3]],
+      ['51', [2, 5]],
+      ['522', [2]],
+    ] as Array<[string, number[]]>) {
+      const values = parse(pattern);
+      for (const handCount of handCounts) {
+        for (const holdDepth of [0, 0.02, 0.1, 0.4]) {
+          for (const gravity of [0.5, 9.81, 30]) {
+            const timeline = buildTimeline(values, {
+              beatCount: 24,
+              params: { ...DEFAULT_PARAMS, handCount },
+            });
+            const kinematics = buildKinematics(timeline, { values, handCount, gravity, holdDepth });
+            const lineY = kinematics.geometry.catchPoint(0).y;
+            const ceiling = Math.max(holdDepth, RETURN_RISE_CAP);
+            for (let hand = 0; hand < handCount; hand++) {
+              for (const window of returnWindows(kinematics, hand)) {
+                const { maxY } = returnProfile(kinematics, hand, window);
+                const crest = maxY - lineY;
+                maxCrest = Math.max(maxCrest, crest);
+                const where = `${pattern} n_h=${handCount} hd=${holdDepth} g=${gravity}`;
+                expect(crest, where).toBeLessThanOrEqual(ceiling + 1e-3);
+                checked++;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(maxCrest).toBeLessThanOrEqual(0.45); // the design's global rise envelope
+  });
+
+  it('rest appears only above the beat threshold, and the crest is CONTINUOUS across it', () => {
+    // The owner's "1+ beats" threshold, made graceful: as the empty phase grows (here
+    // by raising beatPeriod for 3 n_h=3) the crest rises CONTINUOUSLY and saturates at
+    // the crown ceiling exactly as the static rest first appears (no cliff), and once
+    // a rest exists it persists (monotone gradient). Below the threshold the return is
+    // a continuous fill (no static segment); above it, a genuine rest.
+    const values = parse('3');
+    const handCount = 3;
+    const holdDepth = 0.2;
+    const ceiling = 1.25 * holdDepth; // hCeil for holdDepth 0.2 (< RETURN_RISE_CAP)
+    let prevCrest = -1;
+    let sawRest = false;
+    let restBecameFalseAfterTrue = false;
+    let maxJump = 0;
+    for (let bp = 0.12; bp <= 0.601; bp += 0.01) {
+      const timeline = buildTimeline(values, {
+        beatCount: 30,
+        params: { beatPeriod: bp, dwellTime: 0.3, handCount },
+      });
+      const kinematics = buildKinematics(timeline, { values, handCount, holdDepth });
+      const lineY = kinematics.geometry.catchPoint(0).y;
+      const windows = returnWindows(kinematics, 0, 3, 9);
+      expect(windows.length).toBeGreaterThan(0);
+      const window = windows[0] as { start: number; end: number };
+      const { turns, maxY } = returnProfile(kinematics, 0, window);
+      expect(turns).toBe(1); // single lobe at every beat period
+      const crest = maxY - lineY;
+      expect(crest).toBeLessThanOrEqual(ceiling + 1e-6); // bounded by the crown ceiling
+      const hasRest = kinematics
+        .handSegments(0)
+        .some(
+          (s) =>
+            s.x.degree === 0 &&
+            s.y.degree === 0 &&
+            s.z.degree === 0 &&
+            s.endTime - s.startTime > 1e-6 &&
+            s.startTime >= window.start - 1e-9 &&
+            s.endTime <= window.end + 1e-9,
+        );
+      if (hasRest) sawRest = true;
+      if (sawRest && !hasRest) restBecameFalseAfterTrue = true;
+      if (prevCrest >= 0) maxJump = Math.max(maxJump, Math.abs(crest - prevCrest));
+      prevCrest = crest;
+    }
+    expect(sawRest).toBe(true); // a genuine idle rest does appear for a long enough window
+    expect(restBecameFalseAfterTrue).toBe(false); // rest gradient is monotone (no flicker)
+    // Crest is Lipschitz-continuous across the threshold (measured slope ~2.9/beat →
+    // ~0.03 per 0.01 s beat-period step); no discontinuous jump at the fill→rest seam.
+    expect(maxJump).toBeLessThan(0.05);
+  });
+
+  it('balanced column SPLITS the reposition for a mild catch and PARKS at the throw column for a fast horizontal catch', () => {
+    // The balanced ready column is the vertical-velocity-weighted average of the two
+    // flanks' velocity-matched targets (absorbShare = |fromVy|/(|fromVy|+|toVy|)); for
+    // symmetric v_y (the uniform 3 fountain below, absorbShare = ½) it is the even
+    // midpoint + ¼·(fromV − toV)·flank split, clamped to the chord.
+    // MILD fountain catch (uniform 3 n_h=5 cascade): the crown sits in the INTERIOR of
+    // the chord — both flanks share the horizontal reposition (killing the owner's
+    // post-throw "moving to its waiting position" spike, where round-5's one-sided
+    // column parked at the catch and made the absorb do the whole chord). FAST
+    // HORIZONTAL catch (531 n_h=2 zip): the crown collapses to the velocity-matched
+    // THROW column (frac ≈ 0), i.e. round-5's zip park — the wind-up stays a clean ramp
+    // into the catch, no lunge.
+    const mild = buildKinematics(
+      buildTimeline(parse('3'), { beatCount: 28, params: { beatPeriod: 0.35, dwellTime: 0.3, handCount: 5 } }),
+      { values: parse('3'), handCount: 5, holdDepth: 0.2 },
+    );
+    let mildInterior = 0;
+    for (let hand = 0; hand < 5; hand++) {
+      for (const window of returnWindows(mild, hand)) {
+        const frac = crownChordFraction(mild, hand, window);
+        if (frac === undefined) continue; // vertical (throw column = catch column) return
+        // Interior: neither parked at the throw column (0) nor lunged to the catch (1).
+        expect(frac).toBeGreaterThan(0.2);
+        expect(frac).toBeLessThan(0.8);
+        mildInterior++;
+      }
+    }
+    expect(mildInterior).toBeGreaterThan(0);
+
+    const zip = buildKinematics(
+      buildTimeline(parse('531'), { beatCount: 24, params: DEFAULT_PARAMS }),
+      { values: parse('531'), handCount: 2, holdDepth: 0.2 },
+    );
+    let zipParked = 0;
+    for (let hand = 0; hand < 2; hand++) {
+      for (const window of returnWindows(zip, hand)) {
+        const frac = crownChordFraction(zip, hand, window);
+        if (frac === undefined) continue;
+        // The crown never lunges PAST the throw column toward/beyond the far side; the
+        // fast horizontal catches park it exactly at the throw column (frac ≈ 0).
+        expect(frac).toBeGreaterThanOrEqual(-1e-6);
+        if (frac < 0.05) zipParked++;
+      }
+    }
+    expect(zipParked).toBeGreaterThan(0); // at least one fast horizontal catch parks at the throw column
   });
 });
 

@@ -121,8 +121,9 @@ export const DWELL_CLAMP_BETA = 0.75;
 export const GRAVITY_MIN = 0.5;
 export const GRAVITY_MAX = 30;
 export const DEFAULT_GRAVITY_VALUE = DEFAULT_GRAVITY;
-/** holdDepth slider range (DESIGN.md §7: 0–0.4 m, default 0.10). */
-export const HOLD_DEPTH_MIN = 0;
+/** holdDepth slider range (DESIGN.md §7: 0.05–0.4 m, default 0.20 — owner ruling
+ *  round 7, 2026-07-12; min was 0, default was 0.10). */
+export const HOLD_DEPTH_MIN = 0.05;
 export const HOLD_DEPTH_MAX = 0.4;
 export const DEFAULT_HOLD_DEPTH_VALUE = DEFAULT_HOLD_DEPTH;
 /** n_h stepper range (DESIGN.md §7: 1–8). */
@@ -252,6 +253,13 @@ export type ChartAxisMode = 'magnitude' | 'x' | 'y' | 'z';
 export const DEFAULT_CHARTS_VISIBLE = false;
 /** Charts plot magnitude by default; the per-axis toggle switches to x/y/z. */
 export const DEFAULT_CHART_AXIS_MODE: ChartAxisMode = 'magnitude';
+/**
+ * The work & power table (EnergyPanel) starts VISIBLE inside the charts dock
+ * (owner request 2026-07-12). Collapsing it lets the charts split the full dock
+ * width between them; the collapsed state persists (store + codec key `wt`,
+ * emitted only when true so a default-layout link is unchanged).
+ */
+export const DEFAULT_WORK_TABLE_COLLAPSED = false;
 
 /**
  * The bottom dock's tri-state (owner round-2 #1, orchestrator ruling 2026-07-11):
@@ -284,14 +292,14 @@ export const DEFAULT_GRAPH_MAX_HEIGHT = GRAPH_DEFAULT_N;
  */
 export const DEFAULT_GRAPH_VISIBLE = false;
 /**
- * The always-visible corner minimap of the state graph ON by default (redesign
- * 2026-07-11, owner requirement): a compact, non-interactive ring-graph preview
- * sits in the scene's top-left corner (cycle + hopping marker visible, no labels)
- * and expands to the full {@link DEFAULT_GRAPH_VISIBLE} overlay on click. Turn it
- * OFF for a minimal scene (the labeled toggle button still opens the overlay).
- * Codec key `gm`; toggled in the View group of the left sidebar.
+ * The always-visible corner minimap of the state graph (redesign 2026-07-11, owner
+ * requirement): a compact, non-interactive ring-graph preview sits in the scene's
+ * top-left corner (cycle + hopping marker visible, no labels) and expands to the full
+ * {@link DEFAULT_GRAPH_VISIBLE} overlay on click. It is ALWAYS shown when the overlay
+ * is closed (owner 2026-07-12: the optional toggle was removed) — there is no store
+ * flag or codec key for it any more; a legacy `gm=0/1` in an old share link is
+ * silently ignored on decode.
  */
-export const DEFAULT_GRAPH_MINIMAP = true;
 /**
  * State-graph throw-number labels ON by default (redesign 2026-07-12, owner
  * requirement — the owner revised this to ON): each edge in the full overlay carries
@@ -409,14 +417,19 @@ export interface AppStore {
   readonly chartsVisible: boolean;
   /** Which scalar the charts plot: magnitude (default) or one axis component. */
   readonly chartAxisMode: ChartAxisMode;
+  /**
+   * Whether the work & power table (EnergyPanel) is collapsed inside the charts
+   * dock (owner request 2026-07-12). Default false = visible; collapsing it lets
+   * the charts reflow to split the FULL dock width. Presentation only — never
+   * touches the sim. Codec key `wt`, emitted only when true.
+   */
+  readonly workTableCollapsed: boolean;
 
   // state-graph settings & navigation (DESIGN.md §5)
   /** N, the graph's maximum throw value (3–11; auto-expands to fit patterns). */
   readonly graphMaxHeight: number;
   /** Whether the FULL state-graph overlay is open (N stepper, hard reset, navigation). */
   readonly graphVisible: boolean;
-  /** Whether the always-visible corner minimap of the state graph is shown. */
-  readonly graphMinimap: boolean;
   /** Whether the full overlay draws per-edge throw-number labels (default ON). */
   readonly graphThrowLabels: boolean;
   /** The in-progress transition's splice metadata (null = on the pattern). */
@@ -504,9 +517,6 @@ export interface AppStore {
   /** Show/hide the FULL state-graph overlay (hidden ⇒ overlay body unmounts). */
   setGraphVisible(graphVisible: boolean): void;
   toggleGraph(): void;
-  /** Show/hide the always-visible corner minimap of the state graph. */
-  setGraphMinimap(graphMinimap: boolean): void;
-  toggleGraphMinimap(): void;
   /** Show/hide the full overlay's per-edge throw-number labels. */
   setGraphThrowLabels(graphThrowLabels: boolean): void;
   toggleGraphThrowLabels(): void;
@@ -515,7 +525,7 @@ export interface AppStore {
   setPlaybackSpeed(playbackSpeed: number): void;
   /** g slider (0.5–30). Applies to future throws only (kinematics epoch). */
   setGravity(gravity: number): void;
-  /** holdDepth slider (0–0.4 m). Applies to future carries only (kinematics epoch). */
+  /** holdDepth slider (0.05–0.4 m). Applies to future carries only (kinematics epoch). */
   setHoldDepth(holdDepth: number): void;
   /** Toggle the carry path (quintic ↔ cubic). Applies to future carries only. */
   setCarryPathKind(kind: CarryPathKind): void;
@@ -567,6 +577,10 @@ export interface AppStore {
   toggleCharts(): void;
   /** Choose the charts' plotted scalar: magnitude or an x/y/z component. */
   setChartAxisMode(chartAxisMode: ChartAxisMode): void;
+  /** Collapse/expand the work & power table within the charts dock (owner request
+   *  2026-07-12); collapsing it lets the charts split the full dock width. */
+  setWorkTableCollapsed(workTableCollapsed: boolean): void;
+  toggleWorkTableCollapsed(): void;
   setPlaying(playing: boolean): void;
   togglePlaying(): void;
   restart(): void;
@@ -1036,10 +1050,10 @@ export const useAppStore = create<AppStore>((set, get) => {
     dockMode: DEFAULT_DOCK_MODE,
     chartsVisible: DEFAULT_CHARTS_VISIBLE,
     chartAxisMode: DEFAULT_CHART_AXIS_MODE,
+    workTableCollapsed: DEFAULT_WORK_TABLE_COLLAPSED,
 
     graphMaxHeight: DEFAULT_GRAPH_MAX_HEIGHT,
     graphVisible: DEFAULT_GRAPH_VISIBLE,
-    graphMinimap: DEFAULT_GRAPH_MINIMAP,
     graphThrowLabels: DEFAULT_GRAPH_THROW_LABELS,
     transition: null,
     graphNotice: null,
@@ -1253,8 +1267,6 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     setGraphVisible: (graphVisible) => set({ graphVisible }),
     toggleGraph: () => set((state) => ({ graphVisible: !state.graphVisible })),
-    setGraphMinimap: (graphMinimap) => set({ graphMinimap }),
-    toggleGraphMinimap: () => set((state) => ({ graphMinimap: !state.graphMinimap })),
     setGraphThrowLabels: (graphThrowLabels) => set({ graphThrowLabels }),
     toggleGraphThrowLabels: () =>
       set((state) => ({ graphThrowLabels: !state.graphThrowLabels })),
@@ -1517,6 +1529,9 @@ export const useAppStore = create<AppStore>((set, get) => {
         return { chartsVisible, dockMode: chartsVisible ? 'charts' : 'none' };
       }),
     setChartAxisMode: (chartAxisMode) => set({ chartAxisMode }),
+    setWorkTableCollapsed: (workTableCollapsed) => set({ workTableCollapsed }),
+    toggleWorkTableCollapsed: () =>
+      set((state) => ({ workTableCollapsed: !state.workTableCollapsed })),
 
     setPlaying: (playing) => set({ playing }),
     togglePlaying: () => set((state) => ({ playing: !state.playing })),
@@ -1638,9 +1653,12 @@ export const useAppStore = create<AppStore>((set, get) => {
         dockMode: s.dockMode,
         chartsVisible: s.chartsVisible,
         chartAxisMode: s.chartAxisMode,
+        // Work & power table collapse state (owner request 2026-07-12): always
+        // sampled here; encodeConfig only WRITES the `wt` key when true (the
+        // default false keeps a plain link unchanged).
+        workTableCollapsed: s.workTableCollapsed,
         graphMaxHeight: s.graphMaxHeight,
         graphVisible: s.graphVisible,
-        graphMinimap: s.graphMinimap,
         graphThrowLabels: s.graphThrowLabels,
         audioEnabled: s.audioEnabled,
         catchTickEnabled: s.catchTickEnabled,
@@ -1797,9 +1815,11 @@ export const useAppStore = create<AppStore>((set, get) => {
         dockMode,
         chartsVisible: dockMode === 'charts',
         chartAxisMode: config.chartAxisMode,
+        // Optional: absent (old links / most links, since it's emitted only when
+        // true) falls back to the default (visible).
+        workTableCollapsed: config.workTableCollapsed ?? DEFAULT_WORK_TABLE_COLLAPSED,
         graphMaxHeight,
         graphVisible: config.graphVisible,
-        graphMinimap: config.graphMinimap,
         graphThrowLabels: config.graphThrowLabels,
         audioEnabled: config.audioEnabled,
         catchTickEnabled: config.catchTickEnabled,

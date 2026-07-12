@@ -123,4 +123,48 @@ describe('Charts (ui layer)', () => {
     expect(energyWrapper.style.flexBasis).toBe('auto'); // natural (table) width
     expect(energyWrapper.style.minWidth).toBe('0px'); // shrinkable at narrow docks
   });
+
+  // --- Work & power table collapse (owner request 2026-07-12) ------------------
+
+  it('collapses the work & power table from its own header control', () => {
+    render(<Charts />);
+    expect(useAppStore.getState().workTableCollapsed).toBe(false);
+    expect(screen.getByText('Total')).toBeTruthy(); // table visible by default
+    fireEvent.click(screen.getByLabelText('Collapse work & power table'));
+    expect(useAppStore.getState().workTableCollapsed).toBe(true);
+    expect(screen.queryByText('Total')).toBeNull(); // table unmounted, not just hidden
+  });
+
+  it('shows a discoverable slim strip when collapsed, which reopens the table', () => {
+    useAppStore.setState({ workTableCollapsed: true });
+    render(<Charts />);
+    expect(screen.queryByText('Total')).toBeNull();
+    const expandButton = screen.getByLabelText('Expand work & power');
+    expect(expandButton).toBeTruthy();
+    fireEvent.click(expandButton);
+    expect(useAppStore.getState().workTableCollapsed).toBe(false);
+    expect(screen.getByText('Total')).toBeTruthy(); // table back
+  });
+
+  it('reflows the charts to split the full dock width when the table is collapsed (no reserved gutter)', () => {
+    render(<Charts />);
+    const chartsBody = screen.getByLabelText('Hand speed chart').parentElement as HTMLElement;
+    // Visible: the table sibling reserves its natural (shrinkable) width.
+    const visibleSibling = chartsBody.nextElementSibling as HTMLElement;
+    expect(visibleSibling.style.flexBasis).toBe('auto');
+    expect(visibleSibling.style.flexShrink).toBe('1');
+
+    fireEvent.click(screen.getByLabelText('Collapse work & power table'));
+
+    // Collapsed: ChartsBody remains the only grower (unchanged), and the sibling
+    // shrinks to the fixed slim-strip width — not the ~19rem table width — so
+    // ChartsBody's flex-grow: 1 absorbs everything else, splitting the full dock
+    // width between the three canvases with no reserved table-sized gutter.
+    expect(chartsBody.style.flexGrow).toBe('1');
+    expect(chartsBody.style.flexBasis).toBe('60%');
+    const collapsedSibling = chartsBody.nextElementSibling as HTMLElement;
+    expect(collapsedSibling.style.flexGrow).toBe('0');
+    expect(collapsedSibling.style.flexShrink).toBe('0'); // pinned, not table-shrinkable
+    expect(collapsedSibling.style.width).toBe('30px'); // COLLAPSED_STRIP, not the table
+  });
 });

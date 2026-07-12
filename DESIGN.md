@@ -169,24 +169,43 @@ The hand trajectory must be defined for **all** time (charts need it):
 - **Return** (empty hand, throw → next catch): the carry and the empty hand
   together trace the **juggler's oval** — the carry draws the bottom lobe (a
   dip to `line − holdDepth`), the empty hand the top lobe. The empty hand
-  rises in a single monotone ascent that quashes the release velocity, comes
-  to a true static rest at the crown when timing allows (v = a = jerk ≡ 0;
-  when tight the flanks meet at the midpoint — an instantaneous stop), then
-  descends monotonically into the catch. The apex is placed by two
-  quantities: `targetRise = min(holdDepth, v_y²/2g)` caps the flank at the
-  ballistic quash time (a slow throw over a long window never runs a
-  gravity-fighting quintic that would wiggle), and `apexRise = ½·v_y·flank`
-  derives the height from the FINAL flank so conditioning floors raise the
-  apex rather than cause overshoot — apexRise may slightly exceed holdDepth
-  in the shallow-hold + high-g + fast-throw corner (deliberate, bounded,
-  still one lobe; do not re-clamp it — that reintroduces the overshoot
-  bounce). For a normal cascade apexRise = holdDepth exactly: a symmetric
-  mirror of the carry dip. The ready column is the drift-placed wind-up
-  runway clamped to the throw–catch chord. Endpoints unchanged — the same six
-  ball-derived boundary states with `−g` endpoint accelerations — so every
-  carry↔return seam stays C² and the empty hand never traces its self-throw.
-  Supersedes the round-4 line-height rest, whose valley between two humps was
-  the owner's "bounce" (owner ruling, round 5, 2026-07-12).
+  **uses its empty phase**: one monotone ascent quashing the release velocity,
+  a single crest, then one monotone descent into the catch — a static rest at
+  the crown (v = a = jerk ≡ 0) appears only for a genuinely idle hand (empty
+  phase ≳ 2 beats) or a fast throw whose next catch is imminent; when tight the
+  flanks meet at the crown (an instantaneous stop, no dwell). A single
+  `flankTime` sizes both flanks: it fills the phase (`½·total`) capped by the
+  ballistic quash `v_y/g` (crown ≤ the ball's own apex — wiggle-free, no
+  self-throw tracking), the crown ceiling `2·hCeil/v_y` with `hCeil =
+  max(holdDepth, min(RETURN_RISE_MULT·holdDepth, RETURN_RISE_CAP))`, and the
+  beat-based rest threshold `RETURN_FILL_BEATS·beatPeriod`; it is **floored at
+  round-5's ballistic-quash flank** so the crest never falls below the hold-band
+  mirror, and an asymmetry guard reverts it to that short flank when the
+  release/arrival vertical speeds are extremely unequal (single-lobe safety).
+  The crest `apexRise = ½·v_y·flankTime` is derived from the FINAL flank and
+  **never re-clamped** (re-clamping to a fixed ceiling reintroduces the overshoot
+  bounce) — so `apexRise ≥ holdDepth`, rising with the fill on idle/fast returns
+  (bounded by `hCeil`) and slightly exceeding `holdDepth` in the shallow-hold +
+  high-g + fast-throw floor corner (deliberate, still one lobe). The **ready
+  column** sits at the vertical-velocity-weighted average of the two flanks'
+  velocity-matched targets (absorb → `fromPoint + ½·fromVelocity·flankTime`,
+  wind-up → `toPoint − ½·toVelocity·flankTime`; weight `absorbShare =
+  |fromVelocity_y|/(|fromVelocity_y|+|toVelocity_y|)`), clamped to the chord: the
+  two flanks share the horizontal reposition for a mild catch — cutting the
+  post-throw "moving to the waiting position" jerk — and stay velocity-matched
+  (never lunging) for a fast horizontal catch. The weight hands more of the
+  reposition to the flank whose `|v_y|` matches the crown height (low vertical
+  jerk) and less to the slower flank (which already carries the crown-descent
+  vertical jerk), so half the chord is never stacked onto an already-peaking
+  flank; at symmetric `v_y` (`absorbShare = ½` — the default cascade and every
+  uniform pattern) it is the even midpoint + `¼·(fromVelocity −
+  toVelocity)·flankTime` split. Endpoints unchanged — the same six ball-derived boundary
+  states with `−g` endpoint accelerations — so every carry↔return seam stays C²
+  and the empty hand never traces its self-throw. `RETURN_RISE_MULT = 1` disables
+  the fill and reverts the crown/rest to round-5 exactly, keeping only the
+  balanced-column jerk cut. Supersedes the round-5 always-rest-at-holdDepth
+  return (owner ruling, round 7, 2026-07-13; the round-5 text superseded the
+  round-4 line-height "bounce").
 - **Idle** (`0` beats / startup): hand eases to and rests at its catch point.
 - **Held 2s**: the carry simply spans the extra beats through the same spline
   machinery (static rest at the dip; do not generate a throw/catch pair).
@@ -299,7 +318,11 @@ Legend squares toggle hands on/off; hovering highlights the hand in the scene.
 
 ### Energy panel
 
-Table per hand: W⁺, |W⁻|, avg power (see §4.5), plus totals.
+Table per hand: W⁺, |W⁻|, avg power (see §4.5), plus totals. Collapsible from a
+chevron in its own header (owner request 2026-07-12, codec key `wt`, default
+false = visible, emitted only when true): collapsed, the table shrinks to a
+slim labeled strip at the dock's right edge and the charts reflow to split the
+full dock width between them.
 
 ### Siteswap explorer (round 3, owner-approved)
 
@@ -359,13 +382,17 @@ clicks (oscillator + envelope) to keep the app asset-free.
 | `n_h` | 2 | 1–8 |
 | Hand positions (n_h=2) | throws at x=±0.10 m, catches at x=±0.30 m, y=1.00 m, z=0 | free |
 | Circle preset | hands on r=0.45 m circle, throws inset toward center | — |
-| `holdDepth` | 0.10 m | 0–0.4 m |
+| `holdDepth` | 0.20 m | 0.05–0.4 m |
 | Timeline window | 3 s | 1–15 s |
 | Ball radius | 0.035 m | 0.01–0.1 m |
 | Ball color | per-ball palette (matches ladder); single configurable color on toggle off | — |
 | `N` (graph) | 7 | 3–11 (warn ≥ 9) |
 
 Defaults must make the startup cascade look natural without touching anything.
+
+(`holdDepth` default 0.20 m and minimum 0.05 m: owner ruling, round 7, 2026-07-12;
+was 0.10 m default / 0 m minimum — a fully collapsed hold dip is no longer a
+selectable slider value.)
 
 ---
 

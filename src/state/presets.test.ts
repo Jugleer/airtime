@@ -52,7 +52,6 @@ function config(pattern: string): ShareConfig {
     chartAxisMode: 'magnitude',
     graphMaxHeight: 7,
     graphVisible: true,
-    graphMinimap: true,
     graphThrowLabels: true,
     audioEnabled: false,
     catchTickEnabled: true,

@@ -673,3 +673,64 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   stress than under rings (symmetry-over-locality, owner's priority); cycle
   stays findable via glow/highlight. 531 cycle-locality test re-baselined
   0.25→0.5 with measurement (~0.32) — documented, not a green-hack.
+
+## Round 7 — full-phase low-jerk returns + UX cluster    DONE
+- Commit: (this commit) — Gate: (2026-07-13, "npm run gate", green — 55 files /
+  743 tests; orchestrator-run)
+- Owner (robotic-juggling planner context): empty hand must use its ENTIRE empty
+  phase to slow then re-accelerate — no full stop unless a ball isn't coming for
+  1+ beats; peak jerk right after the throw is only acceptable when the next
+  catch is imminent. Plus: throw-labels toggle to the expanded graph's top-left,
+  bidirectional arrows split in two, graph zoom/pan, graph fills the panel
+  (horizontally above all), timeline text stretch fix, collapsible work & power
+  table, hold depth min 5 cm / default 20 cm, "clamped at X s" readouts, minimap
+  always on.
+- KINEMATICS (diagnose → design → skeptic×3 → implement → verify → repair →
+  re-verify, all Opus): round-5's short flanks + long apex rest were the jerk
+  culprit (peak sat on the release seam in 88.5% of returns). Round 7 = GUARDED
+  PHASE-FILL flanks (fillFlank = min(½·total, v/g, 2·hCeil/v,
+  RETURN_FILL_BEATS·τ_b); floors byte-identical to round 5) + a
+  vertical-velocity-WEIGHTED ready column. The first verify FAILED the design's
+  even 50/50 column split (jerk regression up to 19× on 97531/g30 corners —
+  caught only because the verifier re-ran the diagnosis harness); the repair
+  pass replaced it with absorbShare = |v_throw,y|/(|v_throw,y|+|v_catch,y|).
+  Re-verify over the 93,276-return grid: 0 bounces (turns==1 everywhere), peak
+  jerk median −41% / p90 −66% (default cascade −70%), peak location moved off
+  the release seam (88.5%→45.3% post-throw share), seams within budgets, path
+  length flat, rise envelope unchanged. Rest onset measured ~1.0 beat of
+  emptiness — matching the owner's "1+ beats" — and continuous across the
+  threshold. New constants (owner-tunable): RETURN_RISE_MULT=1.25,
+  RETURN_RISE_CAP=0.25 m, RETURN_FILL_BEATS=1.0; RETURN_RISE_MULT=1.0 is the
+  one-constant escape hatch back to round-5 crown/rest while keeping the
+  column jerk cut.
+- Kinematics flags for the owner: (a) 2,558/93,276 fast-throw returns (g=30-
+  dominated corners, sub-0.5-beat gaps) still insert a short rest — the crown
+  ceiling caps their flanks; eliminating them means ballooning the crown past
+  0.25 m (owner-gated via RETURN_RISE_CAP). (b) The no-tracking test bound
+  moved 0.5→0.25·ballApexHeight as a consequence of the taller filled crown;
+  review-verified that the kept crown-height pin subsumes it ~70× tighter, so
+  no real coverage was lost. (c) Pre-existing floor-overshoot corner
+  (97531/nh5/g30, max rise 0.4486 m) unchanged from baseline.
+- UI: (1) StateGraph — throw-labels toggle + reset-view in a top-left overlay
+  cluster (removed from VIEW); bidirectional-arc bug root-caused: opposite-sign
+  bows collapsed to the SAME control point because the arc normal already flips
+  with direction — same-sign bow now yields two separated arcs (pinned by a
+  6-distinct-control-points test); cursor-centered wheel-zoom 0.5–8× + drag-pan
+  + reset (transient, not in the URL); per-axis draw-layer fit so graphs fill
+  the panel (x-stretch preserves mirror symmetry; core layout untouched);
+  minimap always shown — graphMinimap/gm retired end-to-end (legacy gm links
+  decode-ignored). (2) TimelineBar — text stretch root-caused: fixed 1000-unit
+  viewBox + preserveAspectRatio=none; now laid out 1:1 in measured CSS px via
+  ResizeObserver (panel-splitter drags re-lay-out live). (3) Work & power table
+  collapsible (slim restore strip; charts split the full dock width; codec key
+  wt, emitted only when collapsed). (4) HOLD_DEPTH_MIN 0→0.05, DEFAULT 0.10→
+  0.20 (core constant; legacy hd<0.05 links clamp UP on apply, pinned by test);
+  dwell readout now names the bound: "clamped at 0.19 s" (β·h_min·τ_b).
+- Review (4 dimensions + adversarial verify): SHIP everywhere; the one medium
+  (tighten no-tracking bound to 0.4) was REFUTED with proof (subsumed by the
+  crown pin; a maxSep lower bound structurally cannot catch horizontal drift).
+  One low fixed by orchestrator pre-commit: the clamp readout's h_min now
+  matches core's isHoldToss — a sync crossing 2x counts as a flight ((2x,2x)
+  shows "clamped at 0.38 s"; new test).
+- Deferred: minimap viewport rectangle under zoom (skipped by design — the
+  non-uniform stretch made an honest rect fight the square minimap).

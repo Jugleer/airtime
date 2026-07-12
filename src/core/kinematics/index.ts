@@ -38,8 +38,9 @@ export {
 
 /** Default gravity g in m/s² (DESIGN.md §7). */
 export const DEFAULT_GRAVITY = 9.81;
-/** Default hold-dip depth in meters (DESIGN.md §7 `holdDepth`). */
-export const DEFAULT_HOLD_DEPTH = 0.1;
+/** Default hold-dip depth in meters (DESIGN.md §7 `holdDepth`: 0.20 m, owner
+ *  ruling round 7, 2026-07-12; was 0.10 m). */
+export const DEFAULT_HOLD_DEPTH = 0.2;
 /**
  * Radius (m) of the multiplex in-cup offset circle (orchestrator ruling 4): balls
  * co-thrown/co-held in a multiplex are nudged onto this small horizontal ring by
@@ -506,6 +507,47 @@ const MIN_HOLD_TIME = 1e-3;
 const RETURN_FLANK_FLOOR = 3e-3;
 
 /**
+ * Empty-return crown ceiling as a MULTIPLE of holdDepth (round 7). The empty hand
+ * fills its phase by lengthening the flank; a longer flank crests higher
+ * (crown = ½·v_y·flank), so the crown may rise to RETURN_RISE_MULT·holdDepth above
+ * the line (bounded by {@link RETURN_RISE_CAP}) — the modest, bounded balloon that
+ * buys the vertical-jerk cut for throws whose flight apex exceeds the hold band.
+ * OWNER-TUNABLE amplitude knob: RETURN_RISE_MULT = 1 disables the fill/balloon
+ * ENTIRELY — the crown and rest behaviour revert to round-5 EXACTLY, and the return
+ * still gains the full balanced-column jerk cut (~−44% median), because that cut
+ * touches only x/z. (DESIGN.md §4.3.)
+ */
+const RETURN_RISE_MULT = 1.25;
+/**
+ * Absolute crown ceiling (m) above the line, so slow / low-gravity / deep-hold
+ * corners never balloon the oval. At the app default holdDepth 0.20 this caps the
+ * fast-throw crest at 0.25 m (= 1.25·holdDepth); deep holds (≥0.25) are governed by
+ * holdDepth itself. Chosen so crown + half-chord stays inside the 0.5 m return-
+ * locality envelope. OWNER-TUNABLE amplitude knob (round 7).
+ */
+const RETURN_RISE_CAP = 0.25;
+/**
+ * Rest threshold in LOCAL beat-periods (owner's "a ball isn't coming for 1+ beats"):
+ * the fill flank never exceeds this many beats, so a static crown rest appears once
+ * the empty phase exceeds ~2·RETURN_FILL_BEATS beats (unless a crown / ballistic cap
+ * forces one earlier). 1.0 → standard cascades/fountains (empty ≲1.3 beats) stay
+ * continuous; genuinely idle hands (nh5 fountains, 51@nh5, …) rest. OWNER-TUNABLE
+ * (round 7).
+ */
+const RETURN_FILL_BEATS = 1.0;
+/**
+ * Asymmetry-guard band on the release/arrival vertical-speed ratio v_max/v_min
+ * (round 7). A crown RAISED by the fill over a long flank is not monotone-reachable
+ * from a much slower endpoint velocity (the height-offset bounce); so as the ratio
+ * grows the fill reverts continuously to round-5's proven-monotone short flank. Pure
+ * single-lobe SAFETY (not amplitude / rest): synthetic bounces begin only near ratio
+ * 100, real returns peak at ratio ~33, so this band never affects normal play.
+ * Inactive when RETURN_RISE_MULT = 1 (no fill → vy ≡ round-5).
+ */
+const RETURN_ASYM_LO = 12;
+const RETURN_ASYM_HI = 30;
+
+/**
  * Clamp `value` to the closed interval spanned by `from` and `to` (order-free).
  * Used by the wait-high return to keep its ready column between the throw and
  * catch columns (the drift-placed wind-up runway can otherwise reach past a
@@ -900,64 +942,78 @@ export const quinticViaCarryPath: CarryPath = { name: 'quintic-via', build: buil
 export const cubicBezierCarryPath: CarryPath = { name: 'cubic-bezier', build: buildCubicCarry };
 
 /**
- * Empty-hand APEX-REST return (throw → next catch), owner spec (round 5, the
- * "oval return"): between a throw and the hand's next catch the empty hand draws
- * the TOP lobe of the juggler's oval — a single monotone ASCENT that quashes the
- * release velocity, an optional true REST at the crown, then a single monotone
- * DESCENT into the catch. This SUPERSEDES the round-4 wait-high return, whose rest
- * sat at line height (lineY) and forced the hand to hump up, fall back to the line,
- * sit, hump up again, and fall into the catch — the owner's "bounce" (two humps
- * straddling a line-height valley; v_y reversed three times). Three C²-stitched
- * segments mirror {@link buildHeldRestCarry} but at the apex and with the return's
+ * Empty-hand OVAL-CROWN return (throw → next catch), owner spec (round 7, the
+ * "balanced velocity-aware column + guarded phase-fill"): between a throw and the
+ * hand's next catch the empty hand draws the TOP lobe of the juggler's oval — a
+ * single monotone ASCENT that quashes the release velocity, an optional true REST
+ * at the crown, then a single monotone DESCENT into the catch. Three C²-stitched
+ * segments mirror {@link buildHeldRestCarry} but at the crown and with the return's
  * boundary velocities (the ball's release velocity — UP — at the throw, its
  * arrival velocity — DOWN — at the catch):
  *
- *   absorb  (throw → apex)   quintic flank, endpoint accel (0, −g, 0) → (0,0,0)
- *   rest    (at the apex)    static — v = a = jerk ≡ 0 (a true pause at the crown)
- *   wind-up (apex → catch)   quintic flank, endpoint accel (0,0,0) → (0, −g, 0)
+ *   absorb  (throw → crown)  quintic flank, endpoint accel (0, −g, 0) → (0,0,0)
+ *   rest    (at the crown)   static — v = a = jerk ≡ 0 (present only when idle)
+ *   wind-up (crown → catch)  quintic flank, endpoint accel (0,0,0) → (0, −g, 0)
  *
- * The apex sits at y = lineY + apexRise, the exact mirror of the carry's dip
- * (lineY − holdDepth): the absorb decelerates the upward release velocity to a stop
- * at the crown, and the wind-up accelerates back down into the catch — one clean
- * up-pause-down lobe, no valley in the middle. Horizontally the ready column is the
- * drift-placed wind-up runway (toPoint − toVelocity·flank/2, so the wind-up is a
- * monotone velocity ramp into the catch), CLAMPED to the throw–catch chord so a
- * fast mostly-horizontal catch cannot send it lunging past a column — the crown
- * travels from the throw column to the catch column while high (the oval
- * circulates: the carry sweeps catch→throw along the bottom dip, the return sweeps
- * throw→catch along the top apex).
+ * The crown sits at y = lineY + apexRise; the absorb decelerates the upward release
+ * velocity to a stop there and the wind-up accelerates back down into the catch —
+ * one clean up-pause-down lobe, no valley in the middle.
  *
- * Two quantities set the height, and BOTH matter:
- *  • targetRise = min(holdDepth, v_y²/(2g)) — the apex the flank AIMS for. Capping
- *    at the ballistic quash height v_y²/(2g) sizes the flank at the time gravity
- *    alone would take to stop the release velocity, so a slow throw over a long
- *    window never gets a flank long enough to fight gravity and wiggle (that
- *    fight-gravity wiggle IS the round-4 bounce at low v_y). For a normal cascade
- *    the cap does not bind and targetRise = holdDepth.
- *  • apexRise = ½·v_y·flankTime — the apex the flank ACTUALLY reaches, derived from
- *    the FINAL flank AFTER the floors and half-window cap. Deriving the height from
- *    the flank (rather than re-clamping to targetRise) keeps the ascent monotone:
- *    when a conditioning floor lengthens the flank past 2·targetRise/v_y the apex
- *    rises WITH it instead of the quintic overshooting a too-low ceiling. The
- *    corollary is that apexRise can slightly EXCEED holdDepth in the shallow-hold +
- *    high-g + fast-throw corner (e.g. 522 at g = 30 → ~0.036; a 915 → ~0.127) —
- *    deliberate, bounded, still a single monotone lobe, and off the owner's set.
- *    For a normal cascade apexRise = holdDepth exactly.
+ * ROUND-7 CHANGES (owner: "use the whole empty phase to slow then speed up; don't
+ * come to a full stop unless a ball isn't coming for 1+ beats — stopping only ever
+ * increases jerk"). Both changes touch the round-5 construction surgically:
  *
- * This KEEPS the round-3/4 fixes: the seams stay C² (the same six ball-derived
+ *  1. GUARDED PHASE-FILL sizes a single `flankTime` for both flanks. It fills the
+ *     empty phase (½·total) instead of the round-5 hold-band flank, capped by the
+ *     ballistic quash v_y/g (crown ≤ v_y²/2g — wiggle-free, no self-throw tracking),
+ *     a bounded crown ceiling 2·hCeil/v_y with hCeil = max(holdDepth,
+ *     min(RETURN_RISE_MULT·holdDepth, RETURN_RISE_CAP)), and the beat-based rest
+ *     threshold RETURN_FILL_BEATS·beatPeriod — and FLOORED at round-5's ballistic-
+ *     quash flank so the crown never falls below the hold-band mirror. An asymmetry
+ *     guard (RETURN_ASYM_LO/HI on v_max/v_min) reverts the fill to that short flank
+ *     when the release/arrival vertical speeds are extremely unequal (single-lobe
+ *     safety). Filling raises the crown modestly (≤ hCeil) on idle/fast returns only;
+ *     the default cascade is unaffected. RETURN_RISE_MULT = 1 disables the fill and
+ *     reverts the vertical profile (flankTime, apexRise, rest) to round-5 EXACTLY.
+ *  2. BALANCED READY COLUMN (replaces round-5's one-sided drift toPoint − ½·toV·flank)
+ *     places the crown column at the VERTICAL-velocity-weighted average of the two
+ *     flanks' velocity-matched targets (absorb → fromPoint + ½·fromV·flank, wind-up →
+ *     toPoint − ½·toV·flank), weight absorbShare = |fromV_y|/(|fromV_y|+|toV_y|), clamped
+ *     to the throw–catch chord. It splits the horizontal reposition across both flanks
+ *     for a mild catch (killing the post-throw "moves to its waiting position" jerk
+ *     spike) and collapses to round-5's velocity-matched throw-column park for a fast
+ *     horizontal catch (no zip regression). The weight hands more of the reposition to
+ *     the flank whose |v_y| matches the crown (low vertical jerk) and less to the slower
+ *     flank (which already carries the crown-descent vertical jerk), so half the chord is
+ *     never stacked onto an already-peaking flank; absorbShare = ½ (symmetric v_y — the
+ *     default cascade, uniform patterns) is the even 50/50 split, i.e. the midpoint +
+ *     ¼·(fromV − toV)·flank column. It touches only x/z; the vertical profile is
+ *     independent of it.
+ *
+ * apexRise = ½·v_y·flankTime is derived from the FINAL (post-floor, post-cap) flank
+ * and NEVER re-clamped: when the fill or a conditioning floor lengthens the flank the
+ * crown rises WITH it, keeping the ascent monotone (re-clamping to a fixed ceiling
+ * reintroduced the round-4 overshoot bounce — pinned). apexRise = holdDepth for a
+ * round-5-shaped cascade; larger under the fill or in the shallow-hold + high-g +
+ * fast-throw floor corner (deliberate, bounded, still one lobe).
+ *
+ * This KEEPS the round-3/4/5 fixes: the seams stay C² (the same six ball-derived
  * endpoint states — fromPoint/fromVelocity/(0,−g,0) and toPoint/toVelocity/(0,−g,0)
- * — so no carry↔return acceleration step and no ball-tracing; the apex height is
+ * — so no carry↔return acceleration step and no ball-tracing; the crown height is
  * continuity-neutral because the absorb/rest/wind-up joints all sit at v = a = 0),
- * and the empty hand no longer lunges (the drift-placed chord-clamped ready column
- * is unchanged). Flank floors (reposition accel cap {@link HELD_REST_MAX_ACCEL},
- * {@link RETURN_FLANK_FLOOR} / {@link ABSORB_TIME_PER_SPEED}) and the half-return
- * cap are unchanged. When the return is too tight for a genuine rest
- * (total − 2·flank ≤ MIN_HOLD_TIME) the flanks meet at the apex midpoint — the hand
- * still slows to an instantaneous v = 0 at the crown (the owner's "just a
- * slowdown"), with no static segment. Short flanks use
- * {@link quinticHermiteConditioned} and EXACT evaluation-visible durations (as
- * {@link buildHeldRestCarry}) so the joints stay inside the 1e-9 budget. Returns
- * ALWAYS use this construction regardless of the user's carry-path choice.
+ * and the empty hand no longer lunges (the balanced column clamps to the chord).
+ * Flank floors (reposition accel cap {@link HELD_REST_MAX_ACCEL}, {@link
+ * RETURN_FLANK_FLOOR} / {@link ABSORB_TIME_PER_SPEED}) and the half-return cap are
+ * unchanged. When the return is too tight for a genuine rest (total − 2·flank ≤
+ * MIN_HOLD_TIME) the flanks meet at the crown — the hand still slows to an
+ * instantaneous v = 0 there (the owner's "just a slowdown"), with no static segment.
+ * Short flanks use {@link quinticHermiteConditioned} and EXACT evaluation-visible
+ * durations (as {@link buildHeldRestCarry}) so the joints stay inside the 1e-9
+ * budget. `beatPeriod` is the LOCAL beat period at the throw beat (the honest "beats"
+ * unit under slew/epochs); it only gates the fill length and can never cause a bounce
+ * (flankTime ≤ v_y/g by construction regardless of it). Returns ALWAYS use this
+ * construction regardless of the user's carry-path choice. Supersedes the round-5
+ * always-rest-at-holdDepth return (owner ruling, round 7).
  */
 function buildReturn(
   startTime: number,
@@ -968,6 +1024,7 @@ function buildReturn(
   toVelocity: Vec3,
   gravity: number,
   holdDepth: number,
+  beatPeriod: number,
 ): PolySegment[] {
   const total = endTime - startTime;
   if (total <= 0) {
@@ -975,27 +1032,53 @@ function buildReturn(
   }
   const g = gravityVector(gravity);
   // lineY is the hand's natural level — the midpoint of the throw and catch
-  // heights, the CENTER of the oval. The apex/ready sits apexRise ABOVE it (the
-  // mirror of the carry's dip at lineY − holdDepth); see targetRise/apexRise below.
+  // heights, the CENTER of the oval. The crown/ready sits apexRise ABOVE it (the
+  // mirror of the carry's dip at lineY − holdDepth); see flankTime/apexRise below.
   const lineY = 0.5 * (fromPoint.y + toPoint.y);
   const verticalSpeed = Math.max(Math.abs(fromVelocity.y), Math.abs(toVelocity.y));
   // Half the horizontal chord — the reposition each flank makes; floors the flank
   // so the reposition-to-rest stays within the acceleration cap.
   const reposition =
     0.5 * Math.max(Math.abs(toPoint.x - fromPoint.x), Math.abs(toPoint.z - fromPoint.z));
-  // targetRise: how high above the line the apex AIMS to sit — the hold-band mirror
-  // of the carry's dip, but capped at the BALLISTIC quash height v_y²/(2g) so the
-  // flank is never long enough to fight gravity over a slow-throw / long window
-  // (that fight-gravity wiggle is the round-4 bounce). = holdDepth for a normal
-  // cascade; smaller only when the throw is too slow to rise a full holdDepth in
-  // the ballistic quash time.
-  const targetRise =
-    verticalSpeed > 0
-      ? Math.min(holdDepth, (verticalSpeed * verticalSpeed) / (2 * gravity))
-      : holdDepth;
-  // Flank time = the ballistic quash time (2·targetRise/v_y), floored for the
-  // reposition accel cap and numerical conditioning, capped at half the return.
-  let flankTime = verticalSpeed > 0 ? (2 * targetRise) / verticalSpeed : 0.25 * total;
+  // The slower of the two endpoint vertical speeds — the asymmetry-guard denominator
+  // (a crown raised by the fill is not monotone-reachable from a much slower end).
+  const verticalMin = Math.min(Math.abs(fromVelocity.y), Math.abs(toVelocity.y));
+  let flankTime: number;
+  if (verticalSpeed > 0) {
+    // round-5 ballistic-quash flank: the proven-safe SHORT flank (crown = holdDepth
+    // for a normal throw). The fill NEVER goes below this → crown never shrinks
+    // below round-5's (verified 0/93,276).
+    const r5Flank =
+      (2 * Math.min(holdDepth, (verticalSpeed * verticalSpeed) / (2 * gravity))) / verticalSpeed;
+    // Crown ceiling: the fill may crest to hCeil above the line, never below holdDepth.
+    const hCeil = Math.max(holdDepth, Math.min(RETURN_RISE_MULT * holdDepth, RETURN_RISE_CAP));
+    // Fill the empty phase, capped by (i) half the return, (ii) the ballistic quash
+    // v_y/g (crown ≤ v_y²/2g → never fights gravity → wiggle-free), (iii) the crown
+    // ceiling 2·hCeil/v_y (crown ≤ hCeil), (iv) the beat-based rest threshold.
+    const fillFlank = Math.min(
+      0.5 * total,
+      verticalSpeed / gravity,
+      (2 * hCeil) / verticalSpeed,
+      RETURN_FILL_BEATS * beatPeriod,
+    );
+    // Single-lobe asymmetry guard: full fill when the release/arrival vertical speeds
+    // are balanced, reverting to r5Flank as their ratio grows. max(0, …) floors the
+    // fill at r5Flank so the crown can NEVER drop below round-5's. Continuous blend,
+    // no cliff. RETURN_RISE_MULT = 1 collapses hCeil → holdDepth so fillFlank ≤ r5Flank
+    // and flankTime = r5Flank exactly (round-5 vertical profile, no guard effect).
+    const ratio = verticalSpeed / Math.max(verticalMin, 1e-6);
+    const w = Math.min(
+      1,
+      Math.max(0, (RETURN_ASYM_HI - ratio) / (RETURN_ASYM_HI - RETURN_ASYM_LO)),
+    );
+    flankTime = r5Flank + w * Math.max(0, fillFlank - r5Flank);
+  } else {
+    flankTime = 0.25 * total; // degenerate NaN-safety fallback (never taken in practice)
+  }
+  // Conditioning / reposition floors — UNCHANGED from round-5 (may lengthen the flank
+  // past a crown cap; the derived apexRise then rises WITH it, never re-clamped). When
+  // a floor binds it dominates the (larger) fill too, so the flank equals round-5's
+  // there — same single-lobe behaviour.
   flankTime = Math.max(
     flankTime,
     verticalSpeed * ABSORB_TIME_PER_SPEED,
@@ -1003,27 +1086,56 @@ function buildReturn(
     RETURN_FLANK_FLOOR,
   );
   flankTime = Math.min(flankTime, 0.5 * total);
-  // Too tight for a genuine rest → flanks meet at the midpoint (v = 0 there, but
-  // no static dwell): the owner's "just a slowdown".
+  // Too tight for a genuine rest → flanks meet at the crown (v = 0 there, but no
+  // static dwell): the owner's "just a slowdown".
   if (total - 2 * flankTime <= MIN_HOLD_TIME) {
     flankTime = 0.5 * total;
   }
-  // Apex height derived from the FINAL (post-floor, post-cap) flank, NOT re-clamped
-  // to targetRise: when a conditioning floor lengthens the flank past the ballistic
-  // quash time the apex rises WITH it, so the ascent stays monotone instead of the
-  // quintic overshooting a too-low ceiling. This is why apexRise can slightly exceed
-  // holdDepth in the shallow-hold + high-g + fast-throw corner (deliberate, bounded,
-  // still a single lobe).
+  // Crown height derived from the FINAL (post-floor, post-cap) flank, NOT re-clamped
+  // to a target: when the fill or a conditioning floor lengthens the flank the crown
+  // rises WITH it, so the ascent stays monotone instead of the quintic overshooting a
+  // too-low ceiling. This is why apexRise can exceed holdDepth in the fill / shallow-
+  // hold + high-g + fast-throw corners (deliberate, bounded, still a single lobe).
   const apexRise = 0.5 * verticalSpeed * flankTime;
   const entryTime = startTime + flankTime;
   const exitTime = endTime - flankTime;
   const hasRest = exitTime - entryTime > 0;
-  // Ready column: the drift-placed wind-up runway, clamped to the throw–catch
-  // chord so it never strays past a column (no lunge on a fast horizontal catch).
+  // Balanced ready column (round 7): the WEIGHTED AVERAGE of the two flanks'
+  // velocity-matched targets (the absorb wants fromPoint + ½·fromV·flank, the wind-up
+  // wants toPoint − ½·toV·flank), CLAMPED to the chord (no lunge). Splits the horizontal
+  // reposition across both flanks for a mild catch (killing the owner's post-throw
+  // "moves to its waiting position" spike) and collapses to round-5's velocity-matched
+  // throw-column park for a fast horizontal catch (the zip). Touches only x/z — the
+  // vertical profile above is unchanged by this.
+  //
+  // The weight is VERTICAL-velocity aware (round-7 repair). apexRise = ½·verticalSpeed·
+  // flankTime is the linear-decel height of the FASTER-|v_y| flank, so that flank ascends
+  // /descends the crown height consistently (low vertical jerk) while the SLOWER-|v_y|
+  // flank must traverse the same crown height with a mismatched velocity → it carries a
+  // large crown-descent vertical jerk (~30·verticalSpeed/flankTime²) regardless of the
+  // column. absorbShare = |fromV_y|/(|fromV_y|+|toV_y|) therefore hands MORE of the
+  // horizontal reposition to whichever flank matches the crown (the low-vertical-jerk
+  // one) and LESS to the hot crown-descent flank, so half the chord is no longer stacked
+  // onto an already-peaking flank (the fast-pattern wind-up regression: 97531/idle
+  // fountains). absorbShare = ½ (symmetric v_y — the default cascade, every uniform
+  // pattern, and the skeptic's tuple) is EXACTLY the even 50/50 split, i.e. the round-7
+  // design's midpoint + ¼·(fromV − toV)·flank; the weighting only shifts on a
+  // vertical-velocity asymmetry (mixed-value patterns). It is a strict refinement, not a
+  // new column — it minimises the max 3-D flank jerk instead of only the horizontal.
+  const absorbVy = Math.abs(fromVelocity.y);
+  const catchVy = Math.abs(toVelocity.y);
+  const absorbShare = absorbVy + catchVy > 1e-9 ? absorbVy / (absorbVy + catchVy) : 0.5;
+  const balancedColumn = (from: number, to: number, fromV: number, toV: number): number =>
+    clampToChord(
+      from,
+      to,
+      (1 - absorbShare) * (from + 0.5 * fromV * flankTime) +
+        absorbShare * (to - 0.5 * toV * flankTime),
+    );
   const ready = vec3(
-    clampToChord(fromPoint.x, toPoint.x, toPoint.x - 0.5 * toVelocity.x * flankTime),
+    balancedColumn(fromPoint.x, toPoint.x, fromVelocity.x, toVelocity.x),
     lineY + apexRise,
-    clampToChord(fromPoint.z, toPoint.z, toPoint.z - 0.5 * toVelocity.z * flankTime),
+    balancedColumn(fromPoint.z, toPoint.z, fromVelocity.z, toVelocity.z),
   );
   const short = flankTime < SHORT_SEGMENT_TIME;
   const hermite = short ? quinticHermiteConditioned : quinticHermite;
@@ -1437,6 +1549,15 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
             next.startVelocity,
             returnParams.gravity,
             returnParams.holdDepth,
+            // Local beat period at the throw beat — the honest "beats" unit under
+            // slew/epochs; gates only the fill length (never a bounce). A return
+            // exists only when a next carry starts at a beat > endBeat within range,
+            // so beatTime(endBeat + 1) is in range; max(…, 1e-9) guards a degenerate
+            // non-positive period (disables only the beat cap, not the physical ones).
+            Math.max(
+              timeline.beatTime(carry.endBeat + 1) - timeline.beatTime(carry.endBeat),
+              1e-9,
+            ),
           ),
         );
       }

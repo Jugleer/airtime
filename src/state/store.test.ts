@@ -250,11 +250,16 @@ describe('runtime physics params (kinematics epochs, DESIGN.md §4.6)', () => {
     expect(state.sim).not.toBe(before); // the sim was rebuilt with the epoch
   });
 
-  it('hold-depth slider clamps to [0, 0.4] m', () => {
+  it('hold-depth slider clamps to [0.05, 0.4] m (owner ruling round 7: min 0.05)', () => {
     useAppStore.setState({ simTime: 0 });
+    expect(HOLD_DEPTH_MIN).toBeCloseTo(0.05, 9);
     useAppStore.getState().setHoldDepth(5);
     expect(useAppStore.getState().holdDepth).toBe(HOLD_DEPTH_MAX);
     useAppStore.getState().setHoldDepth(-1);
+    expect(useAppStore.getState().holdDepth).toBe(HOLD_DEPTH_MIN);
+    // A positive value below the 0.05 m minimum clamps UP to the minimum (no
+    // fully-collapsed hold dip is selectable any more).
+    useAppStore.getState().setHoldDepth(0.02);
     expect(useAppStore.getState().holdDepth).toBe(HOLD_DEPTH_MIN);
     useAppStore.getState().setHoldDepth(0.2);
     expect(useAppStore.getState().sim.kinematics.holdDepth).toBeCloseTo(0.2, 9);

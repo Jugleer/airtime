@@ -12,6 +12,7 @@ import { useMemo, type CSSProperties, type ReactElement } from 'react';
 import { energyReport } from '../core/energy';
 import { useAppStore } from '../state';
 import { energyRows, formatEnergy } from './energyPanel';
+import { CollapseButton } from './panels';
 import { usePalette, type Palette } from './theme';
 
 /** A table header cell with a full-word label and the NOTATION symbol in a tooltip. */
@@ -38,6 +39,7 @@ function HeaderCell({
 export function EnergyPanel(): ReactElement {
   const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
+  const setWorkTableCollapsed = useAppStore((state) => state.setWorkTableCollapsed);
   // Period-aggregated + time-independent: recompute only on a sim rebuild.
   const report = useMemo(() => energyReport(sim.kinematics, sim.timeline), [sim]);
   const { hands, total } = useMemo(() => energyRows(report), [report]);
@@ -62,6 +64,19 @@ export function EnergyPanel(): ReactElement {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+      {/* Unobtrusive header: the table's own title + a collapse chevron (owner
+          request 2026-07-12). Collapsing hides this whole panel (Charts.tsx swaps
+          it for a slim CollapsedStrip at the dock's right edge) so the charts
+          reflow to split the full dock width — the same idiom as the sidebar and
+          ladder column collapse controls (ui/panels.tsx). */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+        <h3 style={panelTitleStyle(palette)}>Work &amp; power</h3>
+        <CollapseButton
+          side="right"
+          label="work & power table"
+          onCollapse={() => setWorkTableCollapsed(true)}
+        />
+      </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={tableStyle(palette)}>
           <thead>
@@ -103,6 +118,18 @@ export function EnergyPanel(): ReactElement {
 }
 
 // --- Inline styling (theme-aware, dark-first) --------------------------------
+
+function panelTitleStyle(palette: Palette): CSSProperties {
+  return {
+    margin: 0,
+    fontSize: '0.72rem',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    color: palette.textSecondary,
+    whiteSpace: 'nowrap',
+  };
+}
 
 function tableStyle(palette: Palette): CSSProperties {
   return {

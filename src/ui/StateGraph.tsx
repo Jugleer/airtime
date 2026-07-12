@@ -1,21 +1,40 @@
 // src/ui/StateGraph — the state-graph OVERLAY (DESIGN.md §5; redesign 2026-07-10,
-// owner requirement 7). The graph is now a translucent overlay over the 3D scene,
+// owner requirement 7). The graph is a translucent overlay over the 3D scene,
 // default OFF, toggled by a labeled button in the scene's TOP-LEFT corner (the
 // camera presets sit top-right). When open, a semi-transparent dark backdrop
-// covers the scene with the graph SVG centered; the scene stays visible
-// behind it. Node clicks navigate (BFS splice — past bit-identical); the marker,
-// the transition status line, the N stepper and the hard-reset button live with
-// the overlay.
+// covers the scene and the graph FILLS it; the scene stays visible behind. Node
+// clicks navigate (BFS splice — past bit-identical); the marker, the transition
+// status line, the N stepper and the hard-reset button live with the overlay.
+//
+// Expanded-view UX (owner 2026-07-12): the SVG viewBox is sized to the measured
+// panel (CSS px, 1:1) and the layout is stretched PER-AXIS (draw layer only, core
+// untouched) so it fills the space — especially horizontally, where the symmetric
+// layouts are narrow. A `<g>` transform layers on TRANSIENT zoom (cursor-centered
+// wheel, non-passive) + drag-to-pan (pointer capture, click/drag threshold) + reset
+// (a top-left cluster button, or double-click) — never persisted to the URL. The
+// same top-left cluster hosts the "Throw labels" toggle (moved off the sidebar).
 //
 // Layout (round 6, owner-approved): core's layoutStateGraph dispatches by size —
 // symmetric stress majorization (exact mirror symmetry, ground at the top apex)
 // up to STRESS_MAX_NODES, the concentric excitation rings beyond. The draw layer
-// here is placement-independent (barbed rim arrowheads, offset bidirectional
-// arcs, teardrop self-loops, throw-number chips — default ON, codec key gt).
-// Performance: graph/layout/cycle are memoized per (b, N, pattern); only the
-// marker + status line subscribe to simTime.
+// here is placement-independent (barbed rim arrowheads, split bidirectional arcs —
+// each direction its own arrow — teardrop self-loops, throw-number chips, codec key
+// gt). The corner minimap is ALWAYS shown while the overlay is closed. Performance:
+// graph/layout/cycle are memoized per (b, N, pattern); only the marker + status
+// line subscribe to simTime, and the zoom/pan transform never re-renders the picture.
 
-import { memo, useMemo, type CSSProperties, type ReactElement } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement,
+} from 'react';
 import { clamp } from '../core/math';
 import {
   buildStateGraph,
@@ -34,7 +53,9 @@ import { currentBeatIndex, transitionStatusOf } from '../state/simulation';
 import { usePalette, type Palette } from './theme';
 import { Button } from './widgets';
 
-// SVG geometry (viewBox units) — unchanged from the prior layout.
+// SVG geometry (viewBox units). The minimap keeps a fixed square box; the expanded
+// overlay now sizes its viewBox to the MEASURED panel in CSS pixels (1 unit = 1 px)
+// so the layout can be stretched per-axis to fill the space (owner 2026-07-12).
 const VIEW_SIZE = 480;
 const MARGIN_PLAIN = 30;
 const MARGIN_LABELED = 60;
@@ -42,6 +63,15 @@ const MAX_NODE_RADIUS = 8;
 const MIN_NODE_RADIUS = 1.6;
 const TAU = Math.PI * 2;
 const LABEL_NODE_LIMIT = 42;
+/** Fallback overlay size (CSS px) before the panel is measured / in jsdom tests. */
+const DEFAULT_OVERLAY_WIDTH = 760;
+const DEFAULT_OVERLAY_HEIGHT = 460;
+/** Wheel-zoom clamp + sensitivity for the expanded view (transient, never persisted). */
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 8;
+const ZOOM_WHEEL_SENSITIVITY = 0.0015;
+/** Pixels of pointer travel that turn a would-be node click into a pan (drag) gesture. */
+const CLICK_DRAG_THRESHOLD = 4;
 /**
  * Density gate (graphics redesign 2026-07-12). The draw layer counts NODES, not the
  * (shrinking) node radius, to decide clutter: at/under this many nodes the graph is
@@ -290,14 +320,57 @@ interface GraphGeometry {
   toY(y: number): number;
 }
 
+/**
+ * Map the (pure, deterministic) normalized layout into a `width × height` pixel box,
+ * per-axis (owner 2026-07-12: "fill the space when expanded"). Core normalizes the
+ * layout UNIFORMLY into [0.06, 0.94] so a symmetric graph that is taller than wide
+ * stays narrow in x — which read as "tightly clustered near the centre". The draw
+ * layer here — NOT core — remaps each axis independently from the layout's actual
+ * bounding box to [margin, dim − margin], so x stretches to fill a wide panel while
+ * the mirror-about-the-vertical-axis symmetry is preserved (an x-only stretch keeps
+ * left/right mirrored). The stretch touches ONLY node POSITIONS; node radii, arc
+ * bows and label offsets are all in screen units (see GraphPicture), so circles stay
+ * circular and arcs/labels never distort. `width`/`height` are the SVG viewBox size
+ * (the square VIEW_SIZE for the minimap; the measured panel in CSS px for the overlay).
+ */
 function geometryOf(
   layout: GraphLayout,
+  width: number,
+  height: number,
   labeled: boolean = layout.nodes.length <= LABEL_NODE_LIMIT,
 ): GraphGeometry {
   // The minimap draws no labels at any size (owner requirement), so it passes
   // `labeled = false` to reclaim the label margin and fill its small box.
   const margin = labeled ? MARGIN_LABELED : MARGIN_PLAIN;
-  const span = VIEW_SIZE - 2 * margin;
+  const spanX = Math.max(1, width - 2 * margin);
+  const spanY = Math.max(1, height - 2 * margin);
+
+  // The layout's actual bounding box (per-axis) — what we stretch to fill the panel.
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const node of layout.nodes) {
+    minX = Math.min(minX, node.x);
+    maxX = Math.max(maxX, node.x);
+    minY = Math.min(minY, node.y);
+    maxY = Math.max(maxY, node.y);
+  }
+  const domX = maxX - minX;
+  const domY = maxY - minY;
+  // Degenerate axis (single column/row/node): centre it rather than divide by ~0.
+  const scaleX = domX > 1e-6 ? spanX / domX : 0;
+  const scaleY = domY > 1e-6 ? spanY / domY : 0;
+  const toX = (x: number): number =>
+    scaleX > 0 ? margin + (x - minX) * scaleX : width / 2;
+  const toY = (y: number): number =>
+    scaleY > 0 ? margin + (y - minY) * scaleY : height / 2;
+
+  // Node radius from the min screen-space arc gap (per ring). Under a non-uniform
+  // stretch the tighter axis constrains spacing, so use the SMALLER per-axis scale
+  // (pixels per normalized unit) — nodes never overlap on the compressed axis while
+  // the other axis simply gains breathing room.
+  const scaleMin = Math.min(scaleX || Infinity, scaleY || Infinity);
   const rings = new Map<number, { count: number; radius: number }>();
   for (const node of layout.nodes) {
     const ring = rings.get(node.level);
@@ -309,22 +382,22 @@ function geometryOf(
   }
   let minArcGap = Infinity;
   for (const { count, radius } of rings.values()) {
-    if (count > 1 && radius > 0) {
-      minArcGap = Math.min(minArcGap, (TAU * radius * span) / count);
+    if (count > 1 && radius > 0 && Number.isFinite(scaleMin)) {
+      minArcGap = Math.min(minArcGap, (TAU * radius * scaleMin) / count);
     }
   }
   const nodeRadius = Number.isFinite(minArcGap)
     ? Math.min(MAX_NODE_RADIUS, Math.max(MIN_NODE_RADIUS, minArcGap * 0.42))
     : MAX_NODE_RADIUS;
   return {
-    width: VIEW_SIZE,
-    height: VIEW_SIZE,
+    width,
+    height,
     nodeRadius,
     // A readable size FLOOR so the amber marker stays findable on dense graphs where
     // nodeRadius bottoms out at MIN_NODE_RADIUS (graphics redesign 2026-07-12).
     markerRadius: Math.max(2.4, nodeRadius * 0.62),
-    toX: (x) => margin + x * span,
-    toY: (y) => margin + y * span,
+    toX,
+    toY,
   };
 }
 
@@ -452,10 +525,20 @@ const GraphPicture = memo(function GraphPicture({
       // Base arrowheads honour the density gate; cycle arrows always show.
       const arrowLen = onCycle ? cycleLen : baseArrows ? baseLen : 0;
       const arrowW = onCycle ? cycleW : baseArrows ? baseW : 0;
+      // Bidirectional split (owner 2026-07-12): A↔B must render as TWO clearly
+      // separated arrows, one per direction. `arcEdge` offsets its control point by
+      // `bow` along the chord's LEFT normal, and that normal FLIPS with the edge's
+      // direction (A→B vs B→A point opposite ways). So a SAME-SIGN bow for both
+      // directions lands the two control points on OPPOSITE screen sides of the chord
+      // — the split. (The old code used opposite signs, which — because the normal
+      // already flips — put both control points on the SAME side, collapsing the pair
+      // into one doubled/indistinct arc.) The magnitude scales with the on-screen
+      // chord length so the two arcs bow far enough apart to read, with their heads
+      // landing at opposite node rims without overlapping.
       const bow = fan
         ? fan(node.level, edge.to)
         : edgeSet.has(rkey)
-          ? (node.bits < edge.to ? 1 : -1) * clamp(Math.hypot(b.x - a.x, b.y - a.y) * 0.16, 5, 18)
+          ? clamp(Math.hypot(b.x - a.x, b.y - a.y) * 0.2, 10, 30)
           : 0;
       const built =
         bow === 0
@@ -753,11 +836,228 @@ function useGraphModel(): GraphModel {
   return { status: 'ok', graph: derived.graph, layout: derived.layout, cycle, ballCount, graphMaxHeight };
 }
 
-/** The full-overlay graph body: derived graph/layout/cycle + the interactive SVG. */
+/** Just the interactive-graph member of the {@link GraphModel} union (canvas prop). */
+type OkGraphModel = Extract<GraphModel, { status: 'ok' }>;
+
+/**
+ * Measure a container's content box in CSS px so the overlay's SVG viewBox can match
+ * it 1:1 (needed for cursor-centered zoom and per-axis fill). Defaults to a sensible
+ * size before the first layout — and in jsdom, where ResizeObserver is absent and
+ * clientWidth/Height read 0, the default is simply kept (so tests still render nodes).
+ */
+function useMeasuredSize(): {
+  readonly ref: React.RefObject<HTMLDivElement | null>;
+  readonly width: number;
+  readonly height: number;
+} {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: DEFAULT_OVERLAY_WIDTH, height: DEFAULT_OVERLAY_HEIGHT });
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return undefined;
+    }
+    const read = (): void => {
+      const width = element.clientWidth;
+      const height = element.clientHeight;
+      if (width > 0 && height > 0) {
+        setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+      }
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') {
+      return undefined;
+    }
+    const observer = new ResizeObserver(read);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return { ref, width: size.width, height: size.height };
+}
+
+interface ZoomPan {
+  /** SVG transform for the content group (translate then scale). */
+  readonly transform: string;
+  /** True when zoomed or panned off the identity view (gates the ↺ Reset affordance). */
+  readonly transformed: boolean;
+  reset(): void;
+  /** True while the last gesture crossed the drag threshold (a pan, not a node click). */
+  readonly movedRef: React.MutableRefObject<boolean>;
+  onPointerDown(event: ReactPointerEvent<SVGSVGElement>): void;
+  onPointerMove(event: ReactPointerEvent<SVGSVGElement>): void;
+  onPointerUp(event: ReactPointerEvent<SVGSVGElement>): void;
+}
+
+/**
+ * Transient zoom/pan for the expanded graph (owner 2026-07-12) — NEVER persisted
+ * (not in the codec/URL): wheel-zoom centered on the cursor (clamped MIN_ZOOM–MAX_ZOOM
+ * via a NON-PASSIVE wheel listener so the page never scrolls — the Slider precedent in
+ * ui/widgets), drag-to-pan with pointer capture, and reset (the cluster button or a
+ * double-click). A small movement threshold distinguishes a click (navigate) from a
+ * drag (pan): capture only engages once the pointer crosses it, so a plain node click
+ * is never swallowed. Zoom/pan is a `<g>` transform, so GraphPicture (memoized) does
+ * not re-render as the view moves — only the transform attribute updates.
+ */
+function useZoomPan(svgRef: React.RefObject<SVGSVGElement | null>): ZoomPan {
+  const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const dragRef = useRef<
+    { startX: number; startY: number; startTx: number; startTy: number; pointerId: number } | null
+  >(null);
+  const movedRef = useRef(false);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) {
+      return undefined;
+    }
+    const handler = (event: WheelEvent): void => {
+      if (event.deltaY === 0) {
+        return;
+      }
+      event.preventDefault(); // keep the page from scrolling while zooming
+      const rect = svg.getBoundingClientRect();
+      // viewBox == element px (1:1), so client−rect IS the SVG/user coordinate.
+      const cx = event.clientX - rect.left;
+      const cy = event.clientY - rect.top;
+      setView((v) => {
+        const scale = clamp(v.scale * Math.exp(-event.deltaY * ZOOM_WHEEL_SENSITIVITY), MIN_ZOOM, MAX_ZOOM);
+        const factor = scale / v.scale;
+        // Keep the point under the cursor fixed: p = t + s·w ⇒ t' = p − factor·(p − t).
+        return { scale, tx: cx - factor * (cx - v.tx), ty: cy - factor * (cy - v.ty) };
+      });
+    };
+    svg.addEventListener('wheel', handler, { passive: false });
+    return () => svg.removeEventListener('wheel', handler);
+  }, [svgRef]);
+
+  const onPointerDown = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>): void => {
+      if (event.button !== 0) {
+        return; // primary button / touch only (leave right-click for the browser)
+      }
+      movedRef.current = false;
+      const v = viewRef.current;
+      dragRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        startTx: v.tx,
+        startTy: v.ty,
+        pointerId: event.pointerId,
+      };
+    },
+    [],
+  );
+
+  const onPointerMove = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>): void => {
+      const drag = dragRef.current;
+      if (!drag) {
+        return;
+      }
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (!movedRef.current && Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD) {
+        // Crossed the threshold: this is a pan, not a click. Capture the pointer now
+        // (not on down) so a plain click still reaches the node's own handler.
+        movedRef.current = true;
+        const svg = svgRef.current;
+        if (svg && typeof svg.setPointerCapture === 'function') {
+          try {
+            svg.setPointerCapture(drag.pointerId);
+          } catch {
+            // jsdom / unsupported: capture is a nicety, not required.
+          }
+        }
+      }
+      if (movedRef.current) {
+        setView((v) => ({ scale: v.scale, tx: drag.startTx + dx, ty: drag.startTy + dy }));
+        event.preventDefault();
+      }
+    },
+    [svgRef],
+  );
+
+  const onPointerUp = useCallback(
+    (event: ReactPointerEvent<SVGSVGElement>): void => {
+      const drag = dragRef.current;
+      if (!drag) {
+        return;
+      }
+      dragRef.current = null;
+      const svg = svgRef.current;
+      if (svg && typeof svg.releasePointerCapture === 'function') {
+        try {
+          svg.releasePointerCapture(event.pointerId);
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [svgRef],
+  );
+
+  const reset = useCallback((): void => {
+    movedRef.current = false;
+    setView({ scale: 1, tx: 0, ty: 0 });
+  }, []);
+
+  return {
+    transform: `translate(${view.tx} ${view.ty}) scale(${view.scale})`,
+    transformed: view.scale !== 1 || view.tx !== 0 || view.ty !== 0,
+    reset,
+    movedRef,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+  };
+}
+
+/**
+ * The small top-left control cluster over the EXPANDED graph (owner 2026-07-12): the
+ * "Throw labels" toggle (relocated from the sidebar View group) and — only once the
+ * view is zoomed/panned — a "↺ Reset view" button. Absolutely positioned at the graph
+ * area's top-left corner so it overlays the drawing without stealing its space.
+ */
+function GraphOverlayCluster({
+  onResetView,
+  showReset,
+}: {
+  onResetView(): void;
+  readonly showReset: boolean;
+}): ReactElement {
+  const palette = usePalette();
+  const graphThrowLabels = useAppStore((state) => state.graphThrowLabels);
+  const toggleGraphThrowLabels = useAppStore((state) => state.toggleGraphThrowLabels);
+  return (
+    <div style={clusterStyle(palette)}>
+      <label style={clusterToggleStyle(palette)}>
+        <input type="checkbox" checked={graphThrowLabels} onChange={toggleGraphThrowLabels} />
+        <span>Throw labels</span>
+      </label>
+      {showReset ? (
+        <button
+          type="button"
+          onClick={onResetView}
+          aria-label="Reset graph view"
+          title="Reset zoom and pan (or double-click the graph)"
+          style={clusterButtonStyle(palette)}
+        >
+          ↺ Reset view
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The full-overlay graph body: derived graph/layout/cycle + the interactive SVG. This
+ * dispatcher only surfaces the honest notices; the interactive canvas (which owns the
+ * measure + zoom/pan hooks) is a child so those hooks are never called conditionally.
+ */
 function StateGraphBody(): ReactElement {
   const palette = usePalette();
-  const navigateToState = useAppStore((state) => state.navigateToState);
-  const graphThrowLabels = useAppStore((state) => state.graphThrowLabels);
   const model = useGraphModel();
 
   if (model.status === 'unavailable') {
@@ -783,42 +1083,85 @@ function StateGraphBody(): ReactElement {
       </p>
     );
   }
+  return <StateGraphCanvas model={model} />;
+}
 
+/**
+ * The interactive graph canvas. The SVG viewBox is sized to the MEASURED panel (CSS px,
+ * 1 unit = 1 px) and the layout is stretched per-axis to FILL it (owner 2026-07-12);
+ * a `<g>` transform layers on transient zoom/pan. Node clicks still navigate — a small
+ * drag threshold tells a click apart from a pan.
+ */
+function StateGraphCanvas({ model }: { readonly model: OkGraphModel }): ReactElement {
+  const palette = usePalette();
+  const navigateToState = useAppStore((state) => state.navigateToState);
+  const graphThrowLabels = useAppStore((state) => state.graphThrowLabels);
   const { graph, layout, cycle, ballCount, graphMaxHeight } = model;
-  const geometry = geometryOf(layout);
+
+  const container = useMeasuredSize();
+  const svgRef = useRef<SVGSVGElement>(null);
+  const zoom = useZoomPan(svgRef);
+  const { movedRef } = zoom;
+  const geometry = useMemo(
+    () => geometryOf(layout, container.width, container.height),
+    [layout, container.width, container.height],
+  );
+  const handleNodeClick = useCallback(
+    (bits: number): void => {
+      // Suppress the click that ends a pan (drag), so a node only navigates on a real
+      // click (see useZoomPan's movement threshold).
+      if (movedRef.current) {
+        return;
+      }
+      navigateToState(bits);
+    },
+    [navigateToState, movedRef],
+  );
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', alignItems: 'center', minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minHeight: 0, width: '100%', flex: 1 }}>
       <StatusLine />
-      <svg
-        viewBox={`0 0 ${geometry.width} ${geometry.height}`}
-        role="img"
-        aria-label={`State graph for ${ballCount} balls, max throw ${graphMaxHeight}`}
-        style={{ display: 'block', width: 'auto', height: '100%', maxHeight: '58vh', maxWidth: '100%' }}
-      >
-        <GraphPicture
-          graph={graph}
-          layout={layout}
-          cycle={cycle}
-          geometry={geometry}
-          palette={palette}
-          onNodeClick={navigateToState}
-          showThrowLabels={graphThrowLabels}
-          idPrefix="sg-overlay"
-        />
-        <CurrentStateMarker
-          layout={layout}
-          geometry={geometry}
-          maxHeight={graphMaxHeight}
-          color={palette.amber}
-          glowFilterId="sg-overlay-softglow"
-        />
-      </svg>
+      <div ref={container.ref} style={{ position: 'relative', flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' }}>
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${geometry.width} ${geometry.height}`}
+          role="img"
+          aria-label={`State graph for ${ballCount} balls, max throw ${graphMaxHeight}`}
+          onPointerDown={zoom.onPointerDown}
+          onPointerMove={zoom.onPointerMove}
+          onPointerUp={zoom.onPointerUp}
+          onPointerCancel={zoom.onPointerUp}
+          onDoubleClick={zoom.reset}
+          style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none', cursor: 'grab' }}
+        >
+          <g transform={zoom.transform}>
+            <GraphPicture
+              graph={graph}
+              layout={layout}
+              cycle={cycle}
+              geometry={geometry}
+              palette={palette}
+              onNodeClick={handleNodeClick}
+              showThrowLabels={graphThrowLabels}
+              idPrefix="sg-overlay"
+            />
+            <CurrentStateMarker
+              layout={layout}
+              geometry={geometry}
+              maxHeight={graphMaxHeight}
+              color={palette.amber}
+              glowFilterId="sg-overlay-softglow"
+            />
+          </g>
+        </svg>
+        <GraphOverlayCluster onResetView={zoom.reset} showReset={zoom.transformed} />
+      </div>
       <p style={{ ...statusStyle(palette), fontSize: '0.72rem', textAlign: 'center' }}>
         {graph.nodes.length} states (b = {ballCount}, N = {graphMaxHeight}
         {graph.nodes.length <= STRESS_MAX_NODES
           ? '), symmetric layout (ground at the top'
           : ') in excitation rings (ground at centre'}
-        ). Click a state to transition to it.
+        ). Click a state to transition to it. Scroll to zoom, drag to pan, double-click to reset.
       </p>
     </div>
   );
@@ -876,7 +1219,8 @@ function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
     model.status === 'ok' ? (
       (() => {
         const { graph, layout, cycle, graphMaxHeight } = model;
-        const geometry = geometryOf(layout, false);
+        // The minimap keeps a fixed SQUARE box (per-axis fill within it), no labels.
+        const geometry = geometryOf(layout, VIEW_SIZE, VIEW_SIZE, false);
         return (
           <svg
             viewBox={`0 0 ${geometry.width} ${geometry.height}`}
@@ -931,9 +1275,9 @@ function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
 /**
  * The state-graph scene affordances (DESIGN.md §5, §6):
  *   • a persistent top-left toggle button that opens/closes the FULL overlay;
- *   • an always-visible corner MINIMAP under it (unless the overlay is open or the
- *     operator turned it off in the sidebar View group) that also expands the
- *     overlay on click;
+ *   • an always-visible corner MINIMAP under it (owner 2026-07-12: the minimap is now
+ *     always shown while the overlay is closed — the optional toggle was removed) that
+ *     also expands the overlay on click;
  *   • the full interactive overlay (N stepper, hard reset, navigation) when
  *     `graphVisible`. When the overlay is closed its body unmounts (nothing derived
  *     or drawn beyond the cheap minimap).
@@ -941,7 +1285,6 @@ function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
 export function StateGraph(): ReactElement {
   const palette = usePalette();
   const graphVisible = useAppStore((state) => state.graphVisible);
-  const graphMinimap = useAppStore((state) => state.graphMinimap);
   const graphMaxHeight = useAppStore((state) => state.graphMaxHeight);
   const graphNotice = useAppStore((state) => state.graphNotice);
   const toggleGraph = useAppStore((state) => state.toggleGraph);
@@ -961,11 +1304,9 @@ export function StateGraph(): ReactElement {
         <span aria-hidden>◎</span> State graph
       </button>
 
-      {/* Corner minimap, under the toggle (hidden while the overlay is open, or
-          when the operator turned the minimap off — the toggle still opens it). */}
-      {!graphVisible && graphMinimap ? (
-        <GraphMinimap onExpand={() => setGraphVisible(true)} />
-      ) : null}
+      {/* Corner minimap, under the toggle — always shown while the overlay is closed
+          (owner 2026-07-12: the optional minimap toggle was removed). */}
+      {!graphVisible ? <GraphMinimap onExpand={() => setGraphVisible(true)} /> : null}
 
       {graphVisible ? (
         <div
@@ -1036,6 +1377,53 @@ function toggleButtonStyle(palette: Palette, active: boolean): CSSProperties {
     fontWeight: 600,
     cursor: 'pointer',
     backdropFilter: 'blur(4px)',
+  };
+}
+
+/** The expanded overlay's top-left control cluster (throw labels + reset view). */
+function clusterStyle(palette: Palette): CSSProperties {
+  return {
+    position: 'absolute',
+    top: '0.4rem',
+    left: '0.4rem',
+    zIndex: 2,
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '0.3rem 0.6rem',
+    padding: '0.3rem 0.5rem',
+    borderRadius: '0.4rem',
+    border: `1px solid ${palette.border}`,
+    background: palette.name === 'dark' ? 'rgba(15, 23, 42, 0.6)' : 'rgba(255, 255, 255, 0.7)',
+    backdropFilter: 'blur(3px)',
+  };
+}
+
+/** The "Throw labels" checkbox row inside the cluster. */
+function clusterToggleStyle(palette: Palette): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.35rem',
+    fontWeight: 600,
+    fontSize: '0.75rem',
+    color: palette.textPrimary,
+    cursor: 'pointer',
+  };
+}
+
+/** The "↺ Reset view" button inside the cluster (shown only when zoomed/panned). */
+function clusterButtonStyle(palette: Palette): CSSProperties {
+  return {
+    padding: '0.15rem 0.45rem',
+    borderRadius: '0.3rem',
+    border: `1px solid ${palette.border}`,
+    background: palette.panelAlt,
+    color: palette.textPrimary,
+    fontSize: '0.72rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    lineHeight: 1.2,
   };
 }
 

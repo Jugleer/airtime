@@ -41,10 +41,14 @@ export function timeOfX(x: number, geometry: BarGeometry): number {
 
 /**
  * Sim time under a pointer at client x `clientX`, given the SVG element's bounding
- * rect. Maps the pixel position across the rendered width to a logical x (the bar
- * uses `preserveAspectRatio="none"`, so pixels↔logical is linear), then inverts
- * {@link xOfTime}. Returns `windowStart` for a zero-width rect (jsdom) so callers
- * degrade gracefully rather than producing NaN.
+ * rect. Maps the pixel position across the rendered width to a logical x, then
+ * inverts {@link xOfTime}. `geometry.svgWidth` is the bar's own measured container
+ * width (real CSS pixels, 1:1 with the viewBox — TimelineBar's ResizeObserver keeps
+ * it in sync), so `rect.width` and `geometry.svgWidth` are normally equal and this
+ * reduces to an identity map; the explicit ratio stays here defensively for any
+ * transient mismatch between a stale rect and the latest measured width. Returns
+ * `windowStart` for a zero-width rect (jsdom) so callers degrade gracefully rather
+ * than producing NaN.
  */
 export function timeFromPointer(
   clientX: number,

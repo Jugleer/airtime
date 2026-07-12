@@ -167,6 +167,50 @@ describe('Controls (ui layer)', () => {
   });
 });
 
+// Clamp readout (owner ruling round 7, item B): when the per-throw dwell clamp is
+// active the amber readout names the value the sim actually uses — "clamped at X s",
+// formatted like the owner's example ("clamped at 0.20 s") — not just a bare flag.
+describe('Controls dwell clamp readout', () => {
+  it('names the clamped-at value when the per-throw dwell clamp is active', () => {
+    render(<Controls />);
+    act(() => {
+      useAppStore.setState({ simTime: 0 });
+      useAppStore.getState().setBeatPeriod(0.25);
+      useAppStore.getState().setDwellTime(0.3);
+      // 531 has h_min = 1, so the tightest bound is β·1·τ_b = 0.75·1·0.25 = 0.1875 s,
+      // which 0.3 s exceeds → the clamp is active.
+      useAppStore.getState().setPattern('531');
+    });
+    // The amber readout shows the actual clamp value (0.1875 → "0.19 s").
+    expect(screen.getByText(/clamped at 0\.19 s/)).toBeTruthy();
+  });
+
+  it('shows a plain readout (no clamp text) when the dwell is within every per-throw bound', () => {
+    render(<Controls />);
+    act(() => {
+      useAppStore.setState({ simTime: 0 });
+      useAppStore.getState().setBeatPeriod(0.25);
+      useAppStore.getState().setDwellTime(0.3);
+      // 3 has h_min = 3 → bound 0.5625 s > 0.3 s, so no per-throw clamp.
+      useAppStore.getState().setPattern('3');
+    });
+    expect(screen.queryByText(/clamped/)).toBeNull();
+  });
+
+  it('treats a sync crossing 2x as a real flight for the clamp readout', () => {
+    render(<Controls />);
+    act(() => {
+      useAppStore.setState({ simTime: 0 });
+      useAppStore.getState().setBeatPeriod(0.25);
+      useAppStore.getState().setDwellTime(0.4);
+      // Core clamps a sync crossing 2x like any flight (h = 2): bound β·2·τ_b =
+      // 0.75·2·0.25 = 0.375 s, which 0.4 s exceeds — even though every throw is a 2.
+      useAppStore.getState().setPattern('(2x,2x)');
+    });
+    expect(screen.getByText(/clamped at 0\.38 s/)).toBeTruthy();
+  });
+});
+
 // Draft pattern entry (redesign 2026-07-11): typing edits a local draft and the
 // running sim only changes on Enter or the Go button. Escape reverts; external
 // changes (library pick) re-seed the input.
@@ -271,13 +315,13 @@ describe('Controls view group (relocated from Settings)', () => {
     expect(useAppStore.getState().orbitColoring).toBe(true);
   });
 
-  it('exposes the graph throw-labels toggle (default ON) and flips the store', () => {
+  it('no longer hosts the graph throw-labels or minimap toggles in the View group', () => {
+    // Owner 2026-07-12: "Graph throw labels" moved to the expanded state-graph overlay
+    // cluster, and the "State-graph minimap" toggle was removed (the minimap is always
+    // shown). Neither control appears in the sidebar View group any more.
     render(<Controls />);
-    const toggle = screen.getByLabelText('Graph throw labels') as HTMLInputElement;
-    expect(useAppStore.getState().graphThrowLabels).toBe(true); // default ON
-    expect(toggle.checked).toBe(true);
-    fireEvent.click(toggle);
-    expect(useAppStore.getState().graphThrowLabels).toBe(false);
+    expect(screen.queryByLabelText('Graph throw labels')).toBeNull();
+    expect(screen.queryByLabelText('State-graph minimap')).toBeNull();
   });
 
   it('switches the theme (dark ↔ light) through the store', () => {

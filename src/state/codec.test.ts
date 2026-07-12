@@ -63,7 +63,6 @@ const shareConfigArb: fc.Arbitrary<ShareConfig> = fc
         ),
         graphMaxHeight: fc.integer({ min: 3, max: 11 }),
         graphVisible: fc.boolean(),
-        graphMinimap: fc.boolean(),
         graphThrowLabels: fc.boolean(),
         audioEnabled: fc.boolean(),
         catchTickEnabled: fc.boolean(),
@@ -76,6 +75,9 @@ const shareConfigArb: fc.Arbitrary<ShareConfig> = fc
         time: fc.option(fc.double({ min: 0, max: 120, noNaN: true, noDefaultInfinity: true }), {
           nil: undefined,
         }),
+        // Optional work & power table collapsed flag (present or absent; `wt` is
+        // only ever WRITTEN when true, so decode never recovers an explicit false).
+        workTableCollapsed: fc.option(fc.boolean(), { nil: undefined }),
       })
       .map((rest) => ({ ...rest, handCount })),
   );
@@ -103,7 +105,6 @@ describe('URL codec round-trip (encode → decode = identity to codec precision)
         expect(decoded.ghostsEnabled).toBe(config.ghostsEnabled);
         expect(decoded.chartsVisible).toBe(config.chartsVisible);
         expect(decoded.graphVisible).toBe(config.graphVisible);
-        expect(decoded.graphMinimap).toBe(config.graphMinimap);
         expect(decoded.graphThrowLabels).toBe(config.graphThrowLabels);
         expect(decoded.audioEnabled).toBe(config.audioEnabled);
         expect(decoded.catchTickEnabled).toBe(config.catchTickEnabled);
@@ -140,6 +141,15 @@ describe('URL codec round-trip (encode → decode = identity to codec precision)
           expect(decoded.time).toBeUndefined();
         } else {
           expect(decoded.time).toBeCloseTo(config.time, 3);
+        }
+
+        // Work & power table collapsed flag: `wt` is written ONLY when true, so a
+        // false/absent input both decode to undefined (the store's own default
+        // applies false); a true input round-trips to true.
+        if (config.workTableCollapsed === true) {
+          expect(decoded.workTableCollapsed).toBe(true);
+        } else {
+          expect(decoded.workTableCollapsed).toBeUndefined();
         }
       }),
       { numRuns: 300 },
@@ -182,6 +192,15 @@ describe('URL codec versioning + graceful degradation', () => {
   it('drops a hand-point list with an odd token count', () => {
     expect(decodeConfig('v=1&tp=0.1,0.2,0.3').handThrowPoints).toBeUndefined();
     expect(decodeConfig('v=1&tp=0.1,0.2').handThrowPoints).toEqual([{ x: 0.1, z: 0.2 }]);
+  });
+
+  it('silently ignores a legacy gm (state-graph minimap) key from an old link', () => {
+    // The minimap is now always shown (owner 2026-07-12); the `gm` key was retired.
+    // An old share link that still carries gm=0/1 must decode without producing a
+    // graphMinimap field (it is simply not read) and without throwing.
+    expect(decodeConfig('v=1&p=531&gm=0')).not.toHaveProperty('graphMinimap');
+    expect(decodeConfig('v=1&p=531&gm=1')).not.toHaveProperty('graphMinimap');
+    expect(decodeConfig('v=1&p=531&gm=1').pattern).toBe('531');
   });
 
   it('drops a non-hex ball color', () => {
@@ -260,7 +279,6 @@ function sampleConfig(): ShareConfig {
     chartAxisMode: 'magnitude',
     graphMaxHeight: 7,
     graphVisible: true,
-    graphMinimap: true,
     graphThrowLabels: true,
     audioEnabled: false,
     catchTickEnabled: true,
@@ -364,5 +382,38 @@ describe('dock-mode codec (tri-state, backward compatible)', () => {
     expect(isShareConfigLike({ ...sampleConfig(), dockMode: 'explorer' })).toBe(true);
     expect(isShareConfigLike(sampleConfig())).toBe(true); // absent is fine (optional)
     expect(isShareConfigLike({ ...sampleConfig(), dockMode: 'sidebar' })).toBe(false);
+  });
+});
+
+// --- Work & power table collapsed flag (owner request 2026-07-12) --------------
+
+describe('work-table-collapsed codec (optional, emitted only when true)', () => {
+  it('round-trips true via the `wt` key', () => {
+    const decoded = decodeConfig(encodeConfig({ ...sampleConfig(), workTableCollapsed: true }));
+    expect(decoded.workTableCollapsed).toBe(true);
+    expect(new URLSearchParams(encodeConfig({ ...sampleConfig(), workTableCollapsed: true })).get('wt')).toBe('1');
+  });
+
+  it('omits the `wt` key entirely for the default (false) — link stays unchanged', () => {
+    const withFalse = encodeConfig({ ...sampleConfig(), workTableCollapsed: false });
+    const withoutField = encodeConfig(sampleConfig());
+    expect(new URLSearchParams(withFalse).has('wt')).toBe(false);
+    expect(withFalse).toBe(withoutField);
+    expect(decodeConfig(withFalse).workTableCollapsed).toBeUndefined();
+  });
+
+  it('an absent `wt` decodes to undefined (store falls back to its own default)', () => {
+    expect(decodeConfig(encodeConfig(sampleConfig())).workTableCollapsed).toBeUndefined();
+    expect(decodeConfig('v=1&p=531').workTableCollapsed).toBeUndefined();
+  });
+
+  it('a hand-authored `wt=0` still decodes explicitly to false', () => {
+    expect(decodeConfig('v=1&wt=0').workTableCollapsed).toBe(false);
+  });
+
+  it('isShareConfigLike accepts a valid workTableCollapsed and rejects a bad one', () => {
+    expect(isShareConfigLike({ ...sampleConfig(), workTableCollapsed: true })).toBe(true);
+    expect(isShareConfigLike(sampleConfig())).toBe(true); // absent is fine (optional)
+    expect(isShareConfigLike({ ...sampleConfig(), workTableCollapsed: 'yes' })).toBe(false);
   });
 });

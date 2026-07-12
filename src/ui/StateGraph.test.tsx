@@ -184,7 +184,18 @@ describe('StateGraph panel (ui layer)', () => {
     // The '3' graph has 6 directed edges with a reverse twin (3 pairs) — each drawn as
     // its own quadratic arc, so both directions read (topological, layout-independent).
     const { container } = render(<StateGraph />);
-    expect(arcPaths(container).length).toBe(6);
+    const arcs = arcPaths(container);
+    expect(arcs.length).toBe(6);
+    // Each direction must bow to its OWN side: the quadratic control point (the token
+    // after `Q`) is DISTINCT for all 6 arcs. The pre-fix bug put both directions of a
+    // pair on the same control point, collapsing them to 3 distinct points (one per
+    // pair) — an overlapping, indistinct double arc. Six distinct points ⇒ a real split.
+    const controlPoints = arcs.map((arc) => {
+      const tokens = (arc.getAttribute('d') ?? '').trim().split(/\s+/);
+      const q = tokens.indexOf('Q');
+      return `${tokens[q + 1]},${tokens[q + 2]}`;
+    });
+    expect(new Set(controlPoints).size).toBe(6);
   });
 
   it('auto-downgrades throw labels to cycle-only above the density limit', () => {
@@ -203,11 +214,34 @@ describe('StateGraph panel (ui layer)', () => {
     const { container } = render(<StateGraph />);
     expect(container.querySelectorAll('rect').length).toBe(0);
   });
+
+  // --- Expanded-view UX cluster + transient zoom/pan (owner 2026-07-12) ----------
+  it('hosts the Throw labels toggle in the overlay cluster (moved off the sidebar) and flips the store', () => {
+    render(<StateGraph />); // beforeEach opens the overlay (graphThrowLabels ON)
+    const toggle = screen.getByLabelText('Throw labels') as HTMLInputElement;
+    expect(useAppStore.getState().graphThrowLabels).toBe(true);
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    expect(useAppStore.getState().graphThrowLabels).toBe(false);
+  });
+
+  it('reveals the ↺ Reset view control only once the view is zoomed, then hides it on reset', () => {
+    const { container } = render(<StateGraph />);
+    // At the identity view there is nothing to reset, so the affordance is hidden.
+    expect(screen.queryByLabelText('Reset graph view')).toBeNull();
+    // Cursor-centered wheel-zoom (non-passive listener) transforms the view.
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    fireEvent.wheel(svg, { deltaY: -160, clientX: 120, clientY: 90 });
+    const reset = screen.getByLabelText('Reset graph view');
+    // Resetting returns to the identity view and the affordance disappears again.
+    fireEvent.click(reset);
+    expect(screen.queryByLabelText('Reset graph view')).toBeNull();
+  });
 });
 
 describe('StateGraph minimap (always-visible corner preview)', () => {
   it('shows a non-interactive minimap when the overlay is closed and expands on click', () => {
-    useAppStore.setState({ graphVisible: false, graphMinimap: true });
+    useAppStore.setState({ graphVisible: false });
     render(<StateGraph />);
     // The overlay controls are gone; the minimap + its own marker are present.
     expect(screen.queryByLabelText('Max throw N')).toBeNull();
@@ -223,7 +257,7 @@ describe('StateGraph minimap (always-visible corner preview)', () => {
   });
 
   it('labels the minimap "click to expand" (owner 2026-07-11, replacing the arrow glyph)', () => {
-    useAppStore.setState({ graphVisible: false, graphMinimap: true });
+    useAppStore.setState({ graphVisible: false });
     render(<StateGraph />);
     expect(screen.getByText('click to expand')).toBeTruthy();
     // The old ⤢ arrow glyph is gone.
@@ -231,7 +265,7 @@ describe('StateGraph minimap (always-visible corner preview)', () => {
   });
 
   it('draws light rim arrows in the minimap but no throw labels or glow (owner req. 2026-07-12)', () => {
-    useAppStore.setState({ graphVisible: false, graphMinimap: true });
+    useAppStore.setState({ graphVisible: false });
     const { container } = render(<StateGraph />);
     // Owner said yes to rim arrows for small graphs: barbed polygons show in the box...
     expect(container.querySelectorAll('polygon').length).toBeGreaterThan(0);
@@ -242,13 +276,16 @@ describe('StateGraph minimap (always-visible corner preview)', () => {
     expect(container.querySelector('marker')).toBeNull();
   });
 
-  it('hides the minimap entirely when graphMinimap is off (toggle still opens the overlay)', () => {
-    useAppStore.setState({ graphVisible: false, graphMinimap: false });
+  it('always shows the minimap while the overlay is closed (owner 2026-07-12: the toggle was removed)', () => {
+    // There is no longer any way to hide the minimap — it is always present when the
+    // overlay is closed (the optional graphMinimap flag/codec key were removed).
+    useAppStore.setState({ graphVisible: false });
     render(<StateGraph />);
-    expect(screen.queryByLabelText('State graph minimap')).toBeNull();
-    expect(screen.queryByLabelText('State minimap marker')).toBeNull();
-    // The persistent toggle button still opens the overlay.
+    expect(screen.getByLabelText('State graph minimap')).toBeTruthy();
+    expect(screen.getByLabelText('State minimap marker')).toBeTruthy();
+    // The persistent toggle button still opens the overlay (and hides the minimap).
     fireEvent.click(screen.getByLabelText('Toggle state graph panel'));
     expect(useAppStore.getState().graphVisible).toBe(true);
+    expect(screen.queryByLabelText('State graph minimap')).toBeNull();
   });
 });

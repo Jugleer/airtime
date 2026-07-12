@@ -92,7 +92,6 @@ export interface ShareConfig {
   readonly chartAxisMode: ChartAxisModeCode;
   readonly graphMaxHeight: number;
   readonly graphVisible: boolean;
-  readonly graphMinimap: boolean;
   readonly graphThrowLabels: boolean;
   readonly audioEnabled: boolean;
   readonly catchTickEnabled: boolean;
@@ -112,6 +111,14 @@ export interface ShareConfig {
    * degrades to a disabled STL on reload (its geometry never travels in the URL).
    */
   readonly workspace?: WorkspaceConfigCode;
+  /**
+   * Optional work & power table collapsed flag (owner request 2026-07-12, codec
+   * key `wt`). Default is false (table visible); the key is emitted ONLY when
+   * true, so a link with the default layout is byte-for-byte unchanged by this
+   * field's introduction. Absent decodes to undefined — the store applies its own
+   * false default (DESIGN.md §6: graceful, backward-compatible decoding).
+   */
+  readonly workTableCollapsed?: boolean;
 }
 
 /** The current codec version. Bump only with a decode migration (never silently). */
@@ -268,7 +275,8 @@ export function encodeConfig(config: ShareConfig): string {
   params.set('ca', AXIS_TO_CODE[config.chartAxisMode]);
   params.set('gn', String(config.graphMaxHeight));
   params.set('gv', config.graphVisible ? '1' : '0');
-  params.set('gm', config.graphMinimap ? '1' : '0');
+  // The state-graph minimap is now always shown (owner 2026-07-12): the old `gm`
+  // key is no longer emitted, and a legacy `gm=0/1` is silently ignored on decode.
   // `gt` (throw-number labels) is ALWAYS emitted; an old link without it decodes to
   // the store default (ON) via the boot merge, so absence reads as ON.
   params.set('gt', config.graphThrowLabels ? '1' : '0');
@@ -290,6 +298,12 @@ export function encodeConfig(config: ShareConfig): string {
     params.set('wsy', fixed(ws.scale.y));
     params.set('wsz', fixed(ws.scale.z));
     params.set('wse', ws.kind === 'stl' ? '0' : ws.enabled ? '1' : '0');
+  }
+  // Optional work & power table collapsed flag. Emitted ONLY when true — the
+  // default (false, table visible) omits the key entirely so a plain/default
+  // link is unaffected by this field's introduction.
+  if (config.workTableCollapsed === true) {
+    params.set('wt', '1');
   }
   return params.toString();
 }
@@ -356,10 +370,14 @@ export function decodeConfig(input: URLSearchParams | string): Partial<ShareConf
     ['gh', 'ghostsEnabled'],
     ['cv', 'chartsVisible'],
     ['gv', 'graphVisible'],
-    ['gm', 'graphMinimap'],
+    // No `gm` (state-graph minimap) any more — it is always shown (owner 2026-07-12);
+    // a legacy `gm` key in an old link is simply not read, so it degrades silently.
     ['gt', 'graphThrowLabels'],
     ['au', 'audioEnabled'],
     ['ac', 'catchTickEnabled'],
+    // `wt` is normally emitted only when true (see encodeConfig), but decode
+    // accepts either token if a hand-authored URL supplies one explicitly.
+    ['wt', 'workTableCollapsed'],
   ];
   for (const [key, field] of boolFields) {
     const value = parseBool(params.get(key));
@@ -539,7 +557,6 @@ export function isShareConfigLike(raw: unknown): raw is ShareConfig {
     'ghostsEnabled',
     'chartsVisible',
     'graphVisible',
-    'graphMinimap',
     'graphThrowLabels',
     'audioEnabled',
     'catchTickEnabled',
@@ -573,6 +590,10 @@ export function isShareConfigLike(raw: unknown): raw is ShareConfig {
   }
   // `workspace` is optional; if present it must be a well-formed spec.
   if (config.workspace !== undefined && !isWorkspaceConfigLike(config.workspace)) {
+    return false;
+  }
+  // `workTableCollapsed` is optional (absent ⇒ store default false); validate type.
+  if (config.workTableCollapsed !== undefined && typeof config.workTableCollapsed !== 'boolean') {
     return false;
   }
   return (

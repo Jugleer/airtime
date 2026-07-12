@@ -28,6 +28,7 @@ import {
 import { HAND_COUNT_MAX, useAppStore, type ChartAxisMode } from '../state';
 import { CURSOR_FRACTION } from '../state/simulation';
 import { EnergyPanel } from './EnergyPanel';
+import { COLLAPSED_STRIP, CollapsedStrip } from './panels';
 import { usePalette, type Palette } from './theme';
 import {
   CHART_MIN_HEIGHT,
@@ -416,6 +417,8 @@ export function Charts(): ReactElement {
   const handCount = useAppStore((state) => state.handCount);
   const setChartAxisMode = useAppStore((state) => state.setChartAxisMode);
   const setHoveredHandIndex = useAppStore((state) => state.setHoveredHandIndex);
+  const workTableCollapsed = useAppStore((state) => state.workTableCollapsed);
+  const setWorkTableCollapsed = useAppStore((state) => state.setWorkTableCollapsed);
 
   // Which hand series are toggled OFF in the charts (owner requirement 2). Kept
   // component-local: it is a transient view of the charts, not a shared setting, so
@@ -515,10 +518,27 @@ export function Charts(): ReactElement {
                 below) it gives way and the table scrolls inside its own overflow-x
                 container rather than pushing the charts to zero width.
             Reasoned at ~1400px (table ~natural, charts take the rest), ~2000px and
-            ≥2400px (identical — the table stays compact, charts absorb the surplus). */}
-        <div style={{ flex: '0 1 auto', minWidth: 0 }}>
-          <EnergyPanel />
-        </div>
+            ≥2400px (identical — the table stays compact, charts absorb the surplus).
+
+            Collapsible (owner request 2026-07-12): EnergyPanel's own header carries
+            the collapse chevron. Collapsed, this branch swaps to a `COLLAPSED_STRIP`
+            (30px) affordance instead of the table's ~19rem natural width — since
+            ChartsBody is the only grower, that width simply reverts to it, so the
+            charts split the full remaining dock width between them with no reserved
+            gutter beyond the slim strip + the row's own gap. */}
+        {workTableCollapsed ? (
+          <div style={{ flex: '0 0 auto', width: `${COLLAPSED_STRIP}px`, minWidth: 0 }}>
+            <CollapsedStrip
+              side="right"
+              label="work & power"
+              onExpand={() => setWorkTableCollapsed(false)}
+            />
+          </div>
+        ) : (
+          <div style={{ flex: '0 1 auto', minWidth: 0 }}>
+            <EnergyPanel />
+          </div>
+        )}
       </div>
     </section>
   );

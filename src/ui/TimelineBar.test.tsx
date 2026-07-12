@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useAppStore } from '../state';
 import { DEFAULT_TIMELINE_WINDOW } from '../state/simulation';
 import { TimelineBar } from './TimelineBar';
@@ -29,6 +29,37 @@ if (typeof proto.releasePointerCapture !== 'function') {
   proto.releasePointerCapture = () => {};
 }
 
+// jsdom does no layout, so every element's `clientWidth` is always 0 and there is no
+// ResizeObserver at all — poor fits for TimelineBar's measured-width behavior. Stub
+// both: `clientWidth` reads a mutable module variable each test controls, and a fake
+// ResizeObserver records its instances so a test can fire its callback manually to
+// simulate a live panel resize (no real layout engine needed to exercise the wiring).
+let stubbedClientWidth = 1000;
+Object.defineProperty(Element.prototype, 'clientWidth', {
+  configurable: true,
+  get: () => stubbedClientWidth,
+});
+
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = [];
+  private readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    FakeResizeObserver.instances.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  /** Simulate the browser firing this observer's callback (a resize occurred). */
+  trigger(): void {
+    this.callback([], this as unknown as ResizeObserver);
+  }
+}
+const globalWithResizeObserver = globalThis as unknown as { ResizeObserver?: unknown };
+if (typeof globalWithResizeObserver.ResizeObserver === 'undefined') {
+  globalWithResizeObserver.ResizeObserver = FakeResizeObserver;
+}
+
 beforeEach(() => {
   useAppStore.setState({
     simTime: 0,
@@ -37,6 +68,10 @@ beforeEach(() => {
     trailLength: 0.8,
   });
   useAppStore.getState().setPattern('3');
+  // Default to the same 1000 px width the pre-fix bar used as its fixed logical
+  // span, so the existing pointer-math tests below need no numeric changes.
+  stubbedClientWidth = 1000;
+  FakeResizeObserver.instances = [];
 });
 afterEach(cleanup);
 
@@ -81,5 +116,44 @@ describe('TimelineBar (ui layer)', () => {
     fireEvent.pointerDown(svg, { clientX: 10, pointerId: 1 });
     expect(useAppStore.getState().simTime).toBe(0);
     fireEvent.pointerUp(svg, { clientX: 10, pointerId: 1 });
+  });
+
+  // Regression coverage for the text-stretch bug: the bar used to render a fixed
+  // 1000×96 viewBox at width="100%" with preserveAspectRatio="none", so any
+  // container narrower/wider than 1000 px scaled x and y independently and
+  // stretched/squashed the "H<N>" lane tags and time labels. It now lays out 1:1 in
+  // the wrapper's measured width (real CSS px), so the viewBox/width track that
+  // measurement instead of a fixed logical span.
+  it('lays out the plot from the measured container width, not a fixed logical span', () => {
+    stubbedClientWidth = 640;
+    const { container } = render(<TimelineBar />);
+    const svg = screen.getByRole('img');
+    // viewBox width == rendered width == the measured container width: a 1:1
+    // coordinate space, so text glyphs are never non-uniformly scaled.
+    expect(svg.getAttribute('viewBox')).toBe('0 0 640 96');
+    expect(svg.getAttribute('width')).toBe('640');
+    // The right-edge time label sits at the measured plot's right margin (640 − 10 px
+    // gutter − 2 px inset = 628), not the old hardcoded 990 − 2 = 988.
+    const endLabel = container.querySelector('text[text-anchor="end"]');
+    expect(endLabel?.getAttribute('x')).toBe('628');
+  });
+
+  it('re-lays-out live when the wrapper resizes (panel-splitter drag or window resize)', () => {
+    const { container } = render(<TimelineBar />);
+    const svg = screen.getByRole('img');
+    expect(svg.getAttribute('width')).toBe('1000');
+
+    // A panel-splitter drag resizes the wrapper element without ever firing a
+    // window 'resize' event — only a ResizeObserver notices it. Simulate exactly
+    // that: the measured width changes, then the observer's callback fires.
+    stubbedClientWidth = 500;
+    const observer = FakeResizeObserver.instances[FakeResizeObserver.instances.length - 1];
+    expect(observer).toBeDefined();
+    act(() => observer?.trigger());
+
+    expect(svg.getAttribute('width')).toBe('500');
+    expect(svg.getAttribute('viewBox')).toBe('0 0 500 96');
+    const endLabel = container.querySelector('text[text-anchor="end"]');
+    expect(endLabel?.getAttribute('x')).toBe('488'); // 500 − 10 px gutter − 2 px inset
   });
 });
