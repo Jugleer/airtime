@@ -42,12 +42,14 @@ export function buildGoatCounterScriptAttrs(code: string): GoatCounterScriptAttr
 }
 
 /**
- * Fallback site code baked into the source. Deliberately empty: an empty code
- * means analytics is DISABLED, so the app ships byte-identical-safe (no beacon,
- * ever) until the owner configures a real code. Prefer setting
- * `VITE_GOATCOUNTER_CODE` at build time over editing this constant.
+ * Fallback site code baked into the source. The owner registered this
+ * GoatCounter site (https://airtime.goatcounter.com) in round 8
+ * (2026-07-13), so analytics is now LIVE in production builds: the PROD
+ * gate in `resolveAnalyticsConfig` is the only thing keeping dev/test
+ * beacon-free. Prefer setting `VITE_GOATCOUNTER_CODE` at build time over
+ * editing this constant (e.g. to point a fork or preview deploy elsewhere).
  */
-export const GOATCOUNTER_CODE = '';
+export const GOATCOUNTER_CODE = 'airtime';
 
 /** Resolved enable/code decision — the thing `applyAnalytics` needs to act. */
 export interface AnalyticsConfig {
@@ -91,8 +93,9 @@ export function applyAnalytics(config: AnalyticsConfig, doc: Document): void {
 }
 
 /**
- * Call once at app boot (src/main.tsx). No-op in dev/test and no-op until the
- * owner sets a site code — see GOATCOUNTER_CODE / VITE_GOATCOUNTER_CODE above.
+ * Call once at app boot (src/main.tsx). No-op in dev/test (the PROD gate);
+ * live in production builds against the owner's registered site code — see
+ * GOATCOUNTER_CODE / VITE_GOATCOUNTER_CODE above.
  */
 export function initAnalytics(doc: Document = document): void {
   applyAnalytics(resolveAnalyticsConfig(), doc);

@@ -6,6 +6,7 @@ import {
   GOATCOUNTER_CODE,
   GOATCOUNTER_SCRIPT_ID,
   initAnalytics,
+  resolveAnalyticsConfig,
 } from './goatcounter';
 
 describe('buildGoatCounterScriptAttrs (pure)', () => {
@@ -23,8 +24,8 @@ describe('buildGoatCounterScriptAttrs (pure)', () => {
 });
 
 describe('the shipped default site code', () => {
-  it('defaults to empty (analytics disabled until the owner configures a code)', () => {
-    expect(GOATCOUNTER_CODE).toBe('');
+  it('is the owner-registered site code (analytics live in production)', () => {
+    expect(GOATCOUNTER_CODE).toBe('airtime');
   });
 });
 
@@ -70,10 +71,13 @@ describe('applyAnalytics (deterministic shell core)', () => {
 });
 
 describe('initAnalytics (real env-reading entry point)', () => {
-  it('is a no-op under the test/dev build (not PROD) with the shipped empty default code', () => {
-    // The gate runs under vitest, never a production build, and the shipped
-    // GOATCOUNTER_CODE defaults to '' — so both halves of the enable check are
-    // false here, belt-and-suspenders with the real (non-jsdom-swapped) document.
+  it('is a no-op under the test/dev build (not PROD) even with a configured code', () => {
+    // The gate runs under vitest, never a production build. GOATCOUNTER_CODE
+    // is now the owner's real, non-empty 'airtime' code, so it's the PROD
+    // gate ALONE — not an empty code — that keeps dev/test/gate a strict
+    // no-op here. Pin both halves explicitly: the code is configured, yet
+    // nothing is injected against the real (non-jsdom-swapped) document.
+    expect(resolveAnalyticsConfig().code).toBe('airtime');
     initAnalytics(document);
     expect(document.getElementById(GOATCOUNTER_SCRIPT_ID)).toBeNull();
   });
