@@ -1,0 +1,46 @@
+name: Bug report
+description: Report something in Airtime that is broken or behaving unexpectedly.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Airtime! If you can, use the in-app
+        **Report a bug** button in the top bar — it prefills a reproduction link
+        to the exact scene you are looking at, which makes the bug far easier to fix.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the bug — what did you see?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: input
+    id: repro-link
+    attributes:
+      label: Reproduction link
+      description: An Airtime share link that reproduces the scene (top bar -> Save, share & audio -> Copy share link).
+      placeholder: https://jugleer.github.io/airtime/?v=1&...
+  - type: input
+    id: pattern
+    attributes:
+      label: Pattern
+      description: The siteswap pattern you were viewing.
+      placeholder: "531"
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser, OS, device, and anything else useful.
+      placeholder: |
+        - Browser:
+        - OS / device:
+        - Viewport:

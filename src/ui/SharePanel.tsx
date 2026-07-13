@@ -17,9 +17,10 @@ import {
   AUDIO_VOLUME_MIN,
   useAppStore,
 } from '../state';
-import { encodeConfig, isShareConfigLike } from '../state/codec';
+import { isShareConfigLike } from '../state/codec';
 import { getCanvasElement } from '../state/sceneBridge';
 import { usePalette, type Palette } from './theme';
+import { shareUrlFor } from './shareUrl';
 import { Button, SectionLabel } from './widgets';
 import { ExportPanel } from './ExportPanel';
 
@@ -56,14 +57,9 @@ export function SharePanel(): ReactElement {
   const [message, setMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const buildUrl = (): string => {
-    const query = encodeConfig(currentConfig());
-    const base =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}${window.location.pathname}`
-        : '';
-    return `${base}?${query}`;
-  };
+  // Delegates to the shared recipe (src/ui/shareUrl) so this Copy button and the
+  // top-bar Report-a-Bug reproduction link never drift apart.
+  const buildUrl = (): string => shareUrlFor(currentConfig());
 
   const copyLink = (): void => {
     const url = buildUrl();

@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest an idea or improvement for Airtime.
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! You can also use the in-app **Suggest a feature**
+        button in the top bar.
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: The feature or change you would like.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The problem it solves or the value it adds.
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who benefits
+      description: Who this helps (beginners, performers, developers, ...).
+  - type: input
+    id: context-link
+    attributes:
+      label: Related scene (optional)
+      description: An Airtime share link for context, if relevant.
+      placeholder: https://jugleer.github.io/airtime/?v=1&...

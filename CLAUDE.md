@@ -53,5 +53,12 @@ uncertain (see PLAN.md Phase 0 fallback).
   conventional prefixes (`fix:`, `docs:`…) otherwise. No backticks in `-m` strings.
 - Deferred/discovered work goes in BUILD_LOG.md under the phase entry, not in
   TODO comments.
-- No runtime file output; the app is a static SPA with no backend and no external
-  requests (assets synthesized or bundled).
+- No runtime file output; the app is a static SPA with no backend and no bundled
+  external assets (assets are synthesized or bundled). Core sim/render logic makes
+  no network requests and works fully offline. Two narrow, owner-authorized (round
+  8, 2026-07-13) exceptions live only at the app shell: (a) outbound navigation
+  links to GitHub Issues for bug/feature reporting (a link away, not a runtime
+  request); (b) a single privacy-preserving analytics beacon (GoatCounter —
+  cookieless, no personal data), fired once at boot and gated to production builds
+  with a configured site code. Neither is load-bearing: with the beacon unconfigured
+  and the links unclicked, the app is byte-for-byte the self-contained SPA it was.

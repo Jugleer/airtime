@@ -734,3 +734,45 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   shows "clamped at 0.38 s"; new test).
 - Deferred: minimap viewport rectangle under zoom (skipped by design — the
   non-uniform stretch made an honest rect fight the square minimap).
+
+## Round 8 — feedback links + visitor analytics           DONE
+- Commit: (this commit) — Gate: (2026-07-13, "npm run gate", green — 57 files /
+  755 tests; orchestrator-run)
+- Owner (site now shared with others): (1) a "Report a Bug" and "Suggest a
+  Feature" button near the (?), sending users to a prefilled GitHub Issue;
+  asked whether no-account reporting is possible. (2) basic, non-intrusive
+  visitor stats (counts + geography). Both asks partly hinge on the app's
+  "no external requests / no backend" rule; presented the architecture tension
+  and got owner decisions: GitHub-link reporting (account required — the
+  no-account path needs a broker backend, deferred), and GoatCounter analytics.
+- POSTURE: orchestrator amended CLAUDE.md — the no-external-requests rule now
+  carries two narrow, owner-authorized app-shell exceptions (outbound GitHub
+  links; one cookieless analytics beacon). Core sim/render purity UNCHANGED;
+  with the beacon unconfigured and links unclicked the app is byte-identical
+  self-contained. DESIGN.md §6 documents both.
+- FEEDBACK (src/ui/Feedback.tsx, shareUrl.ts, App.tsx TopBar, .github/
+  ISSUE_TEMPLATE/*): two top-bar links open Jugleer/airtime/issues/new prefilled
+  via title/body/labels (labels=bug / labels=enhancement), target=_blank +
+  rel=noopener noreferrer. The bug body auto-embeds a reproduction share link
+  rebuilt from encodeConfig(currentConfig()) AT CLICK TIME (onFocus/onMouseDown/
+  onClick refresh — never the stale address bar), + pattern/userAgent/viewport.
+  Extracted shareUrlFor()/currentShareUrl() as the single share-link recipe
+  (SharePanel now delegates). Issue Forms added; no config.yml so blank issues
+  stay enabled (query prefill needs that). Account-required (no backend).
+- ANALYTICS (src/analytics/goatcounter.ts, main.tsx): cookieless GoatCounter,
+  one beacon per page load (single-page app — no per-scrub re-count). Pure
+  buildGoatCounterScriptAttrs + deterministic applyAnalytics(config, doc) split
+  from the env-reading shell; enabled ONLY when import.meta.env.PROD AND a
+  non-empty code (VITE_GOATCOUNTER_CODE or the GOATCOUNTER_CODE source constant,
+  default ''). Ships DISABLED — dev/test never beacon, gate green, app pure
+  until the owner configures a code. Double-injection guarded.
+- Review (code + live browser, both themes): SHIP, zero findings — hrefs
+  constructed + decoded, click-time repro refresh confirmed, rel/target correct,
+  analytics verified a strict no-op in the dev DOM (no gc.zgo.at request), core
+  untouched.
+- OWNER SETUP to turn analytics on: register a site at goatcounter.com (pick a
+  code, e.g. airtime), then set VITE_GOATCOUNTER_CODE=<code> for the Pages build
+  (or edit GOATCOUNTER_CODE in src/analytics/goatcounter.ts) and redeploy;
+  dashboard lives at https://<code>.goatcounter.com.
+- Deferred: no-account bug reporting (needs a hosted broker + spam protection —
+  bends the rule further; revisit if account-required proves a barrier).

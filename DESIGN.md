@@ -366,6 +366,28 @@ line/circle presets, colors, audio toggles, N stepper for the graph.
 WebAudio tick on throws (optional catch tick), volume + toggle. No assets — synthesize
 clicks (oscillator + envelope) to keep the app asset-free.
 
+### Feedback & analytics (round 8, owner-approved 2026-07-13)
+
+The two owner-authorized exceptions to the app's "no external requests" posture
+(CLAUDE.md), both living only at the app shell — core stays a pure function of time:
+
+- **Feedback links** (top bar, beside the `?`): "Report a bug" and "Suggest a
+  feature" open GitHub's new-issue form (`Jugleer/airtime/issues/new`) in a new
+  tab, prefilled via `title`/`body`/`labels` query params — this is navigation
+  away, not a runtime request. The bug body auto-embeds a **reproduction share
+  link** rebuilt from `encodeConfig(currentConfig())` at click time (never the
+  stale address bar), plus pattern, user agent, and viewport, so an issue arrives
+  with a one-click repro of the exact scene. GitHub Issue Forms in
+  `.github/ISSUE_TEMPLATE/` serve visitors who reach the Issues tab directly;
+  blank issues stay enabled so query prefill works. Account-required (no backend);
+  a no-account path would need a broker service and was deferred.
+- **Analytics beacon**: GoatCounter — cookieless, no personal data, country-level
+  geography only, no consent banner. One beacon per full page load (Airtime is a
+  single page; scrubbing/URL edits do not re-count). Gated to production builds
+  with a configured site code (`VITE_GOATCOUNTER_CODE` or the `GOATCOUNTER_CODE`
+  source constant); ships **disabled** (empty code) so dev/test never beacon and
+  the app is byte-identical self-contained until the owner enables it.
+
 ---
 
 ## 7. Defaults

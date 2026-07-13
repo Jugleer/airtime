@@ -21,6 +21,7 @@ import { Scene, type SceneColors } from '../render3d';
 import { Charts } from './Charts';
 import { Controls } from './Controls';
 import { Explorer } from './Explorer';
+import { FeedbackButtons } from './Feedback';
 import { Help } from './Help';
 import { Ladder } from './Ladder';
 import {
@@ -118,7 +119,7 @@ function useSpacebarPlayPause(): void {
   }, []);
 }
 
-/** The thin top bar: product title + the Help entry point (Settings drawer removed). */
+/** The thin top bar: product title + the top-right cluster (feedback links + Help). */
 function TopBar(): ReactElement {
   const palette = usePalette();
   return (
@@ -138,7 +139,11 @@ function TopBar(): ReactElement {
         Siteswap 3D visualizer &amp; kinematics lab
       </span>
       <div style={{ flex: 1 }} />
-      <Help />
+      {/* Top-right cluster: feedback links (Report a bug / Suggest a feature) then Help. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <FeedbackButtons />
+        <Help />
+      </div>
     </header>
   );
 }
