@@ -44,7 +44,6 @@ import { SharePanel } from './SharePanel';
 import { StateGraph } from './StateGraph';
 import { TimelineBar } from './TimelineBar';
 import { THEME_CSS, usePalette, type Palette } from './theme';
-import { Transport } from './Transport';
 import { useAudio } from './useAudio';
 import { useClock } from './useClock';
 import { useIsNarrow } from './useIsNarrow';
@@ -599,8 +598,10 @@ function NarrowTabPanel({ tab }: { readonly tab: NarrowTab }): ReactElement {
 
 /**
  * The mobile shell: a single no-scroll column — top bar, the always-visible stage
- * (~55 dvh), a compact transport + pattern strip, then the tab bar over a scrollable
- * body for the selected panel. No splitters or collapsed strips here.
+ * (~55 dvh), a compact pattern-entry strip, then the tab bar over a scrollable
+ * body for the selected panel. No splitters or collapsed strips here. (Play/pause
+ * lives in the docked timeline inside the always-visible stage, so the strip needs
+ * no transport of its own.)
  */
 function NarrowApp(): ReactElement {
   const palette = usePalette();
@@ -615,7 +616,8 @@ function NarrowApp(): ReactElement {
         <StageContent />
       </div>
 
-      {/* Always-visible compact strip: transport + pattern entry. */}
+      {/* Always-visible compact strip: pattern entry (play/pause is in the docked
+          timeline within the stage above, so no transport is duplicated here). */}
       <div
         style={{
           display: 'flex',
@@ -625,7 +627,6 @@ function NarrowApp(): ReactElement {
           padding: '0.1rem 0',
         }}
       >
-        <Transport />
         <CompactPatternField />
       </div>
 
