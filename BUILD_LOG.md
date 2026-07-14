@@ -888,3 +888,26 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
 - Minor remaining (non-blocking, deferred unless owner hits them): Tier 2
   CompactPatternField red border on empty draft (cosmetic); Tier 3 graph node hit
   target shrinks to ~22px on-screen at MIN_ZOOM 0.5x (fine at default 1x).
+- FOLLOW-UP ITERATION (2026-07-15, on-device owner feedback; branch round-9-mobile-scroll,
+  merged to main + deployed): the 55dvh stage felt cramped on a phone. Reworked the
+  mobile shell (NarrowApp) into a SCENE-HERO SCROLL layout — the 3D scene now fills the
+  first screenful with a short docked timeline at the bottom edge, and the whole PAGE
+  scrolls (not an inner panel) to reveal the pattern field + tabs + selected panel below
+  the fold. Canvas touchAction is 'pan-y' on mobile (vertical swipe scrolls the page,
+  horizontal one-finger still orbits azimuth, two-finger still pinch/pan; reverts to
+  'none' while the positions editor is open) — a deliberate trade of one-finger camera
+  ELEVATION for scrollability (presets cover elevation). State graph is now minimized by
+  default on mobile (corner minimap hidden; the ◎ toggle remains) and opens FULLSCREEN
+  (position:fixed inset:0 zIndex:50; audit traced the hero ancestor chain to confirm no
+  transform/filter traps the fixed overlay). TimelineBar gained a compact mode (hides the
+  3 informational readouts, keeps Transport + t=). Implement→audit→gate→commit workflow
+  (Opus impl+audit, gate 770 tests); commits 0a7b7db (feature) + ad7d605 (fix). All
+  MOBILE-ONLY, gated on useIsNarrow()/mobile props; desktop byte-for-byte unchanged;
+  src/core untouched. BUG CAUGHT BY RUNTIME CHECK (not the static audit): the hero used
+  min-height:100dvh, which is not a definite height, so StageContent's height:100% → r3f
+  canvas chain collapsed to the 150px canvas default; a headless mobile-viewport check
+  (390x844, Chromium 149) measured canvasHeight 150 → fixed to height:100dvh → 605px.
+  Lesson: layout/dvh changes need a real-viewport check, not just typecheck+gate.
+- Still open (owner may want): timeline SVG is still H=96 (compact only trims the readout
+  row) — a genuinely shorter scrubber is a geometry refactor, deferred pending owner
+  feedback on whether the scene-dominant layout already reads as "short enough".
