@@ -328,13 +328,20 @@ function Environment({ colors }: { colors: SceneColors }): ReactElement {
 export function Scene({
   sceneColors,
   coarsePointer = false,
-}: { readonly sceneColors?: SceneColors; readonly coarsePointer?: boolean } = {}): ReactElement {
+  touchScroll = false,
+}: {
+  readonly sceneColors?: SceneColors;
+  readonly coarsePointer?: boolean;
+  readonly touchScroll?: boolean;
+} = {}): ReactElement {
   const colors = sceneColors ?? DEFAULT_SCENE_COLORS;
   const [preset, setPreset] = useState<CameraPreset>('front');
   const setCameraView = useAppStore((state) => state.setCameraView);
   // Drive the render loop from the play state: 'always' while playing, 'demand'
   // (repaint only on request) while paused/idle — the big mobile battery/thermal win.
   const playing = useAppStore((state) => state.playing);
+  // On the mobile shell the canvas is the first screenful of a scrollable page.
+  const editing = useAppStore((state) => state.positionsEditorOpen);
   // Decide once; capability does not change during a session.
   const [supported] = useState(webglAvailable);
 
@@ -353,7 +360,13 @@ export function Scene({
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' }}>
       <Canvas
-        style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none' }}
+        // touchAction: on the mobile shell the canvas is the first screenful of a
+        // scrollable page, so 'pan-y' lets a vertical one-finger swipe SCROLL THE PAGE
+        // (to reach the settings below) while a horizontal one-finger drag still orbits
+        // (azimuth) and two-finger still pinch-zooms/pans. While the hand-positions
+        // editor is open we revert to 'none' so vertical gizmo drags move the gizmo
+        // instead of scrolling. Desktop (touchScroll false) keeps 'none' exactly.
+        style={{ width: '100%', height: '100%', display: 'block', touchAction: touchScroll && !editing ? 'pan-y' : 'none' }}
         frameloop={sceneFrameloop(playing)}
         dpr={[1, 2]}
         // preserveDrawingBuffer keeps the framebuffer readable after the render so

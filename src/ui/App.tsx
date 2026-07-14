@@ -168,7 +168,7 @@ function readCoarsePointer(): boolean {
   return window.matchMedia('(pointer: coarse)').matches;
 }
 
-function StageContent(): ReactElement {
+function StageContent({ mobile = false }: { readonly mobile?: boolean } = {}): ReactElement {
   const palette = usePalette();
   const coarsePointer = useMemo(readCoarsePointer, []);
   return (
@@ -177,8 +177,9 @@ function StageContent(): ReactElement {
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        borderRadius: '0.6rem',
-        border: `1px solid ${palette.border}`,
+        // Full-bleed scene on mobile: no rounded frame so the scene fills the screen.
+        borderRadius: mobile ? 0 : '0.6rem',
+        border: mobile ? 'none' : `1px solid ${palette.border}`,
         overflow: 'hidden',
         background: palette.sceneBg,
       }}
@@ -187,10 +188,10 @@ function StageContent(): ReactElement {
           in Scene; the state-graph toggle top-left + overlay via StateGraph). The
           translucent graph overlay covers only this area, never the timeline. */}
       <div style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
-        <Scene sceneColors={sceneColorsOf(palette)} coarsePointer={coarsePointer} />
-        <StateGraph />
+        <Scene sceneColors={sceneColorsOf(palette)} coarsePointer={coarsePointer} touchScroll={mobile} />
+        <StateGraph mobile={mobile} />
       </div>
-      <TimelineBar />
+      <TimelineBar compact={mobile} />
     </div>
   );
 }
@@ -597,52 +598,50 @@ function NarrowTabPanel({ tab }: { readonly tab: NarrowTab }): ReactElement {
 }
 
 /**
- * The mobile shell: a single no-scroll column — top bar, the always-visible stage
- * (~55 dvh), a compact pattern-entry strip, then the tab bar over a scrollable
- * body for the selected panel. No splitters or collapsed strips here. (Play/pause
- * lives in the docked timeline inside the always-visible stage, so the strip needs
- * no transport of its own.)
+ * The mobile shell (owner round 9): the PAGE scrolls, not an inner panel. A HERO
+ * section — top bar over the full-bleed scene with its short docked timeline — is
+ * sized to exactly one viewport (minHeight 100dvh, box-sizing border-box), so the
+ * scene fills most of the screen and the timeline lands at the bottom. Swiping
+ * scrolls the hero off the top to reveal the BELOW-THE-FOLD settings: the compact
+ * pattern field, the tab bar, and the selected panel, all in normal flow. No
+ * splitters or collapsed strips here. (Play/pause lives in the docked timeline
+ * inside the hero, so the pattern strip needs no transport of its own.)
  */
 function NarrowApp(): ReactElement {
   const palette = usePalette();
   const [tab, setTab] = useState<NarrowTab>('controls');
   return (
     <div style={narrowRootStyle(palette)}>
-      <TopBar compact />
-
-      {/* The stage is pinned on top and ALWAYS visible (scene + graph overlay +
-          docked timeline), a fixed slice of the viewport height. */}
-      <div style={{ height: '55dvh', flex: '0 0 auto', minHeight: 0 }}>
-        <StageContent />
-      </div>
-
-      {/* Always-visible compact strip: pattern entry (play/pause is in the docked
-          timeline within the stage above, so no transport is duplicated here). */}
+      {/* HERO: exactly one viewport tall (border-box + padding), scene-first. */}
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
+          minHeight: '100dvh',
           flexShrink: 0,
-          padding: '0.1rem 0',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.4rem',
+          paddingTop: 'calc(0.4rem + env(safe-area-inset-top))',
+          paddingBottom: 'calc(0.4rem + env(safe-area-inset-bottom))',
+        }}
+      >
+        <TopBar compact />
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          <StageContent mobile />
+        </div>
+      </div>
+
+      {/* BELOW-THE-FOLD: the settings/options, revealed by swiping the hero up. */}
+      <div
+        style={{
+          flexShrink: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.5rem',
+          padding: '0.5rem 0 calc(0.6rem + env(safe-area-inset-bottom))',
         }}
       >
         <CompactPatternField />
-      </div>
-
-      <NarrowTabBar active={tab} onSelect={setTab} />
-
-      {/* The opt-in panel body — the only scrolling region in the mobile shell. */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
+        <NarrowTabBar active={tab} onSelect={setTab} />
         <NarrowTabPanel tab={tab} />
       </div>
     </div>
@@ -726,19 +725,19 @@ export function App(): ReactElement {
   );
 }
 
-/** The mobile shell's outer container: a single no-scroll flex column filling the
- *  visible viewport (dvh), with the same iOS safe-area padding as the desktop root. */
+/** The mobile shell's outer container: the PAGE's vertical scroll container (owner
+ *  round 9). It fills the visible viewport (dvh) and scrolls its stacked sections —
+ *  the hero (scene-first, one viewport tall) and the below-the-fold settings — as a
+ *  plain block. Vertical safe-area insets are handled inside the sections below so the
+ *  hero stays exactly one viewport tall; only the horizontal insets sit here. */
 function narrowRootStyle(palette: Palette): CSSProperties {
   return {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.5rem',
-    // Match the desktop root's safe-area handling (env() is 0 on non-notch devices).
-    padding:
-      'calc(0.5rem + env(safe-area-inset-top)) calc(0.6rem + env(safe-area-inset-right)) calc(0.5rem + env(safe-area-inset-bottom)) calc(0.6rem + env(safe-area-inset-left))',
     height: '100dvh',
-    width: '100%',
-    overflow: 'hidden',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    WebkitOverflowScrolling: 'touch',
+    paddingLeft: 'env(safe-area-inset-left)',
+    paddingRight: 'env(safe-area-inset-right)',
     background: palette.appBg,
     color: palette.textPrimary,
     fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",

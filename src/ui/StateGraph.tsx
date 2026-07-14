@@ -1377,7 +1377,7 @@ function GraphMinimap({ onExpand }: { onExpand(): void }): ReactElement {
  *     `graphVisible`. When the overlay is closed its body unmounts (nothing derived
  *     or drawn beyond the cheap minimap).
  */
-export function StateGraph(): ReactElement {
+export function StateGraph({ mobile = false }: { readonly mobile?: boolean } = {}): ReactElement {
   const palette = usePalette();
   const graphVisible = useAppStore((state) => state.graphVisible);
   const graphMaxHeight = useAppStore((state) => state.graphMaxHeight);
@@ -1400,20 +1400,28 @@ export function StateGraph(): ReactElement {
       </button>
 
       {/* Corner minimap, under the toggle — always shown while the overlay is closed
-          (owner 2026-07-12: the optional minimap toggle was removed). */}
-      {!graphVisible ? <GraphMinimap onExpand={() => setGraphVisible(true)} /> : null}
+          (owner 2026-07-12: the optional minimap toggle was removed). Hidden on the
+          mobile shell (owner round 9: the graph is "minimized completely" — the
+          top-left "◎ State graph" toggle is the only affordance to open it). */}
+      {!graphVisible && !mobile ? <GraphMinimap onExpand={() => setGraphVisible(true)} /> : null}
 
       {graphVisible ? (
         <div
           style={{
-            position: 'absolute',
+            // On mobile the overlay is FULL-SCREEN (owner round 9: expanding fills the
+            // whole screen). position:fixed escapes the hero's overflow:hidden and is
+            // viewport-relative because no ancestor in the mobile hero sets
+            // transform/filter/perspective. Desktop keeps the in-scene absolute overlay.
+            position: mobile ? 'fixed' : 'absolute',
             inset: 0,
-            zIndex: 5,
+            zIndex: mobile ? 50 : 5,
             background: palette.overlayBackdrop,
             backdropFilter: 'blur(2px)',
             display: 'flex',
             flexDirection: 'column',
-            padding: '2.9rem 0.8rem 0.8rem',
+            padding: mobile
+              ? 'calc(2.9rem + env(safe-area-inset-top)) calc(0.8rem + env(safe-area-inset-right)) calc(0.8rem + env(safe-area-inset-bottom)) calc(0.8rem + env(safe-area-inset-left))'
+              : '2.9rem 0.8rem 0.8rem',
             gap: '0.5rem',
           }}
         >

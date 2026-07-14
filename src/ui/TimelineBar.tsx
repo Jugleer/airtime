@@ -98,7 +98,7 @@ function makeGeometry(
   return { svgWidth, plotLeft, plotWidth, windowStart, timelineWindow };
 }
 
-export function TimelineBar(): ReactElement {
+export function TimelineBar({ compact = false }: { readonly compact?: boolean } = {}): ReactElement {
   const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const simTime = useAppStore((state) => state.simTime);
@@ -373,7 +373,8 @@ export function TimelineBar(): ReactElement {
         display: 'flex',
         flexDirection: 'column',
         gap: '0.4rem',
-        padding: '0.5rem 0.65rem 0.55rem',
+        // Compact (mobile): a tighter bar so the scene fills more of the screen.
+        padding: compact ? '0.3rem 0.5rem 0.35rem' : '0.5rem 0.65rem 0.55rem',
         background: palette.panelAlt,
         borderTop: `1px solid ${palette.border}`,
         width: '100%',
@@ -391,11 +392,17 @@ export function TimelineBar(): ReactElement {
         }}
       >
         <Transport />
-        <span style={readoutStyle}>pattern repeats every {repeatSeconds.toFixed(2)} s</span>
-        <span style={readoutStyle}>window {timelineWindow.toFixed(1)} s</span>
-        <span style={readoutStyle}>
-          trail {trailLength.toFixed(2)} s{handle.pinned ? ' (pinned)' : ''}
-        </span>
+        {/* Compact (mobile) hides the informational readouts to shorten the bar,
+            keeping only Transport and the current-time readout. */}
+        {compact ? null : (
+          <>
+            <span style={readoutStyle}>pattern repeats every {repeatSeconds.toFixed(2)} s</span>
+            <span style={readoutStyle}>window {timelineWindow.toFixed(1)} s</span>
+            <span style={readoutStyle}>
+              trail {trailLength.toFixed(2)} s{handle.pinned ? ' (pinned)' : ''}
+            </span>
+          </>
+        )}
         <div style={{ flex: 1 }} />
         <span style={{ ...readoutStyle, color: PLAYHEAD_COLOR, fontWeight: 700 }}>
           t = {simTime.toFixed(2)} s

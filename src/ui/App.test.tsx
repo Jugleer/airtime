@@ -71,6 +71,27 @@ describe('App (narrow / mobile shell)', () => {
     expect(screen.getByLabelText('Siteswap results')).toBeTruthy();
   });
 
+  it('minimizes the state graph on mobile: the corner minimap is hidden, the toggle stays', () => {
+    mockMatchMedia(true);
+    render(<App />);
+
+    // The graph is "minimized completely": no always-on corner minimap...
+    expect(screen.queryByLabelText('Expand state graph')).toBeNull();
+    // ...but the top-left toggle remains the way to open the (full-screen) overlay.
+    expect(screen.getByLabelText('Toggle state graph panel')).toBeTruthy();
+  });
+
+  it('shortens the timeline on mobile: the extra readouts are dropped, Transport stays', () => {
+    mockMatchMedia(true);
+    const { container } = render(<App />);
+
+    // The docked timeline is compact — its informational readouts are hidden.
+    expect(container.textContent).not.toContain('pattern repeats every');
+    // Transport (play/pause) and the current-time readout are kept.
+    expect(screen.getByLabelText('Timeline bar')).toBeTruthy();
+    expect(container.textContent).toContain('t =');
+  });
+
   it('does NOT render the mobile tab bar on a wide viewport (desktop grid)', () => {
     mockMatchMedia(false);
     render(<App />);
