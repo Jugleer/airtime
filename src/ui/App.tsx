@@ -600,7 +600,7 @@ function NarrowTabPanel({ tab }: { readonly tab: NarrowTab }): ReactElement {
 /**
  * The mobile shell (owner round 9): the PAGE scrolls, not an inner panel. A HERO
  * section — top bar over the full-bleed scene with its short docked timeline — is
- * sized to exactly one viewport (minHeight 100dvh, box-sizing border-box), so the
+ * sized to exactly one viewport (height 100dvh, box-sizing border-box), so the
  * scene fills most of the screen and the timeline lands at the bottom. Swiping
  * scrolls the hero off the top to reveal the BELOW-THE-FOLD settings: the compact
  * pattern field, the tab bar, and the selected panel, all in normal flow. No
@@ -612,10 +612,13 @@ function NarrowApp(): ReactElement {
   const [tab, setTab] = useState<NarrowTab>('controls');
   return (
     <div style={narrowRootStyle(palette)}>
-      {/* HERO: exactly one viewport tall (border-box + padding), scene-first. */}
+      {/* HERO: exactly one viewport tall (border-box + padding), scene-first. A
+          DEFINITE height (not min-height) is required so the flex chain below —
+          StageContent's height:100% → the scene's flex:1 → the r3f canvas — resolves
+          to a real pixel height instead of collapsing to the canvas's 150px default. */}
       <div
         style={{
-          minHeight: '100dvh',
+          height: '100dvh',
           flexShrink: 0,
           display: 'flex',
           flexDirection: 'column',
