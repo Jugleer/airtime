@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: Round 9 — mobile-friendliness (portrait scene-first), IN PROGRESS on branch round-9-mobile (see entry at end). Open items: operator visual sweep (checklists under each phase), held-2 design ruling (Phase 2 entry).**
+**Next phase: Round 9 — mobile-friendliness (portrait scene-first) DONE on branch round-9-mobile (unpushed — awaiting owner review + a real touch-device visual sweep before merge; see entry at end). Open items: operator visual sweep (checklists under each phase), held-2 design ruling (Phase 2 entry).**
 
 ---
 
@@ -777,7 +777,7 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
 - Deferred: no-account bug reporting (needs a hosted broker + spam protection —
   bends the rule further; revisit if account-required proves a barrier).
 
-## Round 9 — mobile-friendliness (portrait scene-first)    IN PROGRESS
+## Round 9 — mobile-friendliness (portrait scene-first)    DONE (branch round-9-mobile, unpushed — awaiting owner review + visual sweep)
 - Owner ask (2026-07-14): "What can we do to make this tool more mobile-friendly?"
   Decision (owner, AskUserQuestion): mobile target = PORTRAIT, SCENE-FIRST, TABBED —
   the phone shows the 3D scene + transport + pattern input always; Ladder / Charts /
@@ -833,9 +833,54 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   authoritative `npm run gate` + commit ONLY if green (hard rule: never commit red).
   Builders do not edit this ledger; the orchestrator fills the shas/gate lines below as
   tiers land. No push until the owner reviews the branch.
-- Tier commits / gate (filled as tiers land):
-  - Tier 1: (pending)
-  - Tier 2: (pending)
-  - Tier 3: (pending)
-  - Tier 4: (pending)
-- Deferred: (filled at close)
+- EXECUTION: background Workflow, 14 agents, sequential per tier; every tier gated
+  green and committed. Orchestrator independently verified afterward: clean tree, no
+  src/core/** edits, and no new Date.now/Math.random/performance.now across the whole
+  round (diff main..round-9-mobile).
+- Tier commits / gate (all on branch round-9-mobile, unpushed):
+  - Tier 1: d5111d9 — shell + demand frameloop. Gate green (58 files / 757 tests).
+    Audit (Opus) returned needs-fix: the first demand-frameloop cut invalidated only on
+    simTime, so while PAUSED, changing hovered-hand / trail length / ghost toggle did
+    not repaint the 3D scene until the next scrub/camera-move/play — a desktop
+    regression too (demand applies whenever paused). Fix pass broadened RepaintOnScrub's
+    store subscription to invalidate on simTime + hoveredHandIndex + trailLength +
+    ghostsEnabled; re-gated green. Export path verified intact (capture.ts pins
+    root.frameloop imperatively; preserveDrawingBuffer untouched). New pure exported
+    sceneFrameloop(playing) helper + Scene.test.tsx.
+  - Tier 2: 9efe559 — useIsNarrow() + NarrowApp (scene-first tabbed). Gate green (59
+    files / 762 tests). Audit (Opus) PASS. matchMedia('(max-width:760px)'), guarded to
+    false when matchMedia is undefined so jsdom/existing tests still exercise the
+    desktop layout. Desktop grid byte-identical (Stage split into Stage/StageContent
+    re-emits the same DOM; TopBar compact defaults off). Tab state is local useState,
+    not the URL codec/ShareConfig.
+  - Tier 3: ab72490 — coarse-pointer 44px targets + graph pinch-zoom. Gate green (59
+    files / 764 tests). Audit (Sonnet) PASS. @media (pointer:coarse) min-sizes gated so
+    desktop density is untouched. Two-pointer pinch on StateGraph (single-pointer pan +
+    desktop wheel-zoom unchanged); node interactivity moved onto a transparent >=44px
+    hit circle (also gained tabIndex + Enter/Space keydown — an a11y improvement).
+    Coarse gizmo hit radius 0.07->0.09 m paired with a deeper coarse global-node drop
+    (0.14->0.19 m) to keep catch/throw/global non-overlapping (new invariant test);
+    matchMedia read once in ui and threaded as a prop — core untouched.
+  - Tier 4: 8a0d061 — PerformanceMonitor+AdaptiveDpr, async iOS WebM probe, PWA. Gate
+    green (59 files / 768 tests). Audit (Sonnet) PASS. dpr cap [1,2] kept; AdaptiveDpr
+    onDecline no-ops while frameloop==='never' so it never fights export. WebM support
+    is now a real async VideoEncoder.isConfigSupported probe (shared pickWebmCodec;
+    ExportDialog offers WebM only once the probe confirms a codec) so iOS shows GIF
+    only. Real PNG icons synthesized (Pillow on this box): 192/512/512-maskable/
+    apple-touch/favicon-16/32; public/manifest.webmanifest (start_url './') + relative
+    index.html links; verified present in dist/ after build. Builder drove a live GIF
+    export via Playwright/swiftshader.
+- Non-blocking follow-ups surfaced by the audits (owner decisions, NOT blocking):
+  - Tier 2: narrow mode currently shows TWO play/pause+restart clusters — the one baked
+    into the docked TimelineBar plus the compact-strip Transport — a few px apart (the
+    spec asked for a compact Transport strip, and TimelineBar intrinsically contains a
+    Transport). Recommend dropping the strip Transport since the timeline's is always
+    on-screen. OWNER CALL.
+  - Tier 2: CompactPatternField shows a red (invalid) border for an empty draft;
+    cosmetic — mirror desktop's empty-draft handling if undesired.
+  - Tier 3: the graph node hit target lives in zoom space, so at MIN_ZOOM (0.5x) it
+    shrinks to ~22px on screen (it tracks the shrinking node). Fine at default 1x.
+- Deferred: none (all four tiers shipped; no PNG-icon fallback needed). REMAINING
+  before merge: a real touch-device/responsive visual sweep — the CSS/layout changes
+  (coarse-pointer sizing, 100dvh, safe-area insets, the narrow tabbed layout) were
+  validated statically + by the gate, not on a physical phone.
