@@ -44,9 +44,12 @@ import { SharePanel } from './SharePanel';
 import { StateGraph } from './StateGraph';
 import { TimelineBar } from './TimelineBar';
 import { THEME_CSS, usePalette, type Palette } from './theme';
+import { Transport } from './Transport';
 import { useAudio } from './useAudio';
 import { useClock } from './useClock';
+import { useIsNarrow } from './useIsNarrow';
 import { Button } from './widgets';
+import { validateNotation } from '../core/siteswap';
 import type { DockMode } from '../state';
 
 /** Map the active palette to the subset of colors the 3D scene needs (ui → render3d). */
@@ -119,8 +122,9 @@ function useSpacebarPlayPause(): void {
   }, []);
 }
 
-/** The thin top bar: product title + the top-right cluster (feedback links + Help). */
-function TopBar(): ReactElement {
+/** The thin top bar: product title + the top-right cluster (feedback links + Help).
+ *  `compact` (narrow shell) hides the subtitle to reclaim width on a phone. */
+function TopBar({ compact = false }: { readonly compact?: boolean } = {}): ReactElement {
   const palette = usePalette();
   return (
     <header
@@ -135,9 +139,11 @@ function TopBar(): ReactElement {
       <h1 style={{ margin: 0, fontSize: '1.15rem', color: palette.textPrimary, letterSpacing: '0.01em' }}>
         Airtime
       </h1>
-      <span style={{ fontSize: '0.78rem', color: palette.textMuted }}>
-        Siteswap 3D visualizer &amp; kinematics lab
-      </span>
+      {compact ? null : (
+        <span style={{ fontSize: '0.78rem', color: palette.textMuted }}>
+          Siteswap 3D visualizer &amp; kinematics lab
+        </span>
+      )}
       <div style={{ flex: 1 }} />
       {/* Top-right cluster: feedback links (Report a bug / Suggest a feature) then Help. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -148,31 +154,43 @@ function TopBar(): ReactElement {
   );
 }
 
-/** The center stage: the 3D scene with the timeline docked to its bottom edge. */
-function Stage(): ReactElement {
+/** The stage interior — the 3D scene (+ in-scene overlays) with the timeline docked
+ *  to its bottom edge — inside a rounded, bordered frame that fills its parent's
+ *  height. Extracted from {@link Stage} so the narrow (mobile) shell can pin the same
+ *  content atop its column without the desktop grid-placement wrapper. */
+function StageContent(): ReactElement {
   const palette = usePalette();
   return (
-    <div style={{ gridColumn: 3, gridRow: 2, minWidth: 0, minHeight: 0 }}>
-      <div
-        style={{
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          borderRadius: '0.6rem',
-          border: `1px solid ${palette.border}`,
-          overflow: 'hidden',
-          background: palette.sceneBg,
-        }}
-      >
-        {/* Scene area: the 3D view + its in-scene overlays (camera presets top-right
-            in Scene; the state-graph toggle top-left + overlay via StateGraph). The
-            translucent graph overlay covers only this area, never the timeline. */}
-        <div style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
-          <Scene sceneColors={sceneColorsOf(palette)} />
-          <StateGraph />
-        </div>
-        <TimelineBar />
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        borderRadius: '0.6rem',
+        border: `1px solid ${palette.border}`,
+        overflow: 'hidden',
+        background: palette.sceneBg,
+      }}
+    >
+      {/* Scene area: the 3D view + its in-scene overlays (camera presets top-right
+          in Scene; the state-graph toggle top-left + overlay via StateGraph). The
+          translucent graph overlay covers only this area, never the timeline. */}
+      <div style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
+        <Scene sceneColors={sceneColorsOf(palette)} />
+        <StateGraph />
       </div>
+      <TimelineBar />
+    </div>
+  );
+}
+
+/** The center stage (desktop grid cell): the 3D scene with the timeline docked to its
+ *  bottom edge. The DOM/styles it renders are unchanged from before the StageContent
+ *  extraction, so the desktop layout is byte-for-byte identical. */
+function Stage(): ReactElement {
+  return (
+    <div style={{ gridColumn: 3, gridRow: 2, minWidth: 0, minHeight: 0 }}>
+      <StageContent />
     </div>
   );
 }
@@ -409,6 +427,215 @@ function BottomDock({ layout }: { layout: LayoutController }): ReactElement {
   );
 }
 
+// --- Narrow (portrait, scene-first, tabbed) shell ----------------------------
+// Owner target (round 9): on a phone the 3D scene + transport + pattern input are
+// ALWAYS visible; Ladder / Charts / Explorer / Share are opt-in tabs. This shell is
+// only ever mounted when useIsNarrow() is true (matchMedia ≤ 760 px), so it never
+// affects the desktop grid — which stays byte-for-byte identical.
+
+/** The mobile bottom tabs. 'controls' is the default so the strip's pattern box has
+ *  its full editor (library, validation, physics…) one tap away. */
+type NarrowTab = 'controls' | 'ladder' | 'charts' | 'explorer' | 'share';
+
+const NARROW_TABS: readonly { readonly value: NarrowTab; readonly label: string }[] = [
+  { value: 'controls', label: 'Controls' },
+  { value: 'ladder', label: 'Ladder' },
+  { value: 'charts', label: 'Charts' },
+  { value: 'explorer', label: 'Explorer' },
+  { value: 'share', label: 'Share' },
+];
+
+/**
+ * The always-visible siteswap entry for the mobile strip: a compact store-bound
+ * pattern box + Go, mirroring the desktop Controls draft model (type edits a local
+ * draft; Enter or Go applies via setPattern → navigateToPattern; Esc reverts). It is
+ * deliberately minimal — the full validation lines, sync notices and library live in
+ * the Controls tab — so the strip stays one row tall. Kept self-contained so the
+ * desktop Controls component is untouched.
+ */
+function CompactPatternField(): ReactElement {
+  const palette = usePalette();
+  const pattern = useAppStore((state) => state.pattern);
+  const setPattern = useAppStore((state) => state.setPattern);
+  const [draft, setDraft] = useState(pattern);
+  useEffect(() => {
+    setDraft(pattern);
+  }, [pattern]);
+
+  const valid = validateNotation(draft).ok;
+  const dirty = draft !== pattern;
+  const applyDraft = (): void => {
+    if (dirty) {
+      setPattern(draft);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch', flex: 1, minWidth: 0 }}>
+      <input
+        type="text"
+        value={draft}
+        aria-label="Pattern (siteswap)"
+        spellCheck={false}
+        autoComplete="off"
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            applyDraft();
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            setDraft(pattern);
+          }
+        }}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          font: '700 1.05rem ui-monospace, SFMono-Regular, Menlo, monospace',
+          padding: '0.4rem 0.5rem',
+          borderRadius: '0.45rem',
+          border: `1px solid ${!valid ? palette.red : dirty ? palette.accent : palette.border}`,
+          background: palette.inset,
+          color: palette.textPrimary,
+        }}
+      />
+      <Button
+        variant={dirty ? 'primary' : 'default'}
+        onClick={applyDraft}
+        ariaLabel="Apply pattern"
+        title="Apply pattern (Enter)"
+      >
+        Go
+      </Button>
+    </div>
+  );
+}
+
+/** The mobile bottom tab bar: a segmented control selecting which opt-in panel shows
+ *  below it. Generalizes the DockModeSwitch idiom over the Button widget; wraps rather
+ *  than scrolls so every tab stays visible (and reachable) at 360–414 px. */
+function NarrowTabBar({
+  active,
+  onSelect,
+}: {
+  readonly active: NarrowTab;
+  onSelect(tab: NarrowTab): void;
+}): ReactElement {
+  return (
+    <div
+      role="group"
+      aria-label="Panels"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '0.3rem',
+        flexShrink: 0,
+        padding: '0.1rem 0',
+      }}
+    >
+      {NARROW_TABS.map((tab) => {
+        const selected = tab.value === active;
+        return (
+          <Button
+            key={tab.value}
+            onClick={() => onSelect(tab.value)}
+            ariaLabel={`Panel: ${tab.label}`}
+            ariaPressed={selected}
+            variant={selected ? 'primary' : 'default'}
+          >
+            {tab.label}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Render the active tab's existing panel component. Ladder is given a filled,
+ *  bordered box (like the desktop right column) so its height-driven SVG has a
+ *  definite height; the others render naturally inside the scroll container. */
+function NarrowTabPanel({ tab }: { readonly tab: NarrowTab }): ReactElement {
+  const palette = usePalette();
+  if (tab === 'ladder') {
+    return (
+      <div
+        style={{
+          flex: 1,
+          minHeight: '60vh',
+          display: 'flex',
+          background: palette.chartPlotBg,
+          border: `1px solid ${palette.border}`,
+          borderRadius: '0.4rem',
+          padding: '0.3rem',
+        }}
+      >
+        <Ladder />
+      </div>
+    );
+  }
+  if (tab === 'charts') {
+    return <Charts />;
+  }
+  if (tab === 'explorer') {
+    return <Explorer />;
+  }
+  if (tab === 'share') {
+    return <SharePanel />;
+  }
+  return <Controls />;
+}
+
+/**
+ * The mobile shell: a single no-scroll column — top bar, the always-visible stage
+ * (~55 dvh), a compact transport + pattern strip, then the tab bar over a scrollable
+ * body for the selected panel. No splitters or collapsed strips here.
+ */
+function NarrowApp(): ReactElement {
+  const palette = usePalette();
+  const [tab, setTab] = useState<NarrowTab>('controls');
+  return (
+    <div style={narrowRootStyle(palette)}>
+      <TopBar compact />
+
+      {/* The stage is pinned on top and ALWAYS visible (scene + graph overlay +
+          docked timeline), a fixed slice of the viewport height. */}
+      <div style={{ height: '55dvh', flex: '0 0 auto', minHeight: 0 }}>
+        <StageContent />
+      </div>
+
+      {/* Always-visible compact strip: transport + pattern entry. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          flexShrink: 0,
+          padding: '0.1rem 0',
+        }}
+      >
+        <Transport />
+        <CompactPatternField />
+      </div>
+
+      <NarrowTabBar active={tab} onSelect={setTab} />
+
+      {/* The opt-in panel body — the only scrolling region in the mobile shell. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <NarrowTabPanel tab={tab} />
+      </div>
+    </div>
+  );
+}
+
 export function App(): ReactElement {
   // Mount the single wall-clock loop that drives simTime (DESIGN.md §2) and the
   // WebAudio tick scheduler (a no-op until audio is enabled).
@@ -418,6 +645,15 @@ export function App(): ReactElement {
   useSpacebarPlayPause();
   const palette = usePalette();
   const layout = useLayout();
+  const narrow = useIsNarrow();
+
+  // Phone-narrow viewports get the portrait, scene-first, tabbed shell; every wider
+  // viewport (and jsdom, where matchMedia is undefined) gets the UNCHANGED desktop
+  // grid below. The two are mutually exclusive so no desktop-only concern (splitters,
+  // collapsed strips, dock) renders on a phone and vice-versa.
+  if (narrow) {
+    return <NarrowApp />;
+  }
 
   return (
     <div style={rootGridStyle(palette, layout)}>
@@ -475,6 +711,25 @@ export function App(): ReactElement {
       <BottomDock layout={layout} />
     </div>
   );
+}
+
+/** The mobile shell's outer container: a single no-scroll flex column filling the
+ *  visible viewport (dvh), with the same iOS safe-area padding as the desktop root. */
+function narrowRootStyle(palette: Palette): CSSProperties {
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '0.5rem',
+    // Match the desktop root's safe-area handling (env() is 0 on non-notch devices).
+    padding:
+      'calc(0.5rem + env(safe-area-inset-top)) calc(0.6rem + env(safe-area-inset-right)) calc(0.5rem + env(safe-area-inset-bottom)) calc(0.6rem + env(safe-area-inset-left))',
+    height: '100dvh',
+    width: '100%',
+    overflow: 'hidden',
+    background: palette.appBg,
+    color: palette.textPrimary,
+    fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+  };
 }
 
 function rootGridStyle(palette: Palette, layout: LayoutController): CSSProperties {

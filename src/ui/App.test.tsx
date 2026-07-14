@@ -4,6 +4,17 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useAppStore } from '../state';
 import { App } from './App';
 
+/** Install a matchMedia mock reporting a fixed `matches` (drives useIsNarrow). */
+function mockMatchMedia(matches: boolean): void {
+  window.matchMedia = ((query: string) =>
+    ({
+      matches,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }) as unknown as MediaQueryList) as typeof window.matchMedia;
+}
+
 // App mounts the charts panel, whose canvases call getContext('2d'); jsdom has no
 // canvas 2D backend, so stub it to null (the charts guard null and skip drawing).
 beforeAll(() => {
@@ -33,5 +44,36 @@ describe('App (ui layer)', () => {
     const input = screen.getByLabelText('Pattern (siteswap)');
     fireEvent.keyDown(input, { code: 'Space', key: ' ' });
     expect(useAppStore.getState().playing).toBe(false);
+  });
+});
+
+describe('App (narrow / mobile shell)', () => {
+  afterEach(() => {
+    // Restore jsdom's default (matchMedia absent) so other suites see the desktop shell.
+    // @ts-expect-error clearing the mock between suites
+    delete window.matchMedia;
+  });
+
+  it('renders the tabbed mobile shell (scene + tab bar) when the viewport is narrow', () => {
+    mockMatchMedia(true);
+    render(<App />);
+
+    // The stage (with its docked timeline) is always visible atop the column.
+    expect(screen.getByLabelText('Timeline bar')).toBeTruthy();
+    // The bottom tab bar and all five opt-in panel tabs are present.
+    expect(screen.getByRole('group', { name: 'Panels' })).toBeTruthy();
+    for (const label of ['Controls', 'Ladder', 'Charts', 'Explorer', 'Share']) {
+      expect(screen.getByLabelText(`Panel: ${label}`)).toBeTruthy();
+    }
+
+    // Selecting a tab swaps the panel body: the Explorer tab shows its results grid.
+    fireEvent.click(screen.getByLabelText('Panel: Explorer'));
+    expect(screen.getByLabelText('Siteswap results')).toBeTruthy();
+  });
+
+  it('does NOT render the mobile tab bar on a wide viewport (desktop grid)', () => {
+    mockMatchMedia(false);
+    render(<App />);
+    expect(screen.queryByRole('group', { name: 'Panels' })).toBeNull();
   });
 });
