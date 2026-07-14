@@ -11,7 +11,6 @@
 
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -73,8 +72,22 @@ export default function ExportDialog({ onClose }: { onClose(): void }): ReactEle
   // Move focus into the card on mount, restore it to the "Export GIF…" button on unmount.
   const dialogRef = useModalFocus<HTMLDivElement>(true);
 
-  // WebCodecs support is fixed for the session; hide WebM entirely when absent.
-  const webmSupported = useMemo(() => isWebmExportSupported(), []);
+  // WebM availability needs an async codec probe (VideoEncoder.isConfigSupported):
+  // iOS Safari exposes the WebCodecs types but cannot actually encode VP8/VP9, so
+  // presence-only detection would show a WebM tab that fails at encode time. Probe
+  // once when the dialog opens; start hidden (GIF-only) until the probe resolves.
+  const [webmSupported, setWebmSupported] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void isWebmExportSupported().then((supported) => {
+      if (!cancelled) {
+        setWebmSupported(supported);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Live "≈ N frames" estimate from the spatial period (one loop = periodBeats·τ_b).
   const spatialPeriodBeats = useAppStore((state) => state.sim.spatialPeriodBeats);

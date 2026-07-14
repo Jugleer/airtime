@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isWebm, muxWebm, type WebmFrame } from './webm';
+import { isWebm, isWebmExportSupported, muxWebm, pickWebmCodec, type WebmFrame } from './webm';
 
 /** Read an EBML element id + data size at `offset`; returns the next offset + size. */
 function readElement(bytes: Uint8Array, offset: number): { idLen: number; size: number; dataStart: number } {
@@ -61,5 +61,53 @@ describe('webm muxer (EBML structure)', () => {
 
   it('rejects non-webm data', () => {
     expect(isWebm(new Uint8Array([0x47, 0x49, 0x46, 0x38]))).toBe(false);
+  });
+});
+
+describe('WebM export support probing (actual encode capability, not just type presence)', () => {
+  it('pickWebmCodec resolves null when VideoEncoder is unavailable (test env has no WebCodecs)', async () => {
+    expect(await pickWebmCodec()).toBeNull();
+  });
+
+  it('isWebmExportSupported resolves false when VideoEncoder is unavailable', async () => {
+    expect(await isWebmExportSupported()).toBe(false);
+  });
+
+  it('isWebmExportSupported resolves false when the types exist but every codec probe rejects/fails (the iOS Safari case: VideoEncoder/VideoFrame present but cannot encode VP8/VP9)', async () => {
+    const fakeVideoEncoder = {
+      isConfigSupported: async () => {
+        throw new Error('not supported');
+      },
+    };
+    const original = (globalThis as { VideoEncoder?: unknown }).VideoEncoder;
+    const originalFrame = (globalThis as { VideoFrame?: unknown }).VideoFrame;
+    (globalThis as { VideoEncoder?: unknown }).VideoEncoder = fakeVideoEncoder;
+    (globalThis as { VideoFrame?: unknown }).VideoFrame = class {};
+    try {
+      expect(await isWebmExportSupported()).toBe(false);
+      expect(await pickWebmCodec()).toBeNull();
+    } finally {
+      (globalThis as { VideoEncoder?: unknown }).VideoEncoder = original;
+      (globalThis as { VideoFrame?: unknown }).VideoFrame = originalFrame;
+    }
+  });
+
+  it('isWebmExportSupported resolves true when a codec actually reports supported', async () => {
+    const fakeVideoEncoder = {
+      isConfigSupported: async (config: { codec: string }) => ({
+        supported: config.codec === 'vp09.00.10.08',
+      }),
+    };
+    const original = (globalThis as { VideoEncoder?: unknown }).VideoEncoder;
+    const originalFrame = (globalThis as { VideoFrame?: unknown }).VideoFrame;
+    (globalThis as { VideoEncoder?: unknown }).VideoEncoder = fakeVideoEncoder;
+    (globalThis as { VideoFrame?: unknown }).VideoFrame = class {};
+    try {
+      expect(await isWebmExportSupported()).toBe(true);
+      expect((await pickWebmCodec())?.id).toBe('V_VP9');
+    } finally {
+      (globalThis as { VideoEncoder?: unknown }).VideoEncoder = original;
+      (globalThis as { VideoFrame?: unknown }).VideoFrame = originalFrame;
+    }
   });
 });

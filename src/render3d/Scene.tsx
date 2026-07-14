@@ -19,9 +19,10 @@ import {
   type ComponentRef,
   type CSSProperties,
   type ReactElement,
+  type ReactNode,
 } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { Grid, OrbitControls } from '@react-three/drei';
+import { AdaptiveDpr, Grid, OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import { Balls } from './Balls';
 import { Tracers } from './Tracers';
 import { Hands, HandPaths } from './Hands';
@@ -228,6 +229,48 @@ function RepaintOnScrub(): null {
 }
 
 /**
+ * Adaptive render resolution under sustained GPU load (mobile perf/thermal
+ * robustness). drei's <PerformanceMonitor> samples the real frame rate over a
+ * sliding window and calls onDecline once enough recent samples fall below the
+ * display's fps floor; wired here to r3f's own performance.regress() — the same
+ * "temporarily lower quality" signal drei's <AdaptiveDpr> already watches
+ * (state.performance.current), normally reserved for interactive controls' own
+ * `regress` flag. Repeated onDecline calls (load sustained across sampling
+ * windows) keep regress()'s internal debounce topped up; once fps recovers and
+ * onDecline stops firing, that debounce elapses and resolution is restored
+ * automatically — no onIncline wiring needed. Keeps the dpr cap [1, 2] on <Canvas/>
+ * as the ceiling; this only ever pulls resolution DOWN from wherever it is.
+ *
+ * PerformanceMonitor only samples frames that actually render (via useFrame); it
+ * never calls invalidate() or touches the frameloop mode itself, so it composes
+ * with Scene's 'demand' frameloop while paused — sampling simply idles along with
+ * the render loop instead of forcing it back to 'always'.
+ *
+ * Export guard: src/export/capture.ts drives frames manually with root.advance()
+ * while frameloop is pinned to 'never' (see RepaintOnScrub above), and advance()
+ * DOES fire useFrame subscribers — including this one. A dpr change mid-export
+ * would make the captured resolution inconsistent frame-to-frame, so onDecline
+ * reads the CURRENT frameloop through r3f's own `get()` (not a subscribed value —
+ * export toggles it without a Scene re-render) and no-ops while it is 'never'.
+ */
+function AdaptivePerformance({ children }: { readonly children: ReactNode }): ReactElement {
+  const regress = useThree((state) => state.performance.regress);
+  const get = useThree((state) => state.get);
+  const onDecline = (): void => {
+    if (get().frameloop === 'never') {
+      return;
+    }
+    regress();
+  };
+  return (
+    <PerformanceMonitor onDecline={onDecline}>
+      <AdaptiveDpr pixelated />
+      {children}
+    </PerformanceMonitor>
+  );
+}
+
+/**
  * Themed colors the scene needs (passed down from the ui layer so render3d stays
  * ui-import-free; ui → render3d is the allowed direction). Defaults are the dark
  * palette so <Scene/> also renders standalone (tests, storybook).
@@ -327,19 +370,21 @@ export function Scene({
         }}
       >
         <color attach="background" args={[colors.background]} />
-        <Environment colors={colors} />
-        <CameraRig />
-        <CaptureRegistrar />
-        <RepaintOnScrub />
-        <Tracers />
-        <HandPaths />
-        <Balls />
-        <Hands color={colors.handCup} />
-        <WorkspaceOverlay />
-        <HandGizmos coarsePointer={coarsePointer} />
-        {/* Always-visible orientation triad (bottom-right corner), tracking the
-            camera; shows the right-handed Z-up display frame (X/Y/Z). */}
-        <Triad />
+        <AdaptivePerformance>
+          <Environment colors={colors} />
+          <CameraRig />
+          <CaptureRegistrar />
+          <RepaintOnScrub />
+          <Tracers />
+          <HandPaths />
+          <Balls />
+          <Hands color={colors.handCup} />
+          <WorkspaceOverlay />
+          <HandGizmos coarsePointer={coarsePointer} />
+          {/* Always-visible orientation triad (bottom-right corner), tracking the
+              camera; shows the right-handed Z-up display frame (X/Y/Z). */}
+          <Triad />
+        </AdaptivePerformance>
       </Canvas>
 
       {/* Camera presets: top-right (DESIGN.md §6; graph toggle sits top-left, in App). */}

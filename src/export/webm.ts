@@ -17,13 +17,65 @@ export interface WebmFrame {
   readonly timestampUs: number;
 }
 
-/** True when the browser exposes the WebCodecs video encoder + frame types. */
-export function isWebmExportSupported(): boolean {
-  return (
-    typeof globalThis !== 'undefined' &&
-    typeof (globalThis as { VideoEncoder?: unknown }).VideoEncoder !== 'undefined' &&
-    typeof (globalThis as { VideoFrame?: unknown }).VideoFrame !== 'undefined'
-  );
+/** VP9 first, VP8 fallback — both are royalty-free and widely decodable. The
+ * canonical codec candidate list; src/export/capture.ts reuses this (not its own
+ * copy) so the "what can we encode" logic lives in one place. */
+export const WEBM_CODECS: readonly { readonly codec: string; readonly id: 'V_VP8' | 'V_VP9' }[] = [
+  { codec: 'vp09.00.10.08', id: 'V_VP9' },
+  { codec: 'vp8', id: 'V_VP8' },
+];
+
+/** Nominal probe size for feature detection only — the real export re-probes at its
+ * actual target resolution (see capture.ts's encodeWebm), but codec *availability*
+ * does not vary with size in practice, so any reasonable size is a valid probe. */
+const PROBE_WIDTH = 640;
+const PROBE_HEIGHT = 480;
+
+/**
+ * Find the first {@link WEBM_CODECS} candidate the browser can actually encode at
+ * the given size, or null if none can. Returns null immediately (no probing) when
+ * VideoEncoder is unavailable.
+ */
+export async function pickWebmCodec(
+  width: number = PROBE_WIDTH,
+  height: number = PROBE_HEIGHT,
+): Promise<{ readonly codec: string; readonly id: 'V_VP8' | 'V_VP9' } | null> {
+  if (
+    typeof globalThis === 'undefined' ||
+    typeof (globalThis as { VideoEncoder?: unknown }).VideoEncoder === 'undefined'
+  ) {
+    return null;
+  }
+  for (const candidate of WEBM_CODECS) {
+    try {
+      const support = await VideoEncoder.isConfigSupported({ codec: candidate.codec, width, height });
+      if (support.supported === true) {
+        return candidate;
+      }
+    } catch {
+      // Try the next codec.
+    }
+  }
+  return null;
+}
+
+/**
+ * True when the browser can actually ENCODE WebM video (VP8 or VP9), not merely
+ * expose the WebCodecs types. iOS Safari, notably, exposes VideoEncoder/VideoFrame
+ * but throws/rejects on every VP8/VP9 config — checking type existence alone would
+ * show a WebM option that fails at encode time. This probes real support via
+ * VideoEncoder.isConfigSupported instead.
+ */
+export async function isWebmExportSupported(): Promise<boolean> {
+  if (
+    typeof globalThis === 'undefined' ||
+    typeof (globalThis as { VideoEncoder?: unknown }).VideoEncoder === 'undefined' ||
+    typeof (globalThis as { VideoFrame?: unknown }).VideoFrame === 'undefined'
+  ) {
+    return false;
+  }
+  const chosen = await pickWebmCodec();
+  return chosen !== null;
 }
 
 // --- EBML primitives ---------------------------------------------------------

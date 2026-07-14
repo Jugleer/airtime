@@ -21,7 +21,7 @@ import { sampleCamera } from '../state/sceneBridge';
 import { getCaptureRoot } from '../render3d/captureBridge';
 import { buildExportSchedule, isBeatGridUniform, orbitPosition, type Vec3Tuple } from './schedule';
 import { createGifEncoder } from './gif';
-import { isWebmExportSupported, muxWebm, type WebmFrame } from './webm';
+import { isWebmExportSupported, muxWebm, pickWebmCodec, type WebmFrame } from './webm';
 import type { ExportCancel, ExportOptions, ExportProgress, ExportResult } from './types';
 
 /** A recoverable export failure (shown to the user, never thrown to the console). */
@@ -39,12 +39,6 @@ export class ExportCancelledError extends Error {
     this.name = 'ExportCancelledError';
   }
 }
-
-/** VP9 first, VP8 fallback — both are royalty-free and widely decodable. */
-const WEBM_CODECS: readonly { readonly codec: string; readonly id: 'V_VP8' | 'V_VP9' }[] = [
-  { codec: 'vp09.00.10.08', id: 'V_VP9' },
-  { codec: 'vp8', id: 'V_VP8' },
-];
 
 /** Yield a macrotask so the UI (progress bar, Cancel button) can paint. */
 function nextTick(): Promise<void> {
@@ -83,7 +77,7 @@ export async function runExport(
   if (root === null) {
     throw new ExportError('The 3D scene is not ready for export.');
   }
-  if (options.format === 'webm' && !isWebmExportSupported()) {
+  if (options.format === 'webm' && !(await isWebmExportSupported())) {
     throw new ExportError('WebM export is not supported in this browser.');
   }
 
@@ -240,22 +234,7 @@ async function encodeWebm(
   cancel: ExportCancel,
 ): Promise<Blob> {
   // Pick the first codec the browser can actually encode at this size.
-  let chosen: { readonly codec: string; readonly id: 'V_VP8' | 'V_VP9' } | null = null;
-  for (const candidate of WEBM_CODECS) {
-    try {
-      const support = await VideoEncoder.isConfigSupported({
-        codec: candidate.codec,
-        width,
-        height,
-      });
-      if (support.supported === true) {
-        chosen = candidate;
-        break;
-      }
-    } catch {
-      // Try the next codec.
-    }
-  }
+  const chosen = await pickWebmCodec(width, height);
   if (chosen === null) {
     throw new ExportError('No supported WebM video codec (VP8/VP9) in this browser.');
   }
