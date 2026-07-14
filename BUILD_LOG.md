@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: Round 9 — mobile-friendliness (portrait scene-first) DONE on branch round-9-mobile (unpushed — awaiting owner review + a real touch-device visual sweep before merge; see entry at end). Open items: operator visual sweep (checklists under each phase), held-2 design ruling (Phase 2 entry).**
+**Next phase: none — Round 9 (mobile-friendliness, portrait scene-first) MERGED to main + deployed to prod 2026-07-14 (owner testing on-device). Open items: operator visual sweep (checklists under each phase), held-2 design ruling (Phase 2 entry).**
 
 ---
 
@@ -777,7 +777,7 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
 - Deferred: no-account bug reporting (needs a hosted broker + spam protection —
   bends the rule further; revisit if account-required proves a barrier).
 
-## Round 9 — mobile-friendliness (portrait scene-first)    DONE (branch round-9-mobile, unpushed — awaiting owner review + visual sweep)
+## Round 9 — mobile-friendliness (portrait scene-first)    DONE — merged to main + deployed to prod (2026-07-14)
 - Owner ask (2026-07-14): "What can we do to make this tool more mobile-friendly?"
   Decision (owner, AskUserQuestion): mobile target = PORTRAIT, SCENE-FIRST, TABBED —
   the phone shows the 3D scene + transport + pattern input always; Ladder / Charts /
@@ -870,17 +870,21 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
     apple-touch/favicon-16/32; public/manifest.webmanifest (start_url './') + relative
     index.html links; verified present in dist/ after build. Builder drove a live GIF
     export via Playwright/swiftshader.
-- Non-blocking follow-ups surfaced by the audits (owner decisions, NOT blocking):
-  - Tier 2: narrow mode currently shows TWO play/pause+restart clusters — the one baked
-    into the docked TimelineBar plus the compact-strip Transport — a few px apart (the
-    spec asked for a compact Transport strip, and TimelineBar intrinsically contains a
-    Transport). Recommend dropping the strip Transport since the timeline's is always
-    on-screen. OWNER CALL.
+- Follow-ups surfaced by the audits:
+  - Tier 2 double-Transport: RESOLVED (owner-approved) in 32c1cd2 — dropped the
+    compact-strip Transport (and its now-unused import); play/pause+restart remains in
+    the docked TimelineBar within the always-visible stage. The narrow strip is now
+    pattern-entry only; also removes a duplicate aria-label in narrow mode. Gate green
+    (59 files / 768 tests).
   - Tier 2: CompactPatternField shows a red (invalid) border for an empty draft;
     cosmetic — mirror desktop's empty-draft handling if undesired.
   - Tier 3: the graph node hit target lives in zoom space, so at MIN_ZOOM (0.5x) it
     shrinks to ~22px on screen (it tracks the shrinking node). Fine at default 1x.
-- Deferred: none (all four tiers shipped; no PNG-icon fallback needed). REMAINING
-  before merge: a real touch-device/responsive visual sweep — the CSS/layout changes
+- Deferred: none (all four tiers shipped; no PNG-icon fallback needed). Owner is now
+  doing the real touch-device/responsive visual sweep in prod — the CSS/layout changes
   (coarse-pointer sizing, 100dvh, safe-area insets, the narrow tabbed layout) were
-  validated statically + by the gate, not on a physical phone.
+  validated statically + by the gate, not on a physical phone, so any on-device issues
+  come back as a round-9 fixup.
+- Minor remaining (non-blocking, deferred unless owner hits them): Tier 2
+  CompactPatternField red border on empty draft (cosmetic); Tier 3 graph node hit
+  target shrinks to ~22px on-screen at MIN_ZOOM 0.5x (fine at default 1x).
