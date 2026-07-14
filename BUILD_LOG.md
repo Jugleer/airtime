@@ -3,7 +3,7 @@
 Append-only record of the phased build. Owned by the orchestrator (builders do not
 edit this file). See ORCHESTRATOR_PROMPT.md for the protocol.
 
-**Next phase: none — v1 build complete (Phases 0–9 all DONE). Open items: operator visual sweep (checklists under each phase), held-2 design ruling (Phase 2 entry).**
+**Next phase: Round 9 — mobile-friendliness (portrait scene-first), IN PROGRESS on branch round-9-mobile (see entry at end). Open items: operator visual sweep (checklists under each phase), held-2 design ruling (Phase 2 entry).**
 
 ---
 
@@ -776,3 +776,66 @@ workspace editor + explorer; 3 = sync/multiplex, GIF export, a11y, final audit.
   dashboard lives at https://<code>.goatcounter.com.
 - Deferred: no-account bug reporting (needs a hosted broker + spam protection —
   bends the rule further; revisit if account-required proves a barrier).
+
+## Round 9 — mobile-friendliness (portrait scene-first)    IN PROGRESS
+- Owner ask (2026-07-14): "What can we do to make this tool more mobile-friendly?"
+  Decision (owner, AskUserQuestion): mobile target = PORTRAIT, SCENE-FIRST, TABBED —
+  the phone shows the 3D scene + transport + pattern input always; Ladder / Charts /
+  Explorer / Share become opt-in tabs. (Explicitly NOT landscape-first, and NOT a flat
+  stacked long-scroll.)
+- AUDIT (6-dimension multi-agent sweep, 2026-07-14). Current state = desktop-landscape
+  only. BLOCKER: the fixed 5-column grid (rootGridStyle, App.tsx:483) has a hard minimum
+  width ~852px (SIDEBAR_MIN 200 + GUTTER 6 + STAGE_MIN 380 + GUTTER 6 + LADDER_MIN 260)
+  inside width:100vw / overflow:hidden, so on a 360-390px phone the ladder column and part
+  of the stage are laid out past the viewport and HARD-CLIPPED (unreachable — even the
+  collapse buttons are off-screen); fully collapsing both side columns still needs 452px.
+  Zero @media / matchMedia branches exist. What's already good and shrinks the blast
+  radius: camera orbit + pinch-zoom + pan already work on touch (drei OrbitControls sets
+  touch-action:none); TimelineBar scrub, StateGraph pan, panel Splitters, and hand Gizmos
+  all use Pointer Events + setPointerCapture + touchAction:'none'; panel interiors already
+  flexWrap + minWidth:0; modals cap maxHeight:85vh with internal scroll; SVG views
+  self-measure via ResizeObserver; dpr already clamped [1,2]; pinch-zoom is NOT blocked
+  (no user-scalable=no — preserve). So the work concentrates at the shell + a coarse-
+  pointer sizing pass; NOTHING touches src/core — determinism/purity are untouched (the
+  render loop reads simTime from the store clock, so even render-cadence changes cannot
+  affect the sim).
+- PLAN — four independently-shippable, gate-green, per-tier-committed tiers:
+  - Tier 1 — shell & render cadence (Opus): index.html (viewport-fit=cover; theme-color
+    split by prefers-color-scheme; apple-/mobile-web-app metas); App.tsx rootGridStyle
+    (100vh→100dvh, 100vw→100%, fold env(safe-area-inset-*) into padding); Scene.tsx
+    Canvas (touchAction:'none'; frameloop demand when paused + invalidate() on scrub and
+    on camera move — the single biggest battery/thermal fix — WITHOUT breaking export
+    capture's frameloop control or OrbitControls damping/settle).
+  - Tier 2 — narrow tabbed layout (Opus): useIsNarrow() hook (matchMedia max-width 760px,
+    same shape as useLayout) → alternate App layout: Scene + docked timeline at ~55dvh on
+    top, a compact always-visible Transport + pattern-input strip, then a bottom TAB BAR
+    that swaps one panel body (Controls / Ladder / Charts / Explorer / Share — a
+    generalization of the existing DockModeSwitch). Reuse existing components unchanged;
+    skip the vertical Splitters / CollapsedStrips in narrow mode; container overflow-y:auto.
+  - Tier 3 — touch ergonomics (Sonnet mechanical + Opus pinch): @media (pointer:coarse)
+    ≥44px min on button / [role=button] / input[type=range] in theme.ts (gated so desktop
+    density is preserved — NOT an unconditional buttonStyle bump); pinch-to-zoom on
+    StateGraph + transparent ≥44px node hit targets + reword the "scroll to zoom" hint
+    (Opus); coarse-pointer gizmo hit radius (HandGizmos/gizmos.ts, capped by the documented
+    neighbor-separation ceiling); Charts legend hover-highlight → onPointerEnter/Leave;
+    a visible note for the disabled hand-count stepper (title-only today); Export dialog
+    maxHeight:85vh + overflowY:auto.
+  - Tier 4 — perf robustness + PWA (Sonnet): PerformanceMonitor + AdaptiveDpr; async iOS
+    WebM codec detection (isWebmExportSupported probes VideoEncoder.isConfigSupported so
+    iOS Safari shows GIF only instead of a WebM tab that then errors); PWA
+    manifest.webmanifest + synthesized icons + favicon + head links (bundled/synthesized
+    assets are allowed by CLAUDE.md; SVG-icon fallback + defer a maskable PNG if PNG
+    rasterization is impractical on this arm64 box).
+- Orchestration: one background Workflow, run SEQUENTIALLY per tier on branch
+  round-9-mobile (tiers share the working tree and build on each other). Each tier =
+  implement (Opus/Sonnet by risk) → adversarial audit (verify src/core untouched, no
+  Date.now/Math.random, acceptance criteria met, no regressions) → fix if needed →
+  authoritative `npm run gate` + commit ONLY if green (hard rule: never commit red).
+  Builders do not edit this ledger; the orchestrator fills the shas/gate lines below as
+  tiers land. No push until the owner reviews the branch.
+- Tier commits / gate (filled as tiers land):
+  - Tier 1: (pending)
+  - Tier 2: (pending)
+  - Tier 3: (pending)
+  - Tier 4: (pending)
+- Deferred: (filled at close)
