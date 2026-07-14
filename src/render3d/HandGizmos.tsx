@@ -43,10 +43,11 @@ import {
   GIZMO_LABEL_RENDER_ORDER,
   GIZMO_MARKER_RADIUS,
   GIZMO_RENDER_ORDER,
-  GLOBAL_NODE_DROP,
   globalAnchor,
   globalColorOf,
   globalMarkerLabel,
+  globalNodeDropForPointer,
+  hitRadiusForPointer,
   markerColorOf,
   markerLabel,
 } from './gizmos';
@@ -115,6 +116,7 @@ function Marker({
   colorIdle,
   colorHot,
   planeY = HAND_Y,
+  hitRadius = GIZMO_HIT_RADIUS,
   onDragStart,
   onDrag,
   onDragEnd,
@@ -131,6 +133,9 @@ function Marker({
    * jump) while its x/z still map straight to the catch↔throw midpoint.
    */
   readonly planeY?: number;
+  /** Invisible hit-sphere radius (m). Coarse pointers (touch) pass a bigger radius than
+   *  the default so a fingertip grabs without pixel-precise aim (see {@link hitRadiusForPointer}). */
+  readonly hitRadius?: number;
   onDragStart(): void;
   onDrag(point: Vector3): void;
   onDragEnd(): void;
@@ -208,7 +213,7 @@ function Marker({
           onDragEnd();
         }}
       >
-        <sphereGeometry args={[GIZMO_HIT_RADIUS, 12, 8]} />
+        <sphereGeometry args={[hitRadius, 12, 8]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
@@ -236,8 +241,10 @@ function Marker({
   );
 }
 
-/** All hands' catch + throw gizmos; rendered only when the positions editor is open. */
-export function HandGizmos(): ReactElement | null {
+/** All hands' catch + throw gizmos; rendered only when the positions editor is open.
+ *  `coarsePointer` (a touch device, read once in the ui layer and threaded in) enlarges
+ *  the grab targets for fingertips; it defaults to the mouse-sized targets. */
+export function HandGizmos({ coarsePointer = false }: { readonly coarsePointer?: boolean } = {}): ReactElement | null {
   const open = useAppStore((state) => state.positionsEditorOpen);
   const handCount = useAppStore((state) => state.handCount);
   const throwPoints = useAppStore((state) => state.handThrowPoints);
@@ -247,6 +254,11 @@ export function HandGizmos(): ReactElement | null {
 
   const controls = useThree((state) => state.controls) as ToggleableControls | null;
   const [dragging, setDragging] = useState<DragTarget | null>(null);
+
+  // Fingertip-vs-mouse grab sizing. The global node's drop is matched to the hit radius
+  // so its sphere stays disjoint from the catch/throw spheres (./gizmos).
+  const hitRadius = hitRadiusForPointer(coarsePointer);
+  const globalDrop = globalNodeDropForPointer(coarsePointer);
 
   if (!open) {
     return null;
@@ -286,6 +298,7 @@ export function HandGizmos(): ReactElement | null {
           label={markerLabel(hand, 'catch')}
           colorIdle={markerColorOf('catch', false)}
           colorHot={markerColorOf('catch', true)}
+          hitRadius={hitRadius}
           onDragStart={() => beginDrag({ hand, kind: 'catch' })}
           onDrag={(point) => update({ hand, kind: 'catch' }, point)}
           onDragEnd={endDrag}
@@ -300,6 +313,7 @@ export function HandGizmos(): ReactElement | null {
           label={markerLabel(hand, 'throw')}
           colorIdle={markerColorOf('throw', false)}
           colorHot={markerColorOf('throw', true)}
+          hitRadius={hitRadius}
           onDragStart={() => beginDrag({ hand, kind: 'throw' })}
           onDrag={(point) => update({ hand, kind: 'throw' }, point)}
           onDragEnd={endDrag}
@@ -313,7 +327,7 @@ export function HandGizmos(): ReactElement | null {
     // lowered plane, so its x/z still target the midpoint (setHandAnchor).
     if (catchPoint && throwPoint) {
       const anchor = globalAnchor(catchPoint, throwPoint);
-      const globalY = HAND_Y - GLOBAL_NODE_DROP;
+      const globalY = HAND_Y - globalDrop;
       markers.push(
         <Marker
           key={`global-${hand}`}
@@ -322,6 +336,7 @@ export function HandGizmos(): ReactElement | null {
           colorIdle={globalColorOf(false)}
           colorHot={globalColorOf(true)}
           planeY={globalY}
+          hitRadius={hitRadius}
           onDragStart={() => beginDrag({ hand, kind: 'global' })}
           onDrag={(point) => update({ hand, kind: 'global' }, point)}
           onDragEnd={endDrag}

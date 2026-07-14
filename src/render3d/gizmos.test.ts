@@ -7,6 +7,7 @@ import { circleHandGeometry, lineHandGeometry } from '../core/kinematics';
 import { HAND_COUNT_MAX, HAND_Y, type HandPointKind } from '../state';
 import {
   GIZMO_HIT_RADIUS,
+  GIZMO_HIT_RADIUS_COARSE,
   GIZMO_HOVER_SCALE,
   GIZMO_LABEL_RENDER_ORDER,
   GIZMO_MARKER_RADIUS,
@@ -14,9 +15,12 @@ import {
   GLOBAL_COLOR,
   GLOBAL_HOT_COLOR,
   GLOBAL_NODE_DROP,
+  GLOBAL_NODE_DROP_COARSE,
   globalAnchor,
   globalColorOf,
   globalMarkerLabel,
+  globalNodeDropForPointer,
+  hitRadiusForPointer,
   markerColorOf,
   markerLabel,
 } from './gizmos';
@@ -111,6 +115,34 @@ describe('global hand-position node', () => {
   it('anchors at the midpoint of the catch and throw points', () => {
     expect(globalAnchor({ x: -0.3, z: 0 }, { x: -0.1, z: 0 })).toEqual({ x: -0.2, z: 0 });
     expect(globalAnchor({ x: 0.2, z: 0.4 }, { x: 0.6, z: -0.2 })).toEqual({ x: 0.4, z: 0.1 });
+  });
+
+  it('the coarse-pointer (fingertip) sizing keeps every sphere unambiguous in BOTH presets', () => {
+    // Touch bumps the hit radius AND deepens the global drop together (./gizmos): the
+    // pair must preserve the SAME invariants the fine sizing guarantees — global sphere
+    // fully disjoint from catch/throw, and no marker centre inside another's hit sphere.
+    expect(GIZMO_HIT_RADIUS_COARSE).toBeGreaterThan(GIZMO_HIT_RADIUS);
+    expect(hitRadiusForPointer(true)).toBe(GIZMO_HIT_RADIUS_COARSE);
+    expect(hitRadiusForPointer(false)).toBe(GIZMO_HIT_RADIUS);
+    expect(globalNodeDropForPointer(true)).toBe(GLOBAL_NODE_DROP_COARSE);
+    expect(globalNodeDropForPointer(false)).toBe(GLOBAL_NODE_DROP);
+    const dist = (
+      a: { x: number; y: number; z: number },
+      b: { x: number; y: number; z: number },
+    ): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+    for (const geometry of [lineHandGeometry(2), circleHandGeometry(2)]) {
+      for (let hand = 0; hand < 2; hand++) {
+        const catchPoint = geometry.catchPoint(hand);
+        const throwPoint = geometry.throwPoint(hand);
+        const anchor = globalAnchor(catchPoint, throwPoint);
+        const global = { x: anchor.x, y: HAND_Y - GLOBAL_NODE_DROP_COARSE, z: anchor.z };
+        expect(dist(global, catchPoint)).toBeGreaterThanOrEqual(2 * GIZMO_HIT_RADIUS_COARSE);
+        expect(dist(global, throwPoint)).toBeGreaterThanOrEqual(2 * GIZMO_HIT_RADIUS_COARSE);
+        expect(dist(catchPoint, throwPoint)).toBeGreaterThan(GIZMO_HIT_RADIUS_COARSE);
+        expect(dist(global, catchPoint)).toBeGreaterThan(GIZMO_HIT_RADIUS_COARSE);
+        expect(dist(global, throwPoint)).toBeGreaterThan(GIZMO_HIT_RADIUS_COARSE);
+      }
+    }
   });
 
   it('drops the global node so its hit sphere clears catch/throw in BOTH presets', () => {

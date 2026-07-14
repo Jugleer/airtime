@@ -28,6 +28,26 @@ export const GIZMO_MARKER_RADIUS = 0.03;
  */
 export const GIZMO_HIT_RADIUS = 0.07;
 
+/**
+ * Coarse-pointer (touch) hit-sphere radius (m). A fingertip needs a bigger grab target
+ * than a mouse cursor — 0.07 m is ≈ 13 px at the front preset, cramped for a thumb — so
+ * on coarse pointers ONLY (window.matchMedia('(pointer: coarse)'), read in the ui layer
+ * and threaded in as a prop; never from core) the hit sphere is bumped to 0.09 m. Fine
+ * pointers keep {@link GIZMO_HIT_RADIUS} unchanged.
+ *
+ * This bump is CAPPED by the neighbor-separation ceiling: 0.09 m alone would let the grey
+ * global node's sphere overlap the catch/throw spheres at the fine 0.14 m drop
+ * (2·0.09 = 0.18 m > √(0.05² + 0.14²) ≈ 0.149 m in the circle preset). So it is paired
+ * with a deeper {@link GLOBAL_NODE_DROP_COARSE} that restores full disjointness of the
+ * global sphere in BOTH presets, keeping every grab unambiguous (see ./gizmos.test).
+ */
+export const GIZMO_HIT_RADIUS_COARSE = 0.09;
+
+/** The hit-sphere radius for the active pointer type (coarse = fingertip, else mouse). */
+export function hitRadiusForPointer(coarse: boolean): number {
+  return coarse ? GIZMO_HIT_RADIUS_COARSE : GIZMO_HIT_RADIUS;
+}
+
 /** Visual scale applied to a hovered or dragged marker (hover affordance). */
 export const GIZMO_HOVER_SCALE = 1.4;
 
@@ -65,6 +85,22 @@ export const GLOBAL_HOT_COLOR = '#c2cad6';
  * The drop is purely vertical, so a horizontal (x–z) drag still targets the midpoint.
  */
 export const GLOBAL_NODE_DROP = 0.14;
+
+/**
+ * Deeper global-node drop (m) used ONLY when the bigger coarse-pointer hit sphere
+ * ({@link GIZMO_HIT_RADIUS_COARSE} = 0.09 m) is in effect. Non-overlap needs the
+ * global↔endpoint centre distance ≥ 2·0.09 = 0.18 m; in the tight circle preset that
+ * is √(0.05² + drop²), so drop ≥ √(0.18² − 0.05²) ≈ 0.173 m. 0.19 m clears it with a
+ * margin (giving √(0.05² + 0.19²) ≈ 0.196 m ≥ 0.18 m), and the looser line preset
+ * (0.10 m offset) clears by more. Fine pointers keep the 0.14 m drop above.
+ */
+export const GLOBAL_NODE_DROP_COARSE = 0.19;
+
+/** The global-node drop for the active pointer type, matched to its hit radius so the
+ *  grey node's sphere stays disjoint from the catch/throw spheres in both presets. */
+export function globalNodeDropForPointer(coarse: boolean): number {
+  return coarse ? GLOBAL_NODE_DROP_COARSE : GLOBAL_NODE_DROP;
+}
 
 /** The marker fill color for a kind and hover/drag state. */
 export function markerColorOf(kind: HandPointKind, hot: boolean): string {

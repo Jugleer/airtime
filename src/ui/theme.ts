@@ -197,4 +197,13 @@ input[type="checkbox"] { accent-color: var(--at-accent); }
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: 0.001ms !important; animation-duration: 0.001ms !important; }
 }
+/* Touch-target pass (round 9): coarse pointers (touch) need >=44px hit targets;
+   fine pointers (mouse/trackpad) keep the compact desktop sizing untouched.
+   min-height overrides an inline height smaller than 44px, which is what most
+   controls set; min-width only applies to buttons so flex-wrap rows of
+   already-wide controls (inputs, selects) are not forced wider than needed. */
+@media (pointer: coarse) {
+  button, [role="button"], input[type="range"], a[href], select { min-height: 44px; }
+  button, [role="button"] { min-width: 44px; }
+}
 `;

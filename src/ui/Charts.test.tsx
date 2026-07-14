@@ -66,9 +66,21 @@ describe('Charts (ui layer)', () => {
     const legend = within(screen.getByRole('group', { name: 'Chart legend' }));
     const hand1 = legend.getByRole('button', { name: /Hand 1 series/ });
     expect(useAppStore.getState().hoveredHandIndex).toBeNull();
-    fireEvent.mouseEnter(hand1);
+    // Pointer events (not mouse events) so touch un-highlight (pointercancel) is
+    // covered too — see the round-9 mobile pass in Charts.tsx.
+    fireEvent.pointerEnter(hand1);
     expect(useAppStore.getState().hoveredHandIndex).toBe(1);
-    fireEvent.mouseLeave(hand1);
+    fireEvent.pointerLeave(hand1);
+    expect(useAppStore.getState().hoveredHandIndex).toBeNull();
+  });
+
+  it('clears the scene highlight on pointer cancel (a lifted touch)', () => {
+    render(<Charts />);
+    const legend = within(screen.getByRole('group', { name: 'Chart legend' }));
+    const hand1 = legend.getByRole('button', { name: /Hand 1 series/ });
+    fireEvent.pointerEnter(hand1);
+    expect(useAppStore.getState().hoveredHandIndex).toBe(1);
+    fireEvent.pointerCancel(hand1);
     expect(useAppStore.getState().hoveredHandIndex).toBeNull();
   });
 
@@ -76,7 +88,7 @@ describe('Charts (ui layer)', () => {
     const { unmount } = render(<Charts />);
     const legend = within(screen.getByRole('group', { name: 'Chart legend' }));
     const hand1 = legend.getByRole('button', { name: /Hand 1 series/ });
-    fireEvent.mouseEnter(hand1);
+    fireEvent.pointerEnter(hand1);
     expect(useAppStore.getState().hoveredHandIndex).toBe(1);
     // Unmounting (dock collapsed / component removed) fires no pointer leave, so the
     // Legend's effect cleanup is what must reset the store — else the cup stays lit.

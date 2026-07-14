@@ -654,7 +654,6 @@ const GraphPicture = memo(function GraphPicture({
       <g key={`node-${node.bits}`} className={interactive ? 'sg-node' : undefined}>
         {decoRings}
         <circle
-          {...interactiveProps}
           cx={round2(p.x)}
           cy={round2(p.y)}
           r={round2(nr)}
@@ -664,6 +663,28 @@ const GraphPicture = memo(function GraphPicture({
         >
           <title>{`state ${node.label} (level ${node.level})`}</title>
         </circle>
+        {interactive ? (
+          // Finger-sized transparent hit target: the visible circle is only 3–16 px,
+          // untappable on touch. This overlay (drawn last, so it owns the pointer) stays
+          // ≥ 22 px in user space regardless of the node radius, and carries ALL the
+          // interactive affordances (click, keyboard, role/label). Being transparent it
+          // paints nothing over its neighbours.
+          <circle
+            {...interactiveProps}
+            cx={round2(p.x)}
+            cy={round2(p.y)}
+            r={round2(Math.max(nr, 22))}
+            fill="transparent"
+            pointerEvents="all"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onNodeClick(node.bits);
+              }
+            }}
+          />
+        ) : null}
         {showLabels ? (
           <text
             x={round2(p.x + labelCos * labelDistance)}
@@ -906,6 +927,17 @@ function useZoomPan(svgRef: React.RefObject<SVGSVGElement | null>): ZoomPan {
     { startX: number; startY: number; startTx: number; startTy: number; pointerId: number } | null
   >(null);
   const movedRef = useRef(false);
+  // Every active pointer (client coords), so two-finger pinch-zoom can be detected on
+  // touch. A single pointer keeps doing pan (below); exactly two drives pinch.
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{
+    startDist: number;
+    startMidX: number;
+    startMidY: number;
+    startScale: number;
+    startTx: number;
+    startTy: number;
+  } | null>(null);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -934,6 +966,29 @@ function useZoomPan(svgRef: React.RefObject<SVGSVGElement | null>): ZoomPan {
 
   const onPointerDown = useCallback(
     (event: ReactPointerEvent<SVGSVGElement>): void => {
+      // Track every active pointer so a second finger can start a pinch (touch zoom).
+      pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pointersRef.current.size === 2) {
+        // Second finger down → begin a pinch. Cancel any single-pointer pan in flight,
+        // and mark the gesture "moved" so the closing tap never navigates a node.
+        dragRef.current = null;
+        movedRef.current = true;
+        const rect = svgRef.current?.getBoundingClientRect();
+        const [a, b] = [...pointersRef.current.values()];
+        if (!a || !b) {
+          return;
+        }
+        const v = viewRef.current;
+        pinchRef.current = {
+          startDist: Math.max(1e-6, Math.hypot(a.x - b.x, a.y - b.y)),
+          startMidX: (a.x + b.x) / 2 - (rect?.left ?? 0),
+          startMidY: (a.y + b.y) / 2 - (rect?.top ?? 0),
+          startScale: v.scale,
+          startTx: v.tx,
+          startTy: v.ty,
+        };
+        return;
+      }
       if (event.button !== 0) {
         return; // primary button / touch only (leave right-click for the browser)
       }
@@ -947,11 +1002,36 @@ function useZoomPan(svgRef: React.RefObject<SVGSVGElement | null>): ZoomPan {
         pointerId: event.pointerId,
       };
     },
-    [],
+    [svgRef],
   );
 
   const onPointerMove = useCallback(
     (event: ReactPointerEvent<SVGSVGElement>): void => {
+      const pointers = pointersRef.current;
+      if (pointers.has(event.pointerId)) {
+        pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      }
+      // Two-finger pinch-zoom (touch): scale by the finger-distance ratio and keep the
+      // content point under the pinch midpoint fixed — the same transform math the wheel
+      // uses (p = t + s·w ⇒ t = mid − scale·w), folding zoom and pan into one update.
+      const pinch = pinchRef.current;
+      if (pinch && pointers.size === 2) {
+        event.preventDefault();
+        const rect = svgRef.current?.getBoundingClientRect();
+        const [a, b] = [...pointers.values()];
+        if (!a || !b) {
+          return;
+        }
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        const midX = (a.x + b.x) / 2 - (rect?.left ?? 0);
+        const midY = (a.y + b.y) / 2 - (rect?.top ?? 0);
+        const scale = clamp(pinch.startScale * (dist / pinch.startDist), MIN_ZOOM, MAX_ZOOM);
+        // Content point under the gesture-start midpoint: w = (startMid − startT)/startScale.
+        const wx = (pinch.startMidX - pinch.startTx) / pinch.startScale;
+        const wy = (pinch.startMidY - pinch.startTy) / pinch.startScale;
+        setView({ scale, tx: midX - scale * wx, ty: midY - scale * wy });
+        return;
+      }
       const drag = dragRef.current;
       if (!drag) {
         return;
@@ -981,9 +1061,24 @@ function useZoomPan(svgRef: React.RefObject<SVGSVGElement | null>): ZoomPan {
 
   const onPointerUp = useCallback(
     (event: ReactPointerEvent<SVGSVGElement>): void => {
+      pointersRef.current.delete(event.pointerId);
+      if (pointersRef.current.size < 2) {
+        pinchRef.current = null;
+      }
+      // Lifting one finger of a pinch while the other stays down → hand the remaining
+      // pointer to the pan path so the graph keeps tracking it without a jump.
+      if (pointersRef.current.size === 1 && !dragRef.current) {
+        const remaining = [...pointersRef.current.entries()][0];
+        if (remaining) {
+          const [id, pos] = remaining;
+          const v = viewRef.current;
+          dragRef.current = { startX: pos.x, startY: pos.y, startTx: v.tx, startTy: v.ty, pointerId: id };
+          movedRef.current = true;
+        }
+      }
       const drag = dragRef.current;
-      if (!drag) {
-        return;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return; // no pan, or this up belongs to a different (e.g. handed-over) pointer
       }
       dragRef.current = null;
       const svg = svgRef.current;
@@ -1161,7 +1256,7 @@ function StateGraphCanvas({ model }: { readonly model: OkGraphModel }): ReactEle
         {graph.nodes.length <= STRESS_MAX_NODES
           ? '), symmetric layout (ground at the top'
           : ') in excitation rings (ground at centre'}
-        ). Click a state to transition to it. Scroll to zoom, drag to pan, double-click to reset.
+        ). Click a state to transition to it. Scroll or pinch to zoom, drag to pan, double-tap to reset.
       </p>
     </div>
   );

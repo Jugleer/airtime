@@ -779,6 +779,11 @@ export function Controls(): ReactElement {
             onChange={setHandPreset}
           />
         </div>
+        {sim.compiled?.sync === true ? (
+          <p role="note" style={{ margin: 0, color: palette.amber, fontSize: '0.72rem', lineHeight: 1.4 }}>
+            Synchronous patterns always use 2 hands — clear the sync pattern to change the hand count.
+          </p>
+        ) : null}
         <CheckToggle
           label="Edit hand positions"
           checked={positionsEditorOpen}

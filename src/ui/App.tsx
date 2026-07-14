@@ -15,7 +15,7 @@
 // renders from the one global clock (DESIGN.md §2). The dock starts collapsed and
 // the graph overlay starts off, so the scene + ladder get the height.
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react';
 import { useAppStore } from '../state';
 import { Scene, type SceneColors } from '../render3d';
 import { Charts } from './Charts';
@@ -158,8 +158,20 @@ function TopBar({ compact = false }: { readonly compact?: boolean } = {}): React
  *  to its bottom edge — inside a rounded, bordered frame that fills its parent's
  *  height. Extracted from {@link Stage} so the narrow (mobile) shell can pin the same
  *  content atop its column without the desktop grid-placement wrapper. */
+/** Whether the primary pointer is coarse (touch), read once and guarded for jsdom/SSR
+ *  exactly like {@link useIsNarrow}: a missing matchMedia reports `false`, so tests and
+ *  non-DOM renders keep the mouse-sized gizmo targets. Coarse capability does not change
+ *  at runtime, so a one-shot read (no subscription) is enough. */
+function readCoarsePointer(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false;
+  }
+  return window.matchMedia('(pointer: coarse)').matches;
+}
+
 function StageContent(): ReactElement {
   const palette = usePalette();
+  const coarsePointer = useMemo(readCoarsePointer, []);
   return (
     <div
       style={{
@@ -176,7 +188,7 @@ function StageContent(): ReactElement {
           in Scene; the state-graph toggle top-left + overlay via StateGraph). The
           translucent graph overlay covers only this area, never the timeline. */}
       <div style={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
-        <Scene sceneColors={sceneColorsOf(palette)} />
+        <Scene sceneColors={sceneColorsOf(palette)} coarsePointer={coarsePointer} />
         <StateGraph />
       </div>
       <TimelineBar />

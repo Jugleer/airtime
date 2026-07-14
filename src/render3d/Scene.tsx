@@ -282,7 +282,10 @@ function Environment({ colors }: { colors: SceneColors }): ReactElement {
 }
 
 /** The 3D scene view. Fills its stage cell; the timeline docks beneath it in App. */
-export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = {}): ReactElement {
+export function Scene({
+  sceneColors,
+  coarsePointer = false,
+}: { readonly sceneColors?: SceneColors; readonly coarsePointer?: boolean } = {}): ReactElement {
   const colors = sceneColors ?? DEFAULT_SCENE_COLORS;
   const [preset, setPreset] = useState<CameraPreset>('front');
   const setCameraView = useAppStore((state) => state.setCameraView);
@@ -333,7 +336,7 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
         <Balls />
         <Hands color={colors.handCup} />
         <WorkspaceOverlay />
-        <HandGizmos />
+        <HandGizmos coarsePointer={coarsePointer} />
         {/* Always-visible orientation triad (bottom-right corner), tracking the
             camera; shows the right-handed Z-up display frame (X/Y/Z). */}
         <Triad />

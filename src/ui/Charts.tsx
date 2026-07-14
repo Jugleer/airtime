@@ -372,8 +372,9 @@ function Legend({
         aria-pressed={shown}
         aria-label={`Hand ${hand} series: ${shown ? 'shown' : 'hidden'} (click to toggle, hover to highlight in scene)`}
         onClick={() => onToggle(hand)}
-        onMouseEnter={() => setHoveredHandIndex(hand)}
-        onMouseLeave={() => setHoveredHandIndex(null)}
+        onPointerEnter={() => setHoveredHandIndex(hand)}
+        onPointerLeave={() => setHoveredHandIndex(null)}
+        onPointerCancel={() => setHoveredHandIndex(null)}
         onFocus={() => setHoveredHandIndex(hand)}
         onBlur={() => setHoveredHandIndex(null)}
         style={{

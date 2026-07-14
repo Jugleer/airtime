@@ -275,6 +275,9 @@ function cardStyle(palette: Palette): CSSProperties {
     border: `1px solid ${palette.borderStrong}`,
     width: '100%',
     maxWidth: '22rem',
+    maxHeight: '85vh',
+    display: 'flex',
+    flexDirection: 'column',
     boxShadow: palette.shadow,
     pointerEvents: 'auto',
   };
@@ -295,6 +298,8 @@ const bodyStyle: CSSProperties = {
   flexDirection: 'column',
   gap: '0.75rem',
   padding: '0.9rem 1rem',
+  overflowY: 'auto',
+  minHeight: 0,
 };
 
 function estimateStyle(palette: Palette): CSSProperties {
