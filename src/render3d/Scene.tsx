@@ -44,6 +44,20 @@ import {
   type CameraPreset,
 } from './camera';
 
+/**
+ * Render-loop mode for the Canvas (DESIGN.md §6, mobile battery/thermal). While
+ * playing, run 'always' (the rAF clock in useClock advances simTime every frame).
+ * While paused/idle, run 'demand': r3f repaints only when something asks it to
+ * (OrbitControls' change→invalidate, damping settle, or {@link RepaintOnScrub} on a
+ * simTime change) instead of re-rendering the full scene at 60-120Hz forever.
+ * Exported as a pure helper so the paused-saves-battery contract is unit-testable
+ * (Scene itself renders a WebGL-less placeholder in jsdom, so it can't be asserted
+ * through a render).
+ */
+export function sceneFrameloop(playing: boolean): 'always' | 'demand' {
+  return playing ? 'always' : 'demand';
+}
+
 /** Whether a WebGL context can be created (false in jsdom / no-WebGL browsers). */
 function webglAvailable(): boolean {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -85,6 +99,7 @@ function webglAvailable(): boolean {
 function CameraRig(): ReactElement {
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
   const camera = useThree((state) => state.camera);
+  const invalidate = useThree((state) => state.invalidate);
   const cameraView = useAppStore((state) => state.cameraView);
 
   useEffect(() => {
@@ -97,7 +112,11 @@ function CameraRig(): ReactElement {
     } else {
       camera.lookAt(view.target[0], view.target[1], view.target[2]);
     }
-  }, [cameraView, camera]);
+    // Repaint after a preset/shared-URL pose snap while paused (demand frameloop).
+    // OrbitControls.update() dispatches 'change' → drei invalidates too, but the
+    // no-controls branch (camera.lookAt) has no such hook — invalidate explicitly.
+    invalidate();
+  }, [cameraView, camera, invalidate]);
 
   // Box the orbit target on every controls change (pan is the only unclamped way
   // out of bounds). The guard makes the clamp idempotent: `update()` re-fires
@@ -162,6 +181,53 @@ function CaptureRegistrar(): null {
 }
 
 /**
+ * Keeps the paused-but-scrubbing case alive under the 'demand' frameloop. Several
+ * view-only fields are read imperatively inside useFrame subscribers (never through
+ * React), so a Canvas subtree re-render is never triggered when they change and, in
+ * demand mode, nothing repaints unless we ask:
+ *   - simTime — Balls/Hands/Tracers read it in useFrame to place meshes at the time.
+ *   - hoveredHandIndex — Hands.tsx reads it via getState() in useFrame to highlight
+ *     the hovered hand (hovering a hand in the ladder/legend while paused must light
+ *     it up in 3D immediately, not on the next scrub/camera-move/play).
+ *   - trailLength, ghostsEnabled — Tracers.tsx reads both via getState() in useFrame;
+ *     adjusting trail length or toggling ghost balls while paused must repaint now.
+ * Subscribe to the store and invalidate whenever any of these changes; the next demand
+ * frame runs the useFrame subscribers, which update the meshes. While playing
+ * (frameloop 'always') the extra invalidate is a no-op.
+ *
+ * This does NOT fight offline export (src/export/capture): that path drives the loop
+ * with root.advance() manually and pins/restores root.frameloop itself, and grabs
+ * pixels synchronously right after its own gl.render — a stray demand repaint (same
+ * frozen export camera, preserveDrawingBuffer intact) can only redraw the identical
+ * frame, never corrupt a captured one.
+ */
+function RepaintOnScrub(): null {
+  const invalidate = useThree((state) => state.invalidate);
+  useEffect(() => {
+    const initial = useAppStore.getState();
+    let previousSimTime = initial.simTime;
+    let previousHoveredHandIndex = initial.hoveredHandIndex;
+    let previousTrailLength = initial.trailLength;
+    let previousGhostsEnabled = initial.ghostsEnabled;
+    return useAppStore.subscribe((state) => {
+      if (
+        state.simTime !== previousSimTime ||
+        state.hoveredHandIndex !== previousHoveredHandIndex ||
+        state.trailLength !== previousTrailLength ||
+        state.ghostsEnabled !== previousGhostsEnabled
+      ) {
+        previousSimTime = state.simTime;
+        previousHoveredHandIndex = state.hoveredHandIndex;
+        previousTrailLength = state.trailLength;
+        previousGhostsEnabled = state.ghostsEnabled;
+        invalidate();
+      }
+    });
+  }, [invalidate]);
+  return null;
+}
+
+/**
  * Themed colors the scene needs (passed down from the ui layer so render3d stays
  * ui-import-free; ui → render3d is the allowed direction). Defaults are the dark
  * palette so <Scene/> also renders standalone (tests, storybook).
@@ -220,6 +286,9 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
   const colors = sceneColors ?? DEFAULT_SCENE_COLORS;
   const [preset, setPreset] = useState<CameraPreset>('front');
   const setCameraView = useAppStore((state) => state.setCameraView);
+  // Drive the render loop from the play state: 'always' while playing, 'demand'
+  // (repaint only on request) while paused/idle — the big mobile battery/thermal win.
+  const playing = useAppStore((state) => state.playing);
   // Decide once; capability does not change during a session.
   const [supported] = useState(webglAvailable);
 
@@ -238,7 +307,8 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
   return (
     <div style={{ position: 'relative', flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' }}>
       <Canvas
-        style={{ width: '100%', height: '100%', display: 'block' }}
+        style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none' }}
+        frameloop={sceneFrameloop(playing)}
         dpr={[1, 2]}
         // preserveDrawingBuffer keeps the framebuffer readable after the render so
         // the "Save PNG" button's canvas.toBlob() captures the current frame
@@ -257,6 +327,7 @@ export function Scene({ sceneColors }: { readonly sceneColors?: SceneColors } = 
         <Environment colors={colors} />
         <CameraRig />
         <CaptureRegistrar />
+        <RepaintOnScrub />
         <Tracers />
         <HandPaths />
         <Balls />

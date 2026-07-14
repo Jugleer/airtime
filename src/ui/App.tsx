@@ -487,9 +487,13 @@ function rootGridStyle(palette: Palette, layout: LayoutController): CSSPropertie
     gridTemplateColumns: `${leftTrack}px ${GUTTER}px minmax(${STAGE_MIN}px, 1fr) ${GUTTER}px ${rightTrack}px`,
     gridTemplateRows: 'auto minmax(0, 1fr) auto',
     gap: '0.6rem 0',
-    padding: '0.6rem 0.75rem',
-    height: '100vh',
-    width: '100vw',
+    // Fold in iOS safe-area insets (env() is 0 on desktop/non-notch — a no-op there).
+    padding:
+      'calc(0.6rem + env(safe-area-inset-top)) calc(0.75rem + env(safe-area-inset-right)) calc(0.6rem + env(safe-area-inset-bottom)) calc(0.75rem + env(safe-area-inset-left))',
+    // dvh tracks the visible viewport so the bottom dock isn't hidden under mobile
+    // browser chrome; width 100% (not 100vw) avoids the scrollbar-overflow foot-gun.
+    height: '100dvh',
+    width: '100%',
     overflow: 'hidden',
     background: palette.appBg,
     color: palette.textPrimary,
