@@ -61,6 +61,7 @@ import {
   extendedIfNeeded,
   firstBeatAtOrAfter,
   INITIAL_BEATS,
+  minimalHorizon,
   TIMELINE_WINDOW_MAX,
   TIMELINE_WINDOW_MIN,
   upsertEpoch,
@@ -592,6 +593,16 @@ export interface AppStore {
   setSimTime(simTime: number): void;
   /** Advance the clock by `wallDeltaSeconds` of wall time (rAF loop only). */
   tick(wallDeltaSeconds: number): void;
+  /**
+   * Trim the generated horizon back to the minimum that still covers the current
+   * playhead (DESIGN.md §2). The clock/timeline extend forward but never shrink
+   * (see {@link extendedIfNeeded}); a transient forward seek — the export loop
+   * drives `simTime` far ahead to size its frames, then parks it back — therefore
+   * leaves the sim generated to that reach permanently. This rebuilds `sim` at the
+   * minimal beat count for the CURRENT `simTime` (same config ⇒ bit-identical past),
+   * releasing the inflated tail. A no-op when the horizon is already minimal.
+   */
+  resetHorizon(): void;
 
   // --- Audio (DESIGN.md §6) --------------------------------------------------
   setAudioEnabled(enabled: boolean): void;
@@ -1575,6 +1586,22 @@ export const useAppStore = create<AppStore>((set, get) => {
         kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       );
       set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
+    },
+
+    resetHorizon: () => {
+      const state = get();
+      const { futureSpan } = windowSpans(state.timelineWindow);
+      const nextSim = minimalHorizon(
+        state.sim,
+        state.baseParams,
+        state.epochs,
+        state.simTime,
+        futureSpan,
+        kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+      );
+      if (nextSim !== state.sim) {
+        set({ sim: nextSim });
+      }
     },
 
     // --- Audio (DESIGN.md §6): plain presentation-only setters (the ticks are

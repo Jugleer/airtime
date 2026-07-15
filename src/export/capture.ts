@@ -123,6 +123,8 @@ export async function runExport(
   if (gridTimes.length >= 3 && !isBeatGridUniform(gridTimes)) {
     // Restore the playhead advanced by Pass 1 before bailing (mirrors the ctx bail).
     useAppStore.setState({ simTime: startTime, playing: wasPlaying });
+    // Trim the horizon the Pass-1 seek inflated back to startTime's minimum.
+    useAppStore.getState().resetHorizon();
     throw new ExportError('The tempo is still settling — wait a moment and retry.');
   }
 
@@ -157,6 +159,8 @@ export async function runExport(
   if (ctx === null) {
     // Nothing was mutated except the horizon/playhead; restore before bailing.
     useAppStore.setState({ simTime: startTime, playing: wasPlaying });
+    // Trim the horizon the Pass-1/Pass-2 seeks inflated back to startTime's minimum.
+    useAppStore.getState().resetHorizon();
     throw new ExportError('Could not allocate a capture canvas.');
   }
 
@@ -168,6 +172,9 @@ export async function runExport(
   const restore = (): void => {
     root.setFrameloop(previousFrameloop);
     useAppStore.setState({ simTime: startTime, playing: wasPlaying });
+    // The Pass-1/Pass-2 seeks (and the capture loop) drove the append-only horizon
+    // far past startTime; release that inflated tail now that the playhead is back.
+    useAppStore.getState().resetHorizon();
     const live = getCaptureRoot();
     if (live !== null) {
       live.camera.position.set(cameraPosition[0], cameraPosition[1], cameraPosition[2]);

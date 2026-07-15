@@ -282,6 +282,61 @@ export function extendedIfNeeded(
   return current;
 }
 
+/**
+ * Return a simulation generated to the MINIMAL horizon that still covers
+ * `simTime` — the shrink counterpart of {@link extendedIfNeeded}. Rebuilds from
+ * {@link INITIAL_BEATS} and grows in the same chunks only until the horizon
+ * reaches `neededHorizonTime`, so a sim whose tail was inflated far past the
+ * playhead (e.g. the export loop driving `simTime` forward, then parking it back)
+ * is trimmed back to the running-steady size. Because the config is unchanged the
+ * generated range is still [0, beatCount) — only a SMALLER beatCount — so the past
+ * stays bit-identical (DESIGN.md §2); backward scrub to t = 0 is unaffected.
+ *
+ * A no-op-equivalent when the current horizon is already minimal: returns the same
+ * object (ref preserved) whenever `sim` is not larger than the minimal build, so it
+ * never GROWS the horizon (that is {@link extendedIfNeeded}'s job).
+ */
+export function minimalHorizon(
+  sim: Simulation,
+  baseParams: TimelineParams,
+  epochs: readonly Epoch[],
+  simTime: number,
+  futureSpan: number = FUTURE_SPAN,
+  kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
+): Simulation {
+  const target = neededHorizonTime(simTime, futureSpan);
+  let current = buildSimulation(
+    sim.values,
+    sim.patternText,
+    baseParams,
+    epochs,
+    INITIAL_BEATS,
+    kinematicsConfig,
+    sim.schedule,
+    sim.compiled,
+  );
+  let guard = 0;
+  while (horizonTime(current) < target && guard < 1024) {
+    current = buildSimulation(
+      sim.values,
+      sim.patternText,
+      baseParams,
+      epochs,
+      current.beatCount + HORIZON_CHUNK_BEATS,
+      kinematicsConfig,
+      sim.schedule,
+      sim.compiled,
+    );
+    guard += 1;
+  }
+  // Already at (or below) the minimal size ⇒ keep the existing object so the store
+  // can skip the update, and never grow past the current horizon.
+  if (sim.beatCount <= current.beatCount) {
+    return sim;
+  }
+  return current;
+}
+
 // --- Runtime parameter epochs ------------------------------------------------
 
 /**
