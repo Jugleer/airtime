@@ -246,6 +246,18 @@ function RepaintOnScrub(): null {
  * with Scene's 'demand' frameloop while paused — sampling simply idles along with
  * the render loop instead of forcing it back to 'always'.
  *
+ * Anti-oscillation (`flipflops`): on a device whose frame rate sits right AT the
+ * decline threshold, onDecline fires intermittently — regress() lowers the dpr for
+ * its ~200 ms debounce, it restores, fps is marginal again, and the resolution
+ * flip-flops down/up every sampling window (a periodic "flash", visible as lines
+ * momentarily fattening). `flipflops` caps that: after a few direction changes
+ * PerformanceMonitor calls onFallback and STOPS sampling, so onDecline stops firing
+ * and the resolution settles instead of flickering. A genuinely slow device declines
+ * STEADILY (regress stays topped up, few flips) and keeps the lower dpr, so the
+ * thermal safety net is intact — only the marginal flip-flop case is stabilised.
+ * (No `pixelated` on <AdaptiveDpr>: any pre-settle dip upscales smoothly rather than
+ * nearest-neighbour blocky, so a transient dip is imperceptible instead of chunky.)
+ *
  * Export guard: src/export/capture.ts drives frames manually with root.advance()
  * while frameloop is pinned to 'never' (see RepaintOnScrub above), and advance()
  * DOES fire useFrame subscribers — including this one. A dpr change mid-export
@@ -263,8 +275,8 @@ function AdaptivePerformance({ children }: { readonly children: ReactNode }): Re
     regress();
   };
   return (
-    <PerformanceMonitor onDecline={onDecline}>
-      <AdaptiveDpr pixelated />
+    <PerformanceMonitor onDecline={onDecline} flipflops={3}>
+      <AdaptiveDpr />
       {children}
     </PerformanceMonitor>
   );
