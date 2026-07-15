@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CATCH_TICK_FREQUENCY,
   THROW_TICK_FREQUENCY,
+  pruneScheduledKeys,
   ticksInRange,
 } from './audio';
 import { buildSimulation } from '../state/simulation';
@@ -75,5 +76,46 @@ describe('audio tick scheduling (ticksInRange)', () => {
     expect(ticksInRange(events, 1, 1, true)).toEqual([]);
     expect(ticksInRange(events, 2, 1, true)).toEqual([]);
     expect(ticksInRange([], 0, 10, true)).toEqual([]);
+  });
+});
+
+describe('audio de-dupe pruning (pruneScheduledKeys)', () => {
+  it('drops keys whose tick time is strictly before minSim, keeping the rest', () => {
+    const scheduled = new Map<string, number>([
+      ['throw-0-0', 0.1],
+      ['throw-1-1', 0.4],
+      ['catch-0-2', 0.9],
+    ]);
+    pruneScheduledKeys(scheduled, 0.5);
+    expect([...scheduled.keys()]).toEqual(['catch-0-2']);
+    expect(scheduled.get('catch-0-2')).toBe(0.9);
+  });
+
+  it('keeps a boundary tick sitting exactly on minSim (dropping only time < minSim)', () => {
+    const scheduled = new Map<string, number>([['throw-0-0', 0.5]]);
+    pruneScheduledKeys(scheduled, 0.5);
+    expect(scheduled.has('throw-0-0')).toBe(true); // not < minSim → retained, no double-fire
+  });
+
+  it('stays bounded to a lookahead window under monotone advancing sim time', () => {
+    // Simulate the scheduler bookkeeping: add one key per beat as sim advances,
+    // pruning behind a cursor. The retained set must not grow without bound.
+    const scheduled = new Map<string, number>();
+    const tolerance = 0.08;
+    let maxSize = 0;
+    for (let beat = 0; beat < 1000; beat++) {
+      const time = beat * 0.25;
+      scheduled.set(`throw-${beat}`, time);
+      // Sim cursor trails the just-added tick by ~one lookahead window.
+      pruneScheduledKeys(scheduled, time - 0.12 - tolerance);
+      maxSize = Math.max(maxSize, scheduled.size);
+    }
+    expect(maxSize).toBeLessThan(5); // constant, not O(beats)
+  });
+
+  it('is a no-op on an empty map', () => {
+    const scheduled = new Map<string, number>();
+    pruneScheduledKeys(scheduled, 1);
+    expect(scheduled.size).toBe(0);
   });
 });

@@ -88,3 +88,22 @@ export function ticksInRange(
   }
   return ticks;
 }
+
+/**
+ * Prune de-dupe bookkeeping the scheduler can never consult again.
+ *
+ * The scheduler only ever queries ticks in `[fromSim, endSim)` where
+ * `fromSim ≥ state.simTime` (the sim cursor is monotone), so any retained key
+ * whose tick time is already strictly before `minSim` is dead weight — it can
+ * never reappear in a future window, so dropping it cannot drop or double-fire a
+ * tick. Pass a slightly-past `minSim` (e.g. simTime − a resync tolerance) so a
+ * tick sitting on the current boundary is always kept. Mutates `scheduled` in
+ * place; deleting during Map iteration is well-defined in JS.
+ */
+export function pruneScheduledKeys(scheduled: Map<string, number>, minSim: number): void {
+  for (const [key, time] of scheduled) {
+    if (time < minSim) {
+      scheduled.delete(key);
+    }
+  }
+}

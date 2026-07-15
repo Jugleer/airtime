@@ -20,7 +20,7 @@
 
 import { useEffect } from 'react';
 import { useAppStore } from '../state';
-import { ticksInRange, type TickEvent } from './audio';
+import { pruneScheduledKeys, ticksInRange, type TickEvent } from './audio';
 
 /** Scheduler cadence and how far ahead (in real seconds) we schedule. */
 const SCHEDULER_INTERVAL_MS = 25;
@@ -67,7 +67,11 @@ export function useAudio(): void {
     let ctx: AudioContext | null = null;
     let master: GainNode | null = null;
     const pending: { osc: OscillatorNode; gain: GainNode }[] = [];
-    const scheduled = new Set<string>();
+    // De-dupe: tick.key -> tick.time. The value lets us prune keys whose ticks
+    // are safely in the past (see pruneScheduledKeys) so the map stays bounded to
+    // ~one lookahead window during long uninterrupted playback rather than
+    // growing one entry per tick for the whole session.
+    const scheduled = new Map<string, number>();
     let anchor: Anchor | null = null;
     let scheduledUntilSim = 0;
 
@@ -179,9 +183,12 @@ export function useAudio(): void {
           continue; // already in the past — skip rather than fire late
         }
         scheduleClick(context, when, tick);
-        scheduled.add(tick.key);
+        scheduled.set(tick.key, tick.time);
       }
       scheduledUntilSim = Math.max(scheduledUntilSim, endSim);
+      // Keep the de-dupe map bounded: a tick already behind the sim cursor (with a
+      // resync-tolerance margin) can never be queried again, so its key is dead.
+      pruneScheduledKeys(scheduled, state.simTime - RESYNC_TOLERANCE_SECONDS);
     };
 
     // Create/resume the context on the gesture that turns audio ON (autoplay policy):
