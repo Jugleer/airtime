@@ -147,16 +147,40 @@ export interface EnergyReport {
   readonly totalNet: number;
   readonly periodBeats: number;
   readonly periodTime: number;
+  /**
+   * The first period-aligned beat of the representative window (memory fix #1). 0 in
+   * the common (full-range) case; when the sim is windowed to a retain floor the
+   * report re-anchors to the first aligned period inside the retained past so the
+   * carries it aggregates are always generated. Drives the EnergyPanel caption.
+   */
+  readonly periodStartBeat: number;
 }
 
 /**
  * Build the energy panel report: for every hand, aggregate contact work over one
  * spatial period (DESIGN.md §4.5, §6). The representative period is the first
- * period window [0, spatialPeriodBeats) of the timeline; energies are per-kg.
+ * period-aligned window at or above `windowFloorBeat`; energies are per-kg.
+ *
+ * `windowFloorBeat` (default 0 ⇒ today's `[0, spatialPeriodBeats)` window, byte-
+ * identical) is the sim's retain floor under memory fix #1: when the resident sim is
+ * windowed to bound long-session memory, its carries below the floor no longer exist,
+ * so the report re-anchors its representative period to the first period-aligned beat
+ * `⌈windowFloorBeat / P⌉·P` inside the retained past. The beat schedule stays anchored
+ * at beat 0, so `beatTime` is exact for the re-anchored window and — on a uniform
+ * (settled-tempo) grid — the numbers are identical to the beat-0 window (periodicity).
  */
-export function energyReport(kinematics: Kinematics, timeline: Timeline): EnergyReport {
+export function energyReport(
+  kinematics: Kinematics,
+  timeline: Timeline,
+  windowFloorBeat: number = 0,
+): EnergyReport {
   const periodBeats = kinematics.spatialPeriodBeats;
-  const periodTime = periodBeats > 0 ? timeline.beatTime(periodBeats) - timeline.beatTime(0) : 0;
+  const periodStartBeat =
+    periodBeats > 0 ? Math.ceil(Math.max(0, windowFloorBeat) / periodBeats) * periodBeats : 0;
+  const periodTime =
+    periodBeats > 0
+      ? timeline.beatTime(periodStartBeat + periodBeats) - timeline.beatTime(periodStartBeat)
+      : 0;
   const perHand: HandEnergy[] = [];
   let totalWorkPositive = 0;
   let totalWorkNegative = 0;
@@ -164,7 +188,7 @@ export function energyReport(kinematics: Kinematics, timeline: Timeline): Energy
     const energy = aggregateHandEnergy(
       hand,
       kinematics.carriesForHand(hand),
-      0,
+      periodStartBeat,
       periodBeats,
       periodTime,
       kinematics.gravity,
@@ -180,5 +204,6 @@ export function energyReport(kinematics: Kinematics, timeline: Timeline): Energy
     totalNet: totalWorkPositive + totalWorkNegative,
     periodBeats,
     periodTime,
+    periodStartBeat,
   };
 }

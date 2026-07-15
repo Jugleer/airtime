@@ -16,7 +16,7 @@
 // render-loop mode — cancellation included.
 
 import { useAppStore } from '../state';
-import { currentBeatIndex } from '../state/simulation';
+import { currentBeatIndex, RETAIN_PAST_BEATS } from '../state/simulation';
 import { sampleCamera } from '../state/sceneBridge';
 import { getCaptureRoot } from '../render3d/captureBridge';
 import { buildExportSchedule, isBeatGridUniform, orbitPosition, type Vec3Tuple } from './schedule';
@@ -90,6 +90,16 @@ export async function runExport(
   }
   const approxLoop = periodBeats * store.baseParams.beatPeriod;
 
+  // Pin the retain floor LOW for the whole capture (memory fix #1): every seek below
+  // routes through the reconciler, which rebuilds with a floor covering the clip start
+  // instead of letting the forward Pass-2 seek anchor the floor at the clip END (which
+  // would leave early frames below the floor rendering the zero fallback). This keeps a
+  // fixed (pattern, t) frame a pure function of t, independent of clip length. Cleared
+  // in restore()/the bail paths BEFORE resetHorizon, so the parked playhead trims to its
+  // ordinary window afterward.
+  const pinBeat = currentBeatIndex(store.sim.timeline, startTime);
+  useAppStore.setState({ exportFloorPin: Math.max(0, pinBeat - RETAIN_PAST_BEATS) });
+
   // Pass 1: generate enough of the (append-only) timeline to read the EXACT loop
   // duration from the beat grid (handles a slewing tempo gracefully).
   useAppStore.getState().setSimTime(startTime + (options.loops + 2) * approxLoop + 1);
@@ -122,7 +132,8 @@ export async function runExport(
   }
   if (gridTimes.length >= 3 && !isBeatGridUniform(gridTimes)) {
     // Restore the playhead advanced by Pass 1 before bailing (mirrors the ctx bail).
-    useAppStore.setState({ simTime: startTime, playing: wasPlaying });
+    // Clear the export floor pin FIRST so resetHorizon trims to the ordinary window.
+    useAppStore.setState({ simTime: startTime, playing: wasPlaying, exportFloorPin: null });
     // Trim the horizon the Pass-1 seek inflated back to startTime's minimum.
     useAppStore.getState().resetHorizon();
     throw new ExportError('The tempo is still settling — wait a moment and retry.');
@@ -158,7 +169,7 @@ export async function runExport(
   const ctx = scratch.getContext('2d', { willReadFrequently: true });
   if (ctx === null) {
     // Nothing was mutated except the horizon/playhead; restore before bailing.
-    useAppStore.setState({ simTime: startTime, playing: wasPlaying });
+    useAppStore.setState({ simTime: startTime, playing: wasPlaying, exportFloorPin: null });
     // Trim the horizon the Pass-1/Pass-2 seeks inflated back to startTime's minimum.
     useAppStore.getState().resetHorizon();
     throw new ExportError('Could not allocate a capture canvas.');
@@ -171,7 +182,8 @@ export async function runExport(
   // success, error, and cancel.
   const restore = (): void => {
     root.setFrameloop(previousFrameloop);
-    useAppStore.setState({ simTime: startTime, playing: wasPlaying });
+    // Clear the export floor pin so resetHorizon trims to the ordinary window.
+    useAppStore.setState({ simTime: startTime, playing: wasPlaying, exportFloorPin: null });
     // The Pass-1/Pass-2 seeks (and the capture loop) drove the append-only horizon
     // far past startTime; release that inflated tail now that the playhead is back.
     useAppStore.getState().resetHorizon();

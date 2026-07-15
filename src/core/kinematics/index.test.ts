@@ -1872,3 +1872,144 @@ describe('kinematics epochs — no epochs is bit-identical to base params', () =
 function evalSeg(segment: PolySegment, t: number): MotionState {
   return evaluateSegment(segment, t);
 }
+
+// --- Memory fix #1: windowed generation (genFloor) bit-identity --------------
+//
+// buildKinematics reads an already-windowed timeline, so the exposed window (beats
+// ≥ genFloor ⇒ times ≥ beatTime(genFloor)) must produce bit-identical ball/hand
+// motion to a full build. These lock that down, plus the fix-6 split-base: folding
+// sub-floor kinematics epochs into the resolution base must NOT move any base-derived
+// output (static holds, idle-hand rest, reported fields) off the true t = 0 base.
+
+/** Exact (bit-identical) equality of two motion states. */
+function expectStateEqual(a: MotionState, b: MotionState): void {
+  expect(a).toEqual(b);
+}
+
+describe('property: genFloor kinematics windowing is bit-identical on the exposed window', () => {
+  const patterns = ['3', '531', '5', '7', '633', '423', '534', '744', '97531'];
+  it('ball + hand motion for beats ≥ k matches the full build', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...patterns),
+        fc.integer({ min: 4, max: 40 }),
+        (text, k) => {
+          const values = parse(text);
+          const beatCount = 48;
+          const full = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS });
+          const windowed = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS, genFloor: k });
+          const kFull = buildKinematics(full, { values, handCount: 2 });
+          const kWin = buildKinematics(windowed, { values, handCount: 2, genFloor: k });
+
+          // Ball ids are floor-invariant.
+          expect(kWin.ballIds()).toEqual(kFull.ballIds());
+
+          const tk = full.beatTime(k);
+          const tEnd = full.beatTime(beatCount);
+          const steps = 60;
+          for (const id of kWin.ballIds()) {
+            for (let s = 0; s <= steps; s++) {
+              const t = tk + ((tEnd - tk) * s) / steps;
+              expectStateEqual(kWin.ballState(id, t), kFull.ballState(id, t));
+            }
+          }
+          for (let hand = 0; hand < 2; hand++) {
+            for (let s = 0; s <= steps; s++) {
+              const t = tk + ((tEnd - tk) * s) / steps;
+              expectStateEqual(kWin.handState(hand, t), kFull.handState(hand, t));
+            }
+          }
+        },
+      ),
+      { numRuns: 80 },
+    );
+  });
+});
+
+describe('memory fix #6: split-base folding keeps base-derived outputs at t = 0', () => {
+  // A below-threshold epoch (t ≈ 0) is folded into the resolution base for a windowed
+  // build, with the original t = 0 params passed as `originalParams`. The exposed
+  // dynamic motion must match a full build (where the epoch applies to every exposed
+  // segment anyway), and the base-derived outputs must stay on the ORIGINAL base.
+  const t0Geometry = lineHandGeometry(2);
+  const foldedGeometry = circleHandGeometry(2);
+  const belowEpoch: KinematicsEpoch = {
+    time: 0.001,
+    gravity: 4.2,
+    holdDepth: 0.07,
+    geometry: foldedGeometry,
+  };
+
+  it('dynamic ball/hand motion is identical with the epoch folded into the base', () => {
+    const values = parse('531');
+    const beatCount = 48;
+    const k = 24;
+    const full = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS });
+    const windowed = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS, genFloor: k });
+    // Full: t0 base + the epoch. Folded: the epoch's params ARE the base, no epoch,
+    // original params pinned to t0 (what buildSimulation does when genFloor > 0).
+    const kFull = buildKinematics(full, {
+      values,
+      handCount: 2,
+      gravity: G,
+      holdDepth: 0.2,
+      geometry: t0Geometry,
+      epochs: [belowEpoch],
+    });
+    const kFolded = buildKinematics(windowed, {
+      values,
+      handCount: 2,
+      genFloor: k,
+      gravity: belowEpoch.gravity as number,
+      holdDepth: belowEpoch.holdDepth as number,
+      geometry: foldedGeometry,
+      epochs: [],
+      originalParams: { gravity: G, holdDepth: 0.2, geometry: t0Geometry },
+    });
+    const tk = full.beatTime(k);
+    const tEnd = full.beatTime(beatCount);
+    for (const id of kFolded.ballIds()) {
+      for (let s = 0; s <= 40; s++) {
+        const t = tk + ((tEnd - tk) * s) / 40;
+        expectStateEqual(kFolded.ballState(id, t), kFull.ballState(id, t));
+      }
+    }
+    // Reported base-derived fields stay on the ORIGINAL t = 0 base, not the fold.
+    expect(kFolded.gravity).toBe(G);
+    expect(kFolded.holdDepth).toBe(0.2);
+    expect(kFolded.geometry.catchPoint(0)).toEqual(t0Geometry.catchPoint(0));
+  });
+
+  it('static holds + idle-hand rest are genFloor/fold-invariant (t = 0 anchored)', () => {
+    // "20": hand 0 holds a ball forever (all 2s), hand 1 is always idle.
+    const values = parse('20');
+    const beatCount = 48;
+    const k = 24;
+    const full = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS });
+    const windowed = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS, genFloor: k });
+    const kFull = buildKinematics(full, {
+      values,
+      handCount: 2,
+      gravity: G,
+      holdDepth: 0.2,
+      geometry: t0Geometry,
+      epochs: [belowEpoch],
+    });
+    const kFolded = buildKinematics(windowed, {
+      values,
+      handCount: 2,
+      genFloor: k,
+      gravity: belowEpoch.gravity as number,
+      holdDepth: belowEpoch.holdDepth as number,
+      geometry: foldedGeometry,
+      epochs: [],
+      originalParams: { gravity: G, holdDepth: 0.2, geometry: t0Geometry },
+    });
+    // The held-forever set is structural (genFloor-invariant) and rests on the t = 0 base.
+    expect(kFolded.staticHolds()).toEqual(kFull.staticHolds());
+    expect(kFolded.staticHolds().length).toBeGreaterThan(0);
+    // The idle hand's fallback rest also uses the original geometry.
+    const tk = full.beatTime(k);
+    expectStateEqual(kFolded.handState(1, tk + 0.05), kFull.handState(1, tk + 0.05));
+  });
+});

@@ -304,3 +304,76 @@ describe('per-carry gravity threading (§4.6)', () => {
     expect(sawBefore && sawAfter).toBe(true);
   });
 });
+
+// --- Memory fix #1: energy re-anchor under a windowed (genFloor) sim ----------
+//
+// When the resident sim is windowed to a retain floor, its carries below the floor
+// no longer exist, so energyReport(kin, tl, windowFloorBeat) re-anchors its
+// representative period to the first aligned period inside the retained past. On a
+// uniform (settled-tempo) grid that period equals the beat-0 period (periodicity),
+// and it must equal a FULL build's report at the same floor (both emit its carries).
+
+/** Build full + windowed kin/timeline for a pattern at a retain floor `k`. */
+function windowedPair(
+  text: string,
+  beatCount: number,
+  k: number,
+): {
+  full: { kinematics: Kinematics; timeline: ReturnType<typeof buildTimeline> };
+  win: { kinematics: Kinematics; timeline: ReturnType<typeof buildTimeline> };
+} {
+  const result = validatePattern(text);
+  if (!result.ok) {
+    throw new Error(`fixture pattern ${text} is invalid`);
+  }
+  const values = result.values;
+  const fullTl = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS });
+  const winTl = buildTimeline(values, { beatCount, params: DEFAULT_PARAMS, genFloor: k });
+  return {
+    full: { kinematics: buildKinematics(fullTl, { values, handCount: 2 }), timeline: fullTl },
+    win: { kinematics: buildKinematics(winTl, { values, handCount: 2, genFloor: k }), timeline: winTl },
+  };
+}
+
+describe('property: energyReport re-anchors correctly under windowing', () => {
+  it('windowed report == full report at the same floor, and == the beat-0 report', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('3', '531', '5', '423', '441', '534'),
+        fc.integer({ min: 6, max: 30 }),
+        (text, floor) => {
+          const beatCount = 64;
+          const { full, win } = windowedPair(text, beatCount, floor);
+          const windowedReport = energyReport(win.kinematics, win.timeline, floor);
+          const fullAtFloor = energyReport(full.kinematics, full.timeline, floor);
+          // The exposed carries are byte-identical, so the reports match exactly.
+          expect(windowedReport).toEqual(fullAtFloor);
+          // On a uniform grid the re-anchored period equals the beat-0 period.
+          const beat0Report = energyReport(full.kinematics, full.timeline, 0);
+          for (let hand = 0; hand < windowedReport.perHand.length; hand++) {
+            expect(windowedReport.perHand[hand]?.workPositive).toBeCloseTo(
+              beat0Report.perHand[hand]?.workPositive ?? -1,
+              9,
+            );
+            expect(windowedReport.perHand[hand]?.net).toBeCloseTo(
+              beat0Report.perHand[hand]?.net ?? -1,
+              9,
+            );
+          }
+          // Never silently zero: the aligned period sits inside the generated range
+          // and counts at least one carry for a non-trivial pattern.
+          const totalCarries = windowedReport.perHand.reduce((n, h) => n + h.carryCount, 0);
+          expect(totalCarries).toBeGreaterThan(0);
+          // The re-anchored period is at or above the floor.
+          expect(windowedReport.periodStartBeat).toBeGreaterThanOrEqual(floor);
+        },
+      ),
+      { numRuns: 60 },
+    );
+  });
+
+  it('windowFloorBeat ≤ 0 is the historical beat-0 report', () => {
+    const { kinematics, timeline } = kinematicsFor('531', 36);
+    expect(energyReport(kinematics, timeline, 0)).toEqual(energyReport(kinematics, timeline));
+  });
+});

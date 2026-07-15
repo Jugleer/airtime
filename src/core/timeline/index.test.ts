@@ -753,3 +753,89 @@ describe('buildTimeline — edge cases', () => {
     expect(() => timeline.beatTime(10_000)).toThrow(RangeError);
   });
 });
+
+// --- Memory fix #1: windowed generation (genFloor) ---------------------------
+//
+// The `genFloor` option bounds the RESIDENT timeline to O(window): the heavy
+// per-beat artifacts (flights / carries / events / landing map) are emitted only
+// for beats near/above the floor, while the cheap beat SCHEDULE and the union-find
+// ball-identity threading stay full-range from beat 0. The exposed window (beats ≥
+// genFloor) must be BIT-IDENTICAL to a full build — that is the whole determinism
+// guarantee (DESIGN.md §2). These properties nail that down.
+
+/** The "governing" beat of an event, for the exposed-window filter. */
+function eventBeat(event: TimelineEvent): number {
+  return event.kind === 'hold' ? event.startBeat : event.beat;
+}
+
+describe('property: genFloor windowing is bit-identical on the exposed window', () => {
+  it('schedule is genFloor-invariant; events/flights/carries ≥ k are identical', () => {
+    fc.assert(
+      fc.property(
+        validPatternArb,
+        // A tempo epoch that slews the beat grid across the floor.
+        fc.record({
+          beat: fc.integer({ min: 1, max: 40 }),
+          beatPeriod: fc.double({ min: 0.08, max: 1.0, noNaN: true }),
+        }),
+        fc.integer({ min: 1, max: 47 }),
+        (values, epoch, k) => {
+          const beatCount = 48;
+          const options = {
+            beatCount,
+            params: DEFAULT_PARAMS,
+            epochs: [{ beat: epoch.beat, params: { beatPeriod: epoch.beatPeriod } }],
+          };
+          const full = buildTimeline(values, options);
+          const windowed = buildTimeline(values, { ...options, genFloor: k });
+
+          // (1) The beat schedule is completely untouched by genFloor.
+          expect(windowed.schedule.beatTimes).toEqual(full.schedule.beatTimes);
+          expect(windowed.schedule.beatPeriods).toEqual(full.schedule.beatPeriods);
+
+          // (2) Events governed by a beat ≥ k are identical (windowed drops the rest).
+          expect(windowed.events).toEqual(full.events.filter((e) => eventBeat(e) >= k));
+
+          // (3) Flights landing ≥ k and carries ending ≥ k (incl. straddlers whose
+          //     throw/start is BELOW k) are present and byte-identical.
+          expect(windowed.flights.filter((f) => f.landingBeat >= k)).toEqual(
+            full.flights.filter((f) => f.landingBeat >= k),
+          );
+          expect(windowed.carries.filter((c) => c.endBeat >= k)).toEqual(
+            full.carries.filter((c) => c.endBeat >= k),
+          );
+
+          // (4) A straddling carry (start < k ≤ end) keeps its delivering + departing
+          //     flights emitted, so kinematics endpoint-threading never falls back.
+          for (const carry of windowed.carries.filter((c) => c.startBeat < k && c.endBeat >= k)) {
+            expect(
+              windowed.flights.some(
+                (f) => f.ballId === carry.ballId && f.landingBeat === carry.startBeat,
+              ),
+            ).toBe(true);
+            expect(
+              windowed.flights.some(
+                (f) => f.ballId === carry.ballId && f.throwBeat === carry.endBeat,
+              ),
+            ).toBe(true);
+          }
+        },
+      ),
+      { numRuns: 120 },
+    );
+  });
+
+  it('genFloor ≤ 0 is byte-identical to the full build', () => {
+    fc.assert(
+      fc.property(validPatternArb, (values) => {
+        const options = { beatCount: 32, params: DEFAULT_PARAMS };
+        const full = buildTimeline(values, options);
+        const zero = buildTimeline(values, { ...options, genFloor: 0 });
+        expect(zero.events).toEqual(full.events);
+        expect(zero.flights).toEqual(full.flights);
+        expect(zero.carries).toEqual(full.carries);
+        expect(zero.schedule.beatTimes).toEqual(full.schedule.beatTimes);
+      }),
+    );
+  });
+});

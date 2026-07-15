@@ -475,6 +475,17 @@ export interface AppStore {
   readonly simTime: number;
   readonly playing: boolean;
 
+  /**
+   * Export-only retain-floor pin (memory fix #1). While a capture runs it is set LOW
+   * — max(0, clipStartBeat − RETAIN_PAST_BEATS) — so every seek during the export
+   * rebuilds with a floor covering the clip start, keeping every sampled frame inside
+   * the generated window (a fixed (pattern, t) frame stays a pure function of t,
+   * independent of clip length). null in normal use ⇒ the reconciler trails the
+   * playhead by RETAIN_PAST_BEATS. Set/cleared only inside src/export/capture. NOT in
+   * ShareConfig; the URL codec never sees it.
+   */
+  readonly exportFloorPin: number | null;
+
   // timeline construction inputs (base params at beat 0 + later epochs)
   readonly baseParams: TimelineParams;
   readonly epochs: Epoch[];
@@ -723,6 +734,7 @@ export const useAppStore = create<AppStore>((set, get) => {
       kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       state.sim.schedule,
       state.sim.compiled,
+      state.sim.genFloor, // keep the resident window (memory fix #1); an edit must not un-window
     );
     return { baseParams, epochs, sim: nextSim };
   }
@@ -755,6 +767,7 @@ export const useAppStore = create<AppStore>((set, get) => {
       kinematicsConfigOf(baseKinematics, kinematicsEpochs),
       state.sim.schedule,
       state.sim.compiled,
+      state.sim.genFloor, // keep the resident window (memory fix #1)
     );
     return { baseKinematics, kinematicsEpochs, sim: nextSim };
   }
@@ -779,6 +792,9 @@ export const useAppStore = create<AppStore>((set, get) => {
       state.epochs,
       state.sim.beatCount,
       kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+      undefined,
+      undefined,
+      state.sim.genFloor, // keep the resident window (memory fix #1)
     );
     // Auto-expand N so the new pattern's cycle fits the graph (DESIGN.md §5);
     // a beyond-cap pattern leaves N alone (the panel shows "unavailable").
@@ -1021,6 +1037,8 @@ export const useAppStore = create<AppStore>((set, get) => {
       state.sim.beatCount,
       kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
       schedule,
+      undefined,
+      state.sim.genFloor, // keep the resident window across the splice (memory fix #1)
     );
     const transition: TransitionInfo | null =
       plan.throws.length > 0
@@ -1085,6 +1103,7 @@ export const useAppStore = create<AppStore>((set, get) => {
 
     simTime: 0,
     playing: true,
+    exportFloorPin: null,
 
     baseParams: initialBaseParams(),
     epochs: [],
@@ -1426,6 +1445,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         kinematicsConfigOf(baseKinematics, []),
         state.sim.schedule,
         state.sim.compiled,
+        state.sim.genFloor, // keep the resident window (memory fix #1)
       );
       set({
         handCount,
@@ -1457,6 +1477,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         kinematicsConfigOf(baseKinematics, []),
         state.sim.schedule,
         state.sim.compiled,
+        state.sim.genFloor, // keep the resident window (memory fix #1)
       );
       set({
         handPreset: preset,
@@ -1566,6 +1587,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         simTime,
         futureSpan,
         kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+        state.exportFloorPin ?? undefined, // export pins the floor LOW; else trail the playhead
       );
       set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
     },
@@ -1584,6 +1606,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         simTime,
         futureSpan,
         kinematicsConfigOf(state.baseKinematics, state.kinematicsEpochs),
+        state.exportFloorPin ?? undefined,
       );
       set(nextSim === state.sim ? { simTime } : { simTime, sim: nextSim });
     },

@@ -248,10 +248,71 @@ export interface BuildTimelineOptions {
    * compiled pattern — entering/leaving one is a clean restart (orchestrator ruling 2).
    */
   readonly compiled?: CompiledPattern;
+  /**
+   * Optional retain floor (memory fix #1): emit the HEAVY per-beat artifacts
+   * (flights, carries, events, the landing map) only for beats at or above this
+   * floor, so the resident timeline is bounded to O(window) as `simTime` advances
+   * instead of growing from beat 0. The cheap, correctness-load-bearing passes stay
+   * full-range: the slew/arrival-guarded beat SCHEDULE (beatTimes / beatPeriods) and
+   * the union-find ball-identity threading are always generated from beat 0, so
+   * `beatTime`, ball ids, and absolute beat indices are invariant to `genFloor`.
+   * The exposed window (beats ≥ `genFloor`) is BIT-IDENTICAL to a full build: a
+   * straddle pad below the floor captures every flight/carry crossing it (DESIGN.md
+   * §2 determinism). `genFloor ≤ 0` (the default) reproduces the full range exactly.
+   */
+  readonly genFloor?: number;
 }
 
 function floorMod(value: number, modulus: number): number {
   return ((value % modulus) + modulus) % modulus;
+}
+
+/**
+ * The generation pad `2·(maxValue + maxRepeatLength) + 4` a {@link buildTimeline}
+ * call uses for the given inputs — exported so the state layer can compute the same
+ * straddle margin the builder does (memory fix #1: the fold threshold for sub-floor
+ * kinematics epochs, and any windowing arithmetic, must match the builder's pad
+ * exactly). It mirrors the pad computation inside both the vanilla and the compiled
+ * builders: `maxRepeatLength` is the longest repeating unit (schedule segment length,
+ * pattern length, or the compiled period) and `maxValue` the highest throw.
+ */
+export function generationPad(
+  values: readonly number[],
+  schedule?: PatternSchedule,
+  compiled?: CompiledPattern,
+): number {
+  let maxValue = 0;
+  let maxRepeatLength: number;
+  if (compiled !== undefined) {
+    for (const beat of compiled.beats) {
+      for (const toss of beat) {
+        if (toss.value > maxValue) {
+          maxValue = toss.value;
+        }
+      }
+    }
+    maxRepeatLength = compiled.period;
+  } else if (schedule !== undefined) {
+    maxRepeatLength = 1;
+    for (const segment of schedule.segments) {
+      if (segment.values.length > maxRepeatLength) {
+        maxRepeatLength = segment.values.length;
+      }
+      for (const value of segment.values) {
+        if (value > maxValue) {
+          maxValue = value;
+        }
+      }
+    }
+  } else {
+    maxRepeatLength = Math.max(values.length, 1);
+    for (const value of values) {
+      if (value > maxValue) {
+        maxValue = value;
+      }
+    }
+  }
+  return 2 * (maxValue + maxRepeatLength) + 4;
 }
 
 // --- Union-find over handling beats (ball-identity threading) ----------------
@@ -307,7 +368,7 @@ export function buildTimeline(
   if (options.compiled !== undefined) {
     return buildCompiledTimeline(options.compiled, options);
   }
-  const { beatCount, params, epochs = [], schedule } = options;
+  const { beatCount, params, epochs = [], schedule, genFloor = 0 } = options;
 
   const empty: Timeline = {
     events: [],
@@ -364,6 +425,17 @@ export function buildTimeline(
   const pad = 2 * (maxValue + maxRepeatLength) + 4;
   const genStart = -pad;
   const genEnd = beatCount + pad;
+
+  // Memory fix #1: the heavy per-beat artifacts (flights / carries / events /
+  // landing map) are emitted only for beats at or above `emitFloor`; the cheap
+  // schedule + ball-identity passes below still run full-range. `emitFloor` trails
+  // the retain floor by one `pad` — the SAME constant that already covers every
+  // straddling flight/carry — so any flight or carry active at/after `genFloor` is
+  // still emitted with its exact full-range times, and the exposed window stays
+  // bit-identical to the full build. `genFloor ≤ 0` ⇒ `emitFloor = genStart` ⇒
+  // today's full range (byte-identical). `eventFloor` clamps ladder-facing events.
+  const emitFloor = genFloor <= 0 ? genStart : Math.max(genStart, genFloor - pad);
+  const eventFloor = Math.max(0, genFloor);
 
   const initialBeatPeriod = params.beatPeriod;
   const slewTimeConstant = params.slewTimeConstant ?? DEFAULT_SLEW_TIME_CONSTANT;
@@ -500,7 +572,13 @@ export function buildTimeline(
     if (value >= 1) {
       handlingBeats.push(beat);
       unionFind.add(beat);
-      landerThrowBeat.set(beat + value, beat);
+      // The landing map feeds `landingScheduleAt`, only ever queried at/after the
+      // playhead (≥ genFloor > emitFloor), so entries whose landing beat is below
+      // emitFloor are never read — skip them to bound the retained map. The union /
+      // component threading below stays UNGUARDED so ball ids are genFloor-invariant.
+      if (beat + value >= emitFloor) {
+        landerThrowBeat.set(beat + value, beat);
+      }
       const nextBeat = beat + value;
       if (nextBeat < genEnd) {
         unionFind.add(nextBeat);
@@ -557,6 +635,13 @@ export function buildTimeline(
       continue;
     }
     const landing = beat + value;
+    // Emit only flights that land at/after emitFloor (memory fix #1). A flight spans
+    // ≤ maxValue ≤ pad beats, so every flight active at/after genFloor was thrown at
+    // ≥ genFloor − maxValue ≥ emitFloor and lands at ≥ genFloor > emitFloor — so the
+    // exposed window keeps every flight it needs, bit-identically.
+    if (landing < emitFloor) {
+      continue;
+    }
     // Hand assignment uses the single timeline n_h (epochs cannot change it), so
     // a ball's landingHand is fixed and always agrees with the hand that later
     // catches and rethrows it (§4.6, epoch immutability).
@@ -585,15 +670,21 @@ export function buildTimeline(
         if (prevFlightLanding !== null) {
           const startBeat = prevFlightLanding;
           const endBeat = beat;
-          carries.push({
-            ballId: ballIdOfBeat.get(beat) as number,
-            hand: floorMod(startBeat, handCount),
-            startBeat,
-            endBeat,
-            startTime: prevFlightArrival,
-            endTime: beatTimeOf(endBeat),
-            held: endBeat > startBeat,
-          });
+          // Emit only carries starting at/after emitFloor (memory fix #1) but ALWAYS
+          // advance the walk state below, or in-window carry threading would break. A
+          // carry spans ≤ ~2·maxRepeatLength ≤ pad beats, so any carry active at/after
+          // genFloor has startBeat ≥ emitFloor and is kept, bit-identically.
+          if (startBeat >= emitFloor) {
+            carries.push({
+              ballId: ballIdOfBeat.get(beat) as number,
+              hand: floorMod(startBeat, handCount),
+              startBeat,
+              endBeat,
+              startTime: prevFlightArrival,
+              endTime: beatTimeOf(endBeat),
+              held: endBeat > startBeat,
+            });
+          }
         }
         prevFlightLanding = beat + value;
         prevFlightArrival = flightArrival(beat);
@@ -602,7 +693,10 @@ export function buildTimeline(
   }
 
   // --- Events (windowed) ------------------------------------------------------
-  const inWindow = (beat: number): boolean => beat >= 0 && beat < beatCount;
+  // Ladder-facing events are additionally clamped below by `eventFloor` (memory fix
+  // #1): events far behind the playhead (< genFloor) are never shown, so dropping
+  // them bounds the retained event list. eventFloor = 0 (the default) is unchanged.
+  const inWindow = (beat: number): boolean => beat >= eventFloor && beat < beatCount;
   const events: TimelineEvent[] = [];
   for (const flight of flights) {
     if (inWindow(flight.throwBeat)) {
@@ -642,7 +736,7 @@ export function buildTimeline(
       });
     }
   }
-  for (let beat = 0; beat < beatCount; beat++) {
+  for (let beat = eventFloor; beat < beatCount; beat++) {
     if (valueAt(beat) === 0) {
       events.push({
         kind: 'idle',
@@ -746,7 +840,7 @@ class IdUnionFind {
 }
 
 function buildCompiledTimeline(compiled: CompiledPattern, options: BuildTimelineOptions): Timeline {
-  const { beatCount, params, epochs = [] } = options;
+  const { beatCount, params, epochs = [], genFloor = 0 } = options;
   const empty: Timeline = {
     events: [],
     flights: [],
@@ -791,6 +885,13 @@ function buildCompiledTimeline(compiled: CompiledPattern, options: BuildTimeline
   const pad = 2 * (maxValue + period) + 4;
   const genStart = -pad;
   const genEnd = beatCount + pad;
+
+  // Memory fix #1 (mirrors the vanilla builder): heavy artifacts emitted only for
+  // beats ≥ emitFloor; the schedule + ball-identity threading stay full-range. The
+  // store carves multiplex sims out (genFloor forced to 0) because their overlapping
+  // hand-path tiling is not a straddle problem; sync / vanilla support genFloor here.
+  const emitFloor = genFloor <= 0 ? genStart : Math.max(genStart, genFloor - pad);
+  const eventFloor = Math.max(0, genFloor);
 
   const initialBeatPeriod = params.beatPeriod;
   const slewTimeConstant = params.slewTimeConstant ?? DEFAULT_SLEW_TIME_CONSTANT;
@@ -947,6 +1048,7 @@ function buildCompiledTimeline(compiled: CompiledPattern, options: BuildTimeline
   const flights: Flight[] = [];
   for (const h of handlings) {
     if (!h.isFlight) continue;
+    if (h.landingBeat < emitFloor) continue; // memory fix #1: emit flights landing ≥ emitFloor
     flights.push({
       ballId: h.ballId,
       throwBeat: h.throwBeat,
@@ -969,7 +1071,9 @@ function buildCompiledTimeline(compiled: CompiledPattern, options: BuildTimeline
     let prevArrival = 0;
     for (const h of list) {
       if (!h.isFlight) continue;
-      if (prevLandingBeat !== null) {
+      // Emit only carries starting ≥ emitFloor but ALWAYS advance the walk state
+      // (memory fix #1) — see the vanilla builder for why the pad makes this exact.
+      if (prevLandingBeat !== null && prevLandingBeat >= emitFloor) {
         carries.push({
           ballId: h.ballId,
           hand: prevLandingHand,
@@ -990,13 +1094,14 @@ function buildCompiledTimeline(compiled: CompiledPattern, options: BuildTimeline
   const landingsByBeat = new Map<number, number[]>();
   for (const h of handlings) {
     if (!h.isFlight) continue;
+    if (h.landingBeat < emitFloor) continue; // memory fix #1: bound the retained landing map
     const bucket = landingsByBeat.get(h.landingBeat);
     if (bucket === undefined) landingsByBeat.set(h.landingBeat, [h.throwBeat]);
     else bucket.push(h.throwBeat);
   }
 
   // --- Events (windowed) ------------------------------------------------------------
-  const inWindow = (beat: number): boolean => beat >= 0 && beat < beatCount;
+  const inWindow = (beat: number): boolean => beat >= eventFloor && beat < beatCount;
   const events: TimelineEvent[] = [];
   for (const flight of flights) {
     if (inWindow(flight.throwBeat)) {
@@ -1037,7 +1142,7 @@ function buildCompiledTimeline(compiled: CompiledPattern, options: BuildTimeline
     }
   }
   // Idle events: a value-0 toss = that hand does nothing this beat (ladder ✕ mark).
-  for (let beat = 0; beat < beatCount; beat++) {
+  for (let beat = eventFloor; beat < beatCount; beat++) {
     for (const toss of throwsAtBeat(beat)) {
       if (toss.value === 0) {
         events.push({ kind: 'idle', beat, hand: fromHandOf(beat, toss), time: beatTimeOf(beat) });

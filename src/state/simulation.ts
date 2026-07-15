@@ -32,6 +32,7 @@ import {
 } from '../core/kinematics';
 import {
   buildTimeline,
+  generationPad,
   type Epoch,
   type PatternSchedule,
   type Timeline,
@@ -122,6 +123,14 @@ export interface Simulation {
    * exist for a compiled pattern — entering/leaving one is a clean restart (ruling 2).
    */
   readonly compiled?: CompiledPattern;
+  /**
+   * The retain floor this build used (memory fix #1): the heavy per-beat artifacts
+   * cover only beats ≥ `genFloor`, bounding the resident sim to O(window) as play
+   * time grows. 0 = a full build from beat 0 (the exposed output is bit-identical to
+   * a full build for beats ≥ `genFloor`). The store advances this with the playhead
+   * and rebuilds with a lower floor only on a scrub below it (deterministic).
+   */
+  readonly genFloor: number;
 }
 
 // --- Ladder / timeline window + horizon geometry (shared by store + views) ----
@@ -163,6 +172,24 @@ export const HORIZON_MARGIN_SECONDS = 6;
 export const HORIZON_CHUNK_BEATS = 128;
 /** Beats generated at startup (covers ~40 s at the default τ_b). */
 export const INITIAL_BEATS = 160;
+/**
+ * Beats of PAST kept generated behind the playhead (memory fix #1). The resident sim
+ * spans roughly [playhead − RETAIN_PAST_BEATS, playhead + future + margin], so it is
+ * bounded regardless of elapsed play time (the old model generated from beat 0 and
+ * grew ~4 beats/s unbounded). Err large: the deepest past any playhead-relative view
+ * reads is pastSpan (TIMELINE_WINDOW_MAX·CURSOR_FRACTION ≈ 4.5 s) + TRAIL_LENGTH_MAX
+ * (2 s) ≈ 6.5 s, ~81 beats at the min beat period (0.08 s) plus the warmup pad — so
+ * 512 gives ~4× headroom (≥ 41 s of retained past even at max tempo, ~128 s at the
+ * default τ_b), so ordinary scrub-back feels instant and never rebuilds. Two derived
+ * quantities reuse this one knob: the export floor pin and the energy re-anchor land
+ * inside the retained past. A single named constant, trivially tunable.
+ */
+export const RETAIN_PAST_BEATS = 512;
+
+/** The retain floor for a playhead time: `max(0, currentBeat − RETAIN_PAST_BEATS)`. */
+function retainFloorBeat(sim: Simulation, simTime: number): number {
+  return Math.max(0, currentBeatIndex(sim.timeline, simTime) - RETAIN_PAST_BEATS);
+}
 
 /**
  * The sim time the current window's right edge (plus margin) needs generated.
@@ -209,11 +236,13 @@ export function buildSimulation(
   kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
   schedule?: PatternSchedule,
   compiled?: CompiledPattern,
+  genFloor: number = 0,
 ): Simulation {
   const timeline = buildTimeline(values, {
     beatCount,
     params: baseParams,
     epochs,
+    genFloor,
     ...(schedule !== undefined ? { schedule } : null),
     ...(compiled !== undefined ? { compiled } : null),
   });
@@ -221,11 +250,8 @@ export function buildSimulation(
     values,
     ...(compiled !== undefined ? { compiled } : null),
     handCount: baseParams.handCount,
-    geometry: kinematicsConfig.geometry,
-    gravity: kinematicsConfig.gravity,
-    holdDepth: kinematicsConfig.holdDepth,
-    carryPath: kinematicsConfig.carryPath,
-    epochs: kinematicsConfig.epochs,
+    genFloor,
+    ...kinematicsBuildParams(values, kinematicsConfig, schedule, compiled, timeline, genFloor),
   });
   return {
     values,
@@ -234,6 +260,7 @@ export function buildSimulation(
     timeline,
     kinematics,
     beatCount,
+    genFloor,
     spatialPeriodBeats: compiled
       ? compiledSpatialPeriodBeats(compiled, baseParams.handCount)
       : spatialPeriodBeats(values, baseParams.handCount),
@@ -243,12 +270,92 @@ export function buildSimulation(
 }
 
 /**
- * Return a simulation whose generated horizon comfortably covers `simTime`,
- * extending in chunks if needed (never shrinks). Returns the same object when no
- * extension is required so callers can skip a state update. Because the beat grid
- * can slew, the horizon is checked against the actual generated time, not an
- * estimate — the loop is bounded and terminates (horizonTime is monotone in
- * beatCount).
+ * The gravity / hold depth / geometry / carry-path + epochs to pass to
+ * {@link buildKinematics} for a windowed build (memory fix #6 split-base). When
+ * `genFloor ≤ 0` (or there are no epochs) this is exactly the config's base + full
+ * epoch list, so the output is byte-identical to the pre-windowing code. When
+ * `genFloor > 0` it folds every epoch resolving strictly BELOW the exposed range
+ * into a transient RESOLUTION base and passes the remaining (above-threshold) epochs,
+ * plus the IMMUTABLE t = 0 base as `originalParams`. The fold threshold trails the
+ * retain floor by `2·pad` — the same pad the builder uses — so every EMITTED segment
+ * (earliest a flight thrown at ≥ beatTime(emitFloor − maxValue) ≥ beatTime(genFloor −
+ * 2·pad)) would have resolved the folded epoch anyway ⇒ `paramsAt` output is
+ * unchanged, and the base-derived outputs stay on the true t = 0 base ⇒ bit-identical.
+ * The store's canonical epoch list is LEFT IMMUTABLE (this fold is transient,
+ * per-build), so scrub-back below a folded epoch's beat re-derives it correctly.
+ */
+function kinematicsBuildParams(
+  values: number[],
+  config: KinematicsConfig,
+  schedule: PatternSchedule | undefined,
+  compiled: CompiledPattern | undefined,
+  timeline: Timeline,
+  genFloor: number,
+): {
+  gravity: number;
+  holdDepth: number;
+  geometry: KinematicsConfig['geometry'];
+  carryPath: KinematicsConfig['carryPath'];
+  epochs: KinematicsConfig['epochs'];
+  originalParams?: {
+    gravity: number;
+    holdDepth: number;
+    geometry: KinematicsConfig['geometry'];
+    carryPath: KinematicsConfig['carryPath'];
+  };
+} {
+  if (genFloor <= 0 || config.epochs.length === 0) {
+    return {
+      gravity: config.gravity,
+      holdDepth: config.holdDepth,
+      geometry: config.geometry,
+      carryPath: config.carryPath,
+      epochs: config.epochs,
+    };
+  }
+  const pad = generationPad(values, schedule, compiled);
+  const foldThreshold = timeline.beatTime(Math.max(0, genFloor - 2 * pad));
+  let gravity = config.gravity;
+  let holdDepth = config.holdDepth;
+  let geometry = config.geometry;
+  let carryPath = config.carryPath;
+  const remainder: KinematicsEpoch[] = [];
+  for (const epoch of [...config.epochs].sort((a, b) => a.time - b.time)) {
+    if (epoch.time <= foldThreshold) {
+      if (epoch.gravity !== undefined) gravity = epoch.gravity;
+      if (epoch.holdDepth !== undefined) holdDepth = epoch.holdDepth;
+      if (epoch.geometry !== undefined) geometry = epoch.geometry;
+      if (epoch.carryPath !== undefined) carryPath = epoch.carryPath;
+    } else {
+      remainder.push(epoch);
+    }
+  }
+  return {
+    gravity,
+    holdDepth,
+    geometry,
+    carryPath,
+    epochs: remainder,
+    originalParams: {
+      gravity: config.gravity,
+      holdDepth: config.holdDepth,
+      geometry: config.geometry,
+      carryPath: config.carryPath,
+    },
+  };
+}
+
+/**
+ * Reconcile a simulation's generated WINDOW to `simTime` (memory fix #1): extend the
+ * future horizon in chunks when it no longer covers `simTime`, AND advance the retain
+ * floor so the resident sim stays bounded to O(window) rather than growing from beat 0
+ * as play time elapses. Forward play advances the floor for free (it piggybacks on the
+ * ~128-beat horizon extension). Returns the same object when neither the horizon nor
+ * the floor needs to move, so callers can skip a state update. A rebuild with a LOWER
+ * floor happens only on a scrub below the window (or an export `floorPin`); it is
+ * deterministic — the exposed past is bit-identical (DESIGN.md §2). Because the beat
+ * grid can slew, the horizon is checked against the actual generated time, not an
+ * estimate — the loop is bounded and terminates (horizonTime is monotone in beatCount).
  */
 export function extendedIfNeeded(
   sim: Simulation,
@@ -257,16 +364,36 @@ export function extendedIfNeeded(
   simTime: number,
   futureSpan: number = FUTURE_SPAN,
   kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
+  floorPin?: number,
 ): Simulation {
+  // The window this build should carry (memory fix #1). Multiplex sims are carved out
+  // (genFloor forced to 0 — their overlapping hand-path tiling is not a straddle
+  // problem, risk noted). An export supplies a LOW `floorPin` covering the clip start;
+  // otherwise the floor trails the playhead by RETAIN_PAST_BEATS.
+  const desiredFloor = sim.compiled?.multiplex ? 0 : (floorPin ?? retainFloorBeat(sim, simTime));
   const target = neededHorizonTime(simTime, futureSpan);
-  if (horizonTime(sim) >= target) {
+  const needExtend = horizonTime(sim) < target;
+  // A lower desired floor than the resident one ⇒ the playhead scrubbed below the
+  // window (or an export pinned the floor down); rebuild with the lower floor.
+  const needFloorRebuild = sim.genFloor > desiredFloor;
+  if (!needExtend && !needFloorRebuild) {
     return sim;
   }
-  let current = sim;
+  // Rebuild carrying the desired floor. The schedule + ball ids are floor-invariant,
+  // and the exposed past is bit-identical, so this is deterministic (DESIGN.md §2).
+  let current = buildSimulation(
+    sim.values,
+    sim.patternText,
+    baseParams,
+    epochs,
+    Math.max(sim.beatCount, INITIAL_BEATS),
+    kinematicsConfig,
+    sim.schedule,
+    sim.compiled,
+    desiredFloor,
+  );
   let guard = 0;
   while (horizonTime(current) < target && guard < 1024) {
-    // The schedule is part of the build inputs (Simulation.schedule), so an
-    // extension re-derives exactly the same splice — bit-identical past.
     current = buildSimulation(
       current.values,
       current.patternText,
@@ -276,6 +403,7 @@ export function extendedIfNeeded(
       kinematicsConfig,
       current.schedule,
       current.compiled,
+      desiredFloor,
     );
     guard += 1;
   }
@@ -304,6 +432,7 @@ export function minimalHorizon(
   futureSpan: number = FUTURE_SPAN,
   kinematicsConfig: KinematicsConfig = defaultKinematicsConfig(baseParams.handCount),
 ): Simulation {
+  const desiredFloor = sim.compiled?.multiplex ? 0 : retainFloorBeat(sim, simTime);
   const target = neededHorizonTime(simTime, futureSpan);
   let current = buildSimulation(
     sim.values,
@@ -314,6 +443,7 @@ export function minimalHorizon(
     kinematicsConfig,
     sim.schedule,
     sim.compiled,
+    desiredFloor,
   );
   let guard = 0;
   while (horizonTime(current) < target && guard < 1024) {
@@ -326,12 +456,14 @@ export function minimalHorizon(
       kinematicsConfig,
       sim.schedule,
       sim.compiled,
+      desiredFloor,
     );
     guard += 1;
   }
-  // Already at (or below) the minimal size ⇒ keep the existing object so the store
-  // can skip the update, and never grow past the current horizon.
-  if (sim.beatCount <= current.beatCount) {
+  // Already minimal in BOTH dimensions (beat count and retain floor) ⇒ keep the
+  // existing object so the store can skip the update, and never grow past the current
+  // horizon. A resident floor below the desired one still trims (releases the past).
+  if (sim.beatCount <= current.beatCount && sim.genFloor >= desiredFloor) {
     return sim;
   }
   return current;

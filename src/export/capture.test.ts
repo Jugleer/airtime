@@ -91,6 +91,35 @@ describe('runExport horizon hygiene (memory fix #4)', () => {
     expect(after.sim.beatCount).toBeLessThan(inflatedBeats);
   });
 
+  it('clears the export floor pin after a completed export (memory fix #1)', async () => {
+    const root = makeMockRoot();
+    setCaptureRoot(() => root);
+    const ctx2d = {
+      clearRect() {},
+      drawImage() {},
+      getImageData(_x: number, _y: number, w: number, h: number) {
+        return { data: new Uint8ClampedArray(w * h * 4) };
+      },
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      ctx2d as unknown as CanvasRenderingContext2D,
+    );
+    expect(useAppStore.getState().exportFloorPin).toBeNull();
+    await runExport(DEFAULT_EXPORT_OPTIONS, () => {}, { cancelled: false });
+    // The pin is set/cleared only inside runExport; it must not leak past it.
+    expect(useAppStore.getState().exportFloorPin).toBeNull();
+  });
+
+  it('clears the export floor pin on an early bail (memory fix #1)', async () => {
+    const root = makeMockRoot();
+    setCaptureRoot(() => root);
+    // jsdom's getContext('2d') yields null → the ctx-null early bail clears the pin.
+    await expect(
+      runExport(DEFAULT_EXPORT_OPTIONS, () => {}, { cancelled: false }),
+    ).rejects.toBeInstanceOf(ExportError);
+    expect(useAppStore.getState().exportFloorPin).toBeNull();
+  });
+
   it('trims the inflated horizon on an early bail (no 2D context)', async () => {
     const root = makeMockRoot();
     setCaptureRoot(() => root);

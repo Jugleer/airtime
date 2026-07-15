@@ -1264,6 +1264,28 @@ export interface KinematicsOptions {
    * (backward compatible — identical output to no epochs).
    */
   readonly epochs?: readonly KinematicsEpoch[];
+  /**
+   * Optional retain floor (memory fix #1), threaded from the timeline build: the
+   * lowest exposed beat. Used only for the multiplex carve-out reasoning and as a
+   * documentation anchor; the kinematics output is windowed implicitly because the
+   * timeline it reads is already windowed. Default 0.
+   */
+  readonly genFloor?: number;
+  /**
+   * Optional IMMUTABLE original (t = 0) base params (memory fix #6 split-base). When
+   * the state layer folds sub-floor kinematics epochs into the resolution base (the
+   * `gravity` / `holdDepth` / `geometry` / `carryPath` options), it passes the true
+   * t = 0 base here so the BASE-DERIVED outputs — static-hold rest positions, the
+   * idle-hand fallback, and the reported `.gravity` / `.holdDepth` / `.geometry` /
+   * `.carryPath` — stay anchored at t = 0 rather than at the folded base. Absent (all
+   * existing callers) ⇒ equals the resolution base ⇒ byte-identical output.
+   */
+  readonly originalParams?: {
+    readonly gravity?: number;
+    readonly holdDepth?: number;
+    readonly geometry?: HandGeometry;
+    readonly carryPath?: CarryPath;
+  };
 }
 
 /** Resolved kinematics params in force at a given sim time (base + epochs ≤ time). */
@@ -1349,6 +1371,14 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
   const handCount = options.handCount;
   const baseGeometry = options.geometry ?? defaultHandGeometry(handCount);
   const baseCarryPath = options.carryPath ?? quinticViaCarryPath;
+  // The IMMUTABLE original (t = 0) base (memory fix #6 split-base). When the caller
+  // folds sub-floor epochs into the RESOLUTION base above, these keep the base-derived
+  // outputs (static holds, idle-hand fallback, reported fields) anchored at the true
+  // t = 0 params. Absent ⇒ original* === base*, so output is byte-identical.
+  const originalGravity = options.originalParams?.gravity ?? baseGravity;
+  const originalHoldDepth = options.originalParams?.holdDepth ?? baseHoldDepth;
+  const originalGeometry = options.originalParams?.geometry ?? baseGeometry;
+  const originalCarryPath = options.originalParams?.carryPath ?? baseCarryPath;
   // A MULTIPLEX pattern co-locates balls (identical flights / shared carries), so
   // they need small deterministic in-cup offsets to not z-fight (ruling 4); the
   // hand path also needs de-overlapping so `handState` stays a single coherent
@@ -1681,10 +1711,11 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
       if (handAllHeld(hand, span) && !handsReceivingFlight.has(hand)) {
         // Rest at the hold position (the dip point) so the ball sits sensibly.
         // Held-forever balls are a degenerate all-2 case (only meaningful at
-        // n_h = 2); resolve them with the base geometry/hold depth (t = 0 params).
+        // n_h = 2); resolve them with the ORIGINAL geometry/hold depth (t = 0 params,
+        // never a folded resolution base — memory fix #6 split-base).
         const rest = subtract(
-          midpoint(baseGeometry.catchPoint(hand), baseGeometry.throwPoint(hand)),
-          vec3(0, baseHoldDepth, 0),
+          midpoint(originalGeometry.catchPoint(hand), originalGeometry.throwPoint(hand)),
+          vec3(0, originalHoldDepth, 0),
         );
         holdRestByHand.set(hand, rest);
         staticHoldList.push({ hand, ballId: -1 - hand, position: rest });
@@ -1699,14 +1730,15 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
   const dynamicBallIds = [...ballSegmentMap.keys()].sort((a, b) => a - b);
 
   return {
-    // The `gravity`/`holdDepth`/`geometry`/`carryPath` fields report the BASE
+    // The `gravity`/`holdDepth`/`geometry`/`carryPath` fields report the ORIGINAL
     // (t = 0) params; per-segment params (under epochs) live on each CarryMotion
-    // and are resolved internally. With no epochs these are the only params.
-    gravity: baseGravity,
-    holdDepth: baseHoldDepth,
+    // and are resolved internally. With no epochs — and with no folded resolution
+    // base — original* === base*, so these are the only params (memory fix #6).
+    gravity: originalGravity,
+    holdDepth: originalHoldDepth,
     handCount,
-    geometry: baseGeometry,
-    carryPath: baseCarryPath,
+    geometry: originalGeometry,
+    carryPath: originalCarryPath,
     spatialPeriodBeats: options.compiled
       ? compiledSpatialPeriodBeats(options.compiled, handCount)
       : spatialPeriodBeats(options.values, handCount),
@@ -1723,7 +1755,9 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
     handState: (hand, t) => {
       // Fallback rest: a held-forever hand rests at its hold point; any other
       // hand with no segments eases to and rests at its catch point (§4.3 idle).
-      const fallback = holdRestByHand.get(hand) ?? baseGeometry.catchPoint(hand);
+      // Uses the ORIGINAL (t = 0) geometry so a folded resolution base never moves
+      // an idle hand's rest (memory fix #6 split-base).
+      const fallback = holdRestByHand.get(hand) ?? originalGeometry.catchPoint(hand);
       return evaluateSegments(buildHandSegments(hand), t, fallback);
     },
     ballPosition: (ballId, t) => {
@@ -1734,7 +1768,7 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
       return evaluateSegmentsPosition(ballSegmentMap.get(ballId) ?? [], t, ZERO);
     },
     handPosition: (hand, t) => {
-      const fallback = holdRestByHand.get(hand) ?? baseGeometry.catchPoint(hand);
+      const fallback = holdRestByHand.get(hand) ?? originalGeometry.catchPoint(hand);
       return evaluateSegmentsPosition(buildHandSegments(hand), t, fallback);
     },
     carriesForHand: (hand) => [...(carriesByHand.get(hand) ?? [])],

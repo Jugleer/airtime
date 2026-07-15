@@ -40,11 +40,14 @@ export function EnergyPanel(): ReactElement {
   const palette = usePalette();
   const sim = useAppStore((state) => state.sim);
   const setWorkTableCollapsed = useAppStore((state) => state.setWorkTableCollapsed);
-  // Period-aggregated + time-independent: recompute only on a sim rebuild.
-  const report = useMemo(() => energyReport(sim.kinematics, sim.timeline), [sim]);
+  // Period-aggregated + time-independent: recompute only on a sim rebuild. Under
+  // memory fix #1 the sim may be windowed to a retain floor, so the representative
+  // period re-anchors to the first aligned period inside the retained past (sim.genFloor).
+  const report = useMemo(() => energyReport(sim.kinematics, sim.timeline, sim.genFloor), [sim]);
   const { hands, total } = useMemo(() => energyRows(report), [report]);
 
-  const periodEndBeat = report.periodBeats;
+  const periodStartBeat = report.periodStartBeat;
+  const periodEndBeat = periodStartBeat + report.periodBeats;
   const rowCells = (
     label: string,
     values: readonly number[],
@@ -104,13 +107,13 @@ export function EnergyPanel(): ReactElement {
         </table>
       </div>
       <p style={captionStyle(palette)}>
-        Per hand over one spatial period (beats 0–{periodEndBeat}; repeats every{' '}
+        Per hand over one spatial period (beats {periodStartBeat}–{periodEndBeat}; repeats every{' '}
         {report.periodTime.toFixed(3)} s). A hand&apos;s net contact work is W⁺ − |W⁻| = ΔKE + g·Δy
         over its carries (work–energy theorem; contact force is zero at every catch and release).
         Over a full period the pattern returns to steady state, so net summed across all hands is
         zero — a symmetric pattern already balances W⁺ and |W⁻| on each hand, while an asymmetric
         multi-hand pattern can split the load (one hand adds net energy, another absorbs it).
-        Figures reflect the parameters in force at the start of the pattern; a live gravity or
+        Figures reflect the parameters in force over this representative period; a live gravity or
         geometry change applies to future beats and does not move a past period&apos;s numbers.
       </p>
     </div>

@@ -120,3 +120,41 @@ describe('buildCompiledTimeline — carries connect flights (position/velocity c
     }
   });
 });
+
+// --- Memory fix #1: genFloor windowing (compiled sync / multiplex) -----------
+//
+// The compiled builder supports genFloor exactly like the vanilla one: the exposed
+// window (events / flights / carries with a beat ≥ k) is bit-identical to the full
+// build, and the schedule + ball ids are floor-invariant. (The store carves MULTIPLEX
+// sims out at genFloor = 0 for their hand PATH, but the timeline + ball segments are
+// still exact under windowing — that is what this asserts.)
+
+describe('compiled genFloor windowing is bit-identical on the exposed window', () => {
+  for (const text of ['(4,4)', '[52]3', '[43]23']) {
+    it(`${text}: schedule/flights/carries/events ≥ k match the full build`, () => {
+      const beatCount = 40;
+      const compiled = compile(text);
+      for (const k of [5, 12, 20, 31]) {
+        const full = buildTimeline([], { beatCount, params: PARAMS, compiled });
+        const win = buildTimeline([], { beatCount, params: PARAMS, compiled, genFloor: k });
+        expect(win.schedule.beatTimes).toEqual(full.schedule.beatTimes);
+        expect(win.schedule.beatPeriods).toEqual(full.schedule.beatPeriods);
+        expect(win.flights.filter((f) => f.landingBeat >= k)).toEqual(
+          full.flights.filter((f) => f.landingBeat >= k),
+        );
+        expect(win.carries.filter((c) => c.endBeat >= k)).toEqual(
+          full.carries.filter((c) => c.endBeat >= k),
+        );
+        expect(
+          win.events.filter((e) => (e.kind === 'hold' ? e.startBeat : e.beat) >= k),
+        ).toEqual(full.events.filter((e) => (e.kind === 'hold' ? e.startBeat : e.beat) >= k));
+        // Ball ids among the exposed flights are identical (floor-invariant threading).
+        const idsOf = (t: ReturnType<typeof buildTimeline>): number[] =>
+          [...new Set(t.flights.filter((f) => f.landingBeat >= k).map((f) => f.ballId))].sort(
+            (a, b) => a - b,
+          );
+        expect(idsOf(win)).toEqual(idsOf(full));
+      }
+    });
+  }
+});
