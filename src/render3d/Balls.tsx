@@ -50,7 +50,7 @@ export function Balls(): ReactElement {
     const { simTime, sim: current } = useAppStore.getState();
     const k = current.kinematics;
     meshes.current.forEach((mesh, ballId) => {
-      const { position } = k.ballState(ballId, simTime);
+      const position = k.ballPosition(ballId, simTime);
       mesh.position.set(position.x, position.y, position.z);
     });
   });

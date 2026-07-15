@@ -141,7 +141,7 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
       const pos = trail.geometry.getAttribute('position') as BufferAttribute;
       const arr = pos.array as Float32Array;
       for (let i = 0; i < trailCount; i++) {
-        const { position } = k.ballState(ballId, sampleTimes[i] as number);
+        const position = k.ballPosition(ballId, sampleTimes[i] as number);
         arr[3 * i] = position.x;
         arr[3 * i + 1] = position.y;
         arr[3 * i + 2] = position.z;
@@ -164,7 +164,7 @@ function BallTracer({ ballId, color }: { ballId: number; color: string }): React
       let py = 0;
       let pz = 0;
       for (let i = 0; i < ghostCount; i++) {
-        const { position } = k.ballState(ballId, sampleTimes[i] as number);
+        const position = k.ballPosition(ballId, sampleTimes[i] as number);
         parr[3 * i] = position.x;
         parr[3 * i + 1] = position.y;
         parr[3 * i + 2] = position.z;

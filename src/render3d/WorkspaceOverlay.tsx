@@ -343,7 +343,7 @@ export function WorkspaceOverlay(): ReactElement | null {
       const samples: Point3[] = [];
       if (count >= 2) {
         for (let i = 0; i < count; i++) {
-          const { position } = kinematics.handState(hand, sampleTimeAt(i, count, start, end));
+          const position = kinematics.handPosition(hand, sampleTimeAt(i, count, start, end));
           samples.push({ x: position.x, y: position.y, z: position.z });
         }
       }

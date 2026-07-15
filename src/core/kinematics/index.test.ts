@@ -454,6 +454,41 @@ describe('property: continuity at events (quintic path)', () => {
   });
 });
 
+describe('property: position fast paths mirror the full state (render hot path)', () => {
+  it('ballPosition/handPosition equal ballState/handState position for any (id/hand, t)', () => {
+    // The render hot paths (Balls/Tracers/Hands/WorkspaceOverlay) read only
+    // `.position`, so they call the allocation-free ballPosition/handPosition.
+    // These must be bit-identical to the full-state position everywhere — inside
+    // the covered span and in the out-of-range hold regions (t < first.startTime
+    // and t ≥ last.endTime), across hand counts and static holds.
+    const caseArb = fc
+      .record({
+        handCount: fc.constantFrom(1, 2, 3),
+        // t sweeps well before the timeline (starts at 0) and well past its end
+        // (beatCount 20 × beatPeriod 0.25 = 5 s span), exercising both hold branches.
+        t: fc.double({ min: -5, max: 30, noNaN: true }),
+      })
+      .chain((config) => validPatternArb.map((values) => ({ ...config, values })));
+    fc.assert(
+      fc.property(caseArb, ({ handCount, values, t }) => {
+        const timeline = buildTimeline(values, {
+          beatCount: 20,
+          params: { ...DEFAULT_PARAMS, handCount },
+        });
+        const kinematics = buildKinematics(timeline, { values, handCount });
+        // renderedBallIds ∪ static-hold ids — exactly what Balls.tsx iterates.
+        for (const ballId of renderedBallIds(kinematics)) {
+          expect(kinematics.ballPosition(ballId, t)).toEqual(kinematics.ballState(ballId, t).position);
+        }
+        for (let hand = 0; hand < handCount; hand++) {
+          expect(kinematics.handPosition(hand, t)).toEqual(kinematics.handState(hand, t).position);
+        }
+      }),
+      { numRuns: 60 },
+    );
+  });
+});
+
 describe('regression: near-threshold hold depth stays continuous (conditioning)', () => {
   // Fixed counterexample shrunk by fast-check (seed -1446751901): holdDepth just
   // above MIN_ABSORB_DEPTH gave a ~2.6 ms absorb whose internal jerk amplified

@@ -100,7 +100,7 @@ export function Hands({ color }: { readonly color: string }): ReactElement | nul
     const { simTime, sim: liveSim, hoveredHandIndex } = useAppStore.getState();
     const k = liveSim.kinematics;
     meshes.current.forEach((mesh, hand) => {
-      const { position } = k.handState(hand, simTime);
+      const position = k.handPosition(hand, simTime);
       mesh.position.set(position.x, position.y - drop, position.z);
       // Tilt the cup so its opening is normal to the ball at catches/throws and
       // blends smoothly between (evaluateHandTilt is zero-allocation). A hand with
@@ -222,7 +222,7 @@ function HandPathLine({ hand, color }: { readonly hand: number; readonly color: 
     const start = timeline.beatTime(startBeat);
     const end = timeline.beatTime(startBeat + periodBeats);
     for (let i = 0; i < count; i++) {
-      const { position: point } = kinematics.handState(hand, sampleTimeAt(i, count, start, end));
+      const point = kinematics.handPosition(hand, sampleTimeAt(i, count, start, end));
       array[3 * i] = point.x;
       array[3 * i + 1] = point.y;
       array[3 * i + 2] = point.z;

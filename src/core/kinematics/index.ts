@@ -260,6 +260,48 @@ function evaluateSegments(segments: readonly PolySegment[], t: number, fallback:
   return evaluateSegment(segments[lo] as PolySegment, t);
 }
 
+/**
+ * Position-only fast path for {@link evaluateSegment}: evaluates just the three
+ * per-axis position polynomials, skipping the nine derivative allocations and the
+ * velocity/acceleration/jerk vectors. Bit-identical to `evaluateSegment(…).position`.
+ */
+function evaluateSegmentPosition(segment: PolySegment, t: number): Vec3 {
+  const s = t - segment.startTime;
+  const { x, y, z } = segment;
+  return vec3(x.eval(s), y.eval(s), z.eval(s));
+}
+
+/**
+ * Position-only counterpart of {@link evaluateSegments}: mirrors its dispatch
+ * exactly (empty → fallback; before/after the covered span → held endpoint) but
+ * returns the bare Vec3, allocating no MotionState/rest state. Used by the render
+ * hot paths, which read only `.position`.
+ */
+function evaluateSegmentsPosition(segments: readonly PolySegment[], t: number, fallback: Vec3): Vec3 {
+  if (segments.length === 0) {
+    return fallback;
+  }
+  const first = segments[0] as PolySegment;
+  const last = segments[segments.length - 1] as PolySegment;
+  if (t < first.startTime) {
+    return evaluateSegmentPosition(first, first.startTime);
+  }
+  if (t >= last.endTime) {
+    return evaluateSegmentPosition(last, last.endTime);
+  }
+  let lo = 0;
+  let hi = segments.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if ((segments[mid] as PolySegment).startTime <= t) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return evaluateSegmentPosition(segments[lo] as PolySegment, t);
+}
+
 // --- Parabola solver (flight, DESIGN.md §4.2) -------------------------------
 
 /** A solved flight: its position segment and endpoint velocities. */
@@ -1275,6 +1317,10 @@ export interface Kinematics {
   ballState(ballId: number, t: number): MotionState;
   /** Hand position/velocity/acceleration/jerk at `t`, total for all `t`. */
   handState(hand: number, t: number): MotionState;
+  /** Ball position at `t` (render fast path); equals `ballState(ballId, t).position`. */
+  ballPosition(ballId: number, t: number): Vec3;
+  /** Hand position at `t` (render fast path); equals `handState(hand, t).position`. */
+  handPosition(hand: number, t: number): Vec3;
   /** Per-hand carry motions (for energy aggregation and property tests). */
   carriesForHand(hand: number): CarryMotion[];
   /** Every carry motion in the generated range. */
@@ -1679,6 +1725,17 @@ export function buildKinematics(timeline: Timeline, options: KinematicsOptions):
       // hand with no segments eases to and rests at its catch point (§4.3 idle).
       const fallback = holdRestByHand.get(hand) ?? baseGeometry.catchPoint(hand);
       return evaluateSegments(buildHandSegments(hand), t, fallback);
+    },
+    ballPosition: (ballId, t) => {
+      const held = staticBallPosition.get(ballId);
+      if (held) {
+        return held;
+      }
+      return evaluateSegmentsPosition(ballSegmentMap.get(ballId) ?? [], t, ZERO);
+    },
+    handPosition: (hand, t) => {
+      const fallback = holdRestByHand.get(hand) ?? baseGeometry.catchPoint(hand);
+      return evaluateSegmentsPosition(buildHandSegments(hand), t, fallback);
     },
     carriesForHand: (hand) => [...(carriesByHand.get(hand) ?? [])],
     allCarries: () => [...carryMotions],
