@@ -9,6 +9,18 @@
 import { useEffect } from 'react';
 import { useAppStore } from '../state';
 
+/**
+ * Upper bound on a single frame's advance (s). A hidden tab pauses rAF, so the
+ * first callback after the tab is refocused reports the ENTIRE away-time (seconds
+ * to hours) as one delta. Unclamped, that lurches simTime forward and forces a
+ * massive synchronous horizon extension — which can exceed the extension guard and
+ * spiral (every subsequent frame re-attempts it), freezing / OOM-crashing the tab.
+ * Clamping means a return simply RESUMES from where playback was (the correct
+ * behaviour for a scrubbable visualizer — it does not fast-forward while hidden).
+ * 0.1 s is far above any real frame (even ~10 fps) yet far below any background gap.
+ */
+const MAX_TICK_DELTA_SECONDS = 0.1;
+
 /** Mount once (in <App>) to run the global clock while the app is open. */
 export function useClock(): void {
   useEffect(() => {
@@ -19,7 +31,7 @@ export function useClock(): void {
     let frame = 0;
     let last = performance.now();
     const loop = (now: number): void => {
-      const wallDeltaSeconds = (now - last) / 1000;
+      const wallDeltaSeconds = Math.min((now - last) / 1000, MAX_TICK_DELTA_SECONDS);
       last = now;
       // Read the action fresh each frame; zustand actions are stable but this
       // also keeps the closure free of stale state.
